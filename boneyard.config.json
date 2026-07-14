@@ -1,0 +1,10 @@
+{
+  "out": "./src/bones",
+  "breakpoints": [1280],
+  "animate": "shimmer",
+  "speed": "1.2s",
+  "stagger": true,
+  "transition": 200,
+  "routes": ["/dashboard"],
+  "wait": 2000
+}
