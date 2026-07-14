@@ -26,16 +26,11 @@ import { logActivitySafe } from '@/lib/services/activity-log-service'
 import { insforge } from '@/lib/services/auth-service'
 import { pageTransitionFast } from "@/lib/animations/presets"
 import {
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
   Legend,
   AreaChart,
   Area,
@@ -51,8 +46,6 @@ import { useCashReconciliations } from "@/lib/services/cash-reconciliation-servi
 import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
 import {
   useFinancialSummaryForRange,
-  useRevenueByDay,
-  usePaymentMethodBreakdown,
   useCashFlow,
 } from '@/lib/services/finance-aggregation'
 
@@ -115,12 +108,6 @@ export function Finance() {
   // useFinancialSummaryForRange handles both range-filtered and all-time queries
   // (when dates are undefined, it falls back to all-time in the queryFn)
   const { data: financialSummary } = useFinancialSummaryForRange(rangeStart, rangeEnd)
-  const { data: revenueByDayData, isLoading: revenueLoading } = useRevenueByDay(
-    isAllTimeMode ? 30 : 7,
-    rangeStart,
-    rangeEnd,
-  )
-  const { data: paymentMethodData } = usePaymentMethodBreakdown(rangeStart, rangeEnd)
   const { data: cashFlowData } = useCashFlow()
 
   // Use server-side pagination for invoices (display only — KPI values come from useFinancialSummary)
@@ -240,16 +227,6 @@ export function Finance() {
   const paidCount = financialSummary?.paidCount ?? 0
   const pendingCount = financialSummary?.pendingCount ?? 0
   const overdueCount = financialSummary?.overdueCount ?? 0
-
-  const revenueByDay = useMemo(() => revenueByDayData ?? [], [revenueByDayData])
-
-  // Payment methods from payments table (NOT from invoice.payment_method)
-  const paymentMethodPieData = useMemo(
-    () => (paymentMethodData ?? [])
-      .filter(m => ['cash', 'reception_qr', 'fonepay', 'credit'].includes(m.method))
-      .map(m => ({ name: m.label, value: m.total, color: m.color })),
-    [paymentMethodData],
-  )
 
   const cashFlow = useMemo(() => cashFlowData ?? [], [cashFlowData])
 
@@ -434,26 +411,7 @@ export function Finance() {
     rows.push({ section: '', metric: 'Total Invoice Count', value: String(financialSummary?.totalInvoices ?? 0) })
     rows.push({ section: '', metric: '', value: '' })
 
-    // Section 2: Revenue vs Expenses by Day
-    if (revenueByDay.length > 0) {
-      rows.push({ section: 'REVENUE VS EXPENSES (7 DAYS)', metric: '', value: '' })
-      rows.push({ section: '', metric: 'Day', value: 'Revenue,Expenses' })
-      for (const d of revenueByDay) {
-        rows.push({ section: '', metric: d.name, value: `${d.revenue},${d.expenses}` })
-      }
-      rows.push({ section: '', metric: '', value: '' })
-    }
 
-    // Section 3: Payment Methods
-    if (paymentMethodData && paymentMethodData.length > 0) {
-      rows.push({ section: 'PAYMENT METHODS', metric: '', value: '' })
-      rows.push({ section: '', metric: 'Method', value: 'Count,Total' })
-      for (const m of paymentMethodData) {
-        if (['cash', 'reception_qr', 'fonepay', 'credit'].includes(m.method)) {
-          rows.push({ section: '', metric: m.label, value: `${m.count},${m.total}` })
-        }
-      }
-    }
 
     exportCsv(
       rows,
@@ -529,55 +487,7 @@ export function Finance() {
               </motion.div>
             </motion.div>
 
-            <motion.div variants={pageTransitionFast} className="grid gap-6 lg:grid-cols-3">
-              <SectionCard title="Revenue vs Expenses" icon="BarChart3" iconColor="text-primary" className="lg:col-span-2" index={1}>
-                {revenueLoading ? (
-                  <div className="flex h-72 items-center justify-center">
-                    <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-                  </div>
-                ) : (
-                  <motion.div
-                    className="h-72"
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3, duration: 0.6 }}
-                  >
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={revenueByDay} barGap={4}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-                        <XAxis dataKey="name" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-                        <YAxis tick={{ fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                        <RechartsTooltip formatter={(value: any) => formatCurrency(value as number)} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-card)", backdropFilter: 'blur(8px)' }} />
-                        <Bar dataKey="revenue" fill={COLORS.success} radius={[4, 4, 0, 0]} name="Revenue" />
-                        <Bar dataKey="expenses" fill={COLORS.destructive} radius={[4, 4, 0, 0]} name="Expenses" />
-                        <Legend iconType="circle" iconSize={8} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </motion.div>
-                )}
-              </SectionCard>
 
-              <SectionCard title="Payment Methods" icon="CreditCard" iconColor="text-purple" index={2}>
-                <motion.div
-                  className="h-72"
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.4, duration: 0.6, type: 'spring' }}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={paymentMethodPieData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={3} dataKey="value">
-                        {paymentMethodPieData.map((entry, index) => (
-                          <Cell key={index} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <RechartsTooltip formatter={(value: any) => formatCurrency(value as number)} contentStyle={{ borderRadius: 12, border: "1px solid var(--color-border)", background: "var(--color-card)", backdropFilter: 'blur(8px)' }} />
-                      <Legend iconType="circle" iconSize={8} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </motion.div>
-              </SectionCard>
-            </motion.div>
 
             <motion.div variants={pageTransitionFast}>
               <SectionCard title="Recent Transactions" icon="Receipt" iconColor="text-info" index={3}>
