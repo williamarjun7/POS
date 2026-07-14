@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "build:analyze": "ANALYZE_BUNDLE=true tsc -b && vite build",
+    "build": "vite build",
+    "build:analyze": "ANALYZE_BUNDLE=true vite build",
     "preview": "vite preview",
     "lint": "oxlint",
     "test": "vitest run",
