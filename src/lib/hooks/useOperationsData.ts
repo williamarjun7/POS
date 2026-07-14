@@ -6,7 +6,7 @@
  * waterfall of 5 separate hooks to a single call.
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { insforge } from '@/lib/services/auth-service'
 import {
   fetchRooms,

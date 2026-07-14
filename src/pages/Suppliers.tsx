@@ -14,7 +14,6 @@ import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { Icon } from "@/components/icon-mapper"
 import { cn, formatCurrency } from "@/lib/utils"
 import { showSuccess, showError } from "@/components/ui/toast"
-import { insforge } from '@/lib/services/auth-service'
 import { useSuppliers } from "@/lib/services/supplier-service"
 import { getPaymentMethodLabel } from '@/lib/payment-methods'
 import { usePurchaseOrders } from "@/lib/services/purchase-order-service"

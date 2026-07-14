@@ -248,7 +248,7 @@ export function useRecordPayment() {
       const payment = await createPaymentInDb({
         invoiceId: params.invoiceId,
         amount: params.amount,
-        paymentMethod: params.paymentMethod,
+        paymentMethod: params.paymentMethod as PaymentMethod,
         reference: params.reference,
         notes: params.notes,
         userId: params.userId,

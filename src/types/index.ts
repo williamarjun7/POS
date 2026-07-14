@@ -312,7 +312,7 @@ export interface DashboardTable {
   number: string;
   table_number?: string;
   table_name?: string;
-  status: 'free' | 'occupied' | 'reserved' | 'dirty' | 'needs_checkout' | 'needs_payment' | 'cleaning' | 'maintenance' | 'out_of_order' | 'available';
+  status: 'free' | 'occupied' | 'reserved' | 'dirty' | 'needs_checkout' | 'needs_payment' | 'cleaning' | 'maintenance' | 'out_of_order' | 'available' | 'disabled';
   capacity: number;
   currentOrder?: string;
   currentBooking?: string;

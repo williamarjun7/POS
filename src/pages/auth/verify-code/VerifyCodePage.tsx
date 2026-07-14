@@ -98,7 +98,7 @@ export function VerifyCodePage() {
               </>
             ) : (
               <button
-                onClick={handleResend}
+                onClick={() => handleResend()}
                 className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -109,7 +109,7 @@ export function VerifyCodePage() {
 
           {/* Verify button */}
           <SubmitButton
-            onClick={handleVerify}
+            onClick={() => handleVerify()}
             disabled={!isComplete}
             loading={step === 'loading'}
             loadingText="Verifying..."

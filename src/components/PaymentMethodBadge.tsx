@@ -89,7 +89,7 @@ export function PaymentMethodBadge({
 
     return (
       <span className={cn('inline-flex items-center flex-wrap gap-1', className)}>
-        {displayMethods.map((m, i) => {
+        {displayMethods.map((m) => {
           const Icon = METHOD_ICONS[m]
           return (
             <span

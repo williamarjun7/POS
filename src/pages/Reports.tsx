@@ -21,7 +21,7 @@ import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/
 import { cn, formatCurrency, formatTimeAgo } from "@/lib/utils"
 import { insforge } from '@/lib/services/auth-service'
 import { generateReport } from "@/lib/services/report-generator"
-import { pageTransitionFast, staggerContainer, staggerItem, iconBounce, pulseIndicator } from "@/lib/animations/presets"
+import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
 
 interface ReportCard {
   id: string

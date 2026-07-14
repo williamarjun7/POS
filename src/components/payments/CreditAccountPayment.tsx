@@ -66,13 +66,12 @@ export function CreditAccountPayment({ grandTotal, onBack, onPay, submitting }: 
       .from('customers')
       .select('id, name, phone')
       .order('name', { ascending: true })
-      .then(({ data, error }) => {
+      .then(({ data, error }: { data: MockCustomer[] | null; error: Error | null }) => {
         if (cancelled) return;
         if (!error && data) {
           setCustomersList(data as MockCustomer[]);
         }
-      })
-      .catch(() => {});
+      });
     return () => { cancelled = true; };
   }, []);
 

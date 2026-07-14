@@ -27,7 +27,7 @@ import { db } from '@/lib/db/insforge';
 // TABLE_STATUS_LABELS/COLORS removed — inlined below
 import { formatCurrency } from '@/lib/utils';
 
-import type { OrderBatch, OrderBatchItem, CartItemStatus } from '@/types';
+import type { OrderBatch, OrderBatchItem, CartItemStatus, PaymentMethod } from '@/types';
 import type { MenuItem } from '@/types';
 
 // ─── Types ───────────────────────────────────────────────────
@@ -96,7 +96,7 @@ const scaleIn = {
 export function POS() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const [selectedCat, setSelectedCat] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -359,10 +359,6 @@ export function POS() {
   const previousBatches = tableBatches;
 
   // ─── Running total across ALL batches (previous + current cart) ─
-  const previousBatchesTotal = useMemo(
-    () => previousBatches.reduce((s, b) => s + b.subtotal, 0),
-    [previousBatches],
-  );
   const unpaidPreviousTotal = useMemo(
     () => previousBatches.reduce((sum, batch) =>
       sum + batch.items
@@ -434,11 +430,19 @@ export function POS() {
   // ─── Handle payment complete ──────────────────────
   const handlePaymentComplete = useCallback(async (providedInvoiceNumber?: string, paymentResult?: PaymentResult) => {
     if (!selectedTableId) return;
+    let invoiceTotal = paymentResult?.grandTotal ?? 0;
+    let totalSettled = (paymentResult?.paidAmount ?? 0) + (paymentResult?.creditAmount ?? 0);
+    let remainingBalance = Math.max(0, invoiceTotal - totalSettled);
     setShowPayment(false);
     // IMPORTANT: cart is NOT cleared here — clearing before DB persistence
     //     would destroy the user's items if the payment transaction fails.
     //     Cart reset happens only AFTER the DB transaction succeeds (below).
-    if (!paymentResult) { showSuccess('Payment processed'); return; }
+    if (!paymentResult) {
+      showSuccess('Payment processed');
+      // Navigate back to dashboard for full settlements
+      navigate('/dashboard');
+      return;
+    }
 
     logPayment('start', {
       method: paymentResult.paymentMethod,
@@ -514,11 +518,10 @@ export function POS() {
 
     // 2. Determine invoice status based on actual amount received vs total
     //    An invoice is only 'paid' when total settled >= invoice total
-    //    Otherwise it's 'partial' (remaining balance due)
-    const invoiceTotal = paymentResult.grandTotal ?? subtotal;
-    const totalSettled = (paymentResult.paidAmount ?? 0) + (paymentResult.creditAmount ?? 0);
-    const remainingBalance = Math.max(0, invoiceTotal - totalSettled);
-    let invoiceStatus: string;
+    //    Otherwise it's 'partial' (remaining balance due)      invoiceTotal = paymentResult.grandTotal ?? subtotal;
+      totalSettled = (paymentResult.paidAmount ?? 0) + (paymentResult.creditAmount ?? 0);
+      remainingBalance = Math.max(0, invoiceTotal - totalSettled);
+      let invoiceStatus: string;
     if (isCreditPayment) {
       invoiceStatus = 'credit_invoice';
     } else if (remainingBalance <= 0) {
@@ -558,10 +561,10 @@ export function POS() {
       // to avoid duplicate payment records. For other methods, record normally.
       if (!isCreditPayment || hasSplitCredit) {
         const paymentRecord = await recordPaymentSafe({
-          invoiceId: invoiceId,
+          invoiceId: invoiceId!,
           batchId: tableBatches[0]?.id ?? null,
           amount: paymentResult.grandTotal,
-          paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
+          paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash') as PaymentMethod,
           reference: idempotencyKey,
           notes: `Payment via ${paymentResult.paymentMethod ?? 'cash'}`,
         });
@@ -586,12 +589,16 @@ export function POS() {
       // 4. Log activity (non-critical)
       logActivitySafe({
         activityType: 'payment_received',
-        entityId: invoiceId,
+        entityId: invoiceId ?? undefined,
         entityLabel: `Invoice ${invNumber ?? invoiceId}`,
         status: isCreditPayment ? 'pending' : 'completed',
         amount: paymentResult.grandTotal,
         userName: customerName || 'System',
-        location: selectedTableId ? `Table ${selectedTableInfo?.table_number ?? selectedTableId}` : 'POS',
+        location: selectedTableId
+          ? posMode === 'tables'
+            ? `Table ${(selectedTableInfo as any)?.table_number ?? selectedTableId}`
+            : `Room ${(selectedTableInfo as any)?.room_number || (selectedTableInfo as any)?.number || selectedTableId}`
+          : 'POS',
         details: `Payment of ${npr(paymentResult.grandTotal)} via ${paymentResult.paymentMethod ?? 'cash'}. Items: ${invoiceItemsList.length}`,
       });
 
@@ -649,14 +656,6 @@ export function POS() {
       logPayment('db_persistence_complete', { invoiceId, invoiceNumber: invNumber, totalAmount: paymentResult.grandTotal });
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : typeof err === 'object' && err !== null ? JSON.stringify(err) : 'Unknown error';
-      const errorDetails = {
-        message: errMessage,
-        invoiceNumber: invNumber,
-        invoiceId,
-        method: paymentResult.paymentMethod,
-        amount: paymentResult.grandTotal,
-        tableId: selectedTableId,
-      };
       if (import.meta.env.DEV) console.error('[PAYMENT] payment failed:', errMessage);
       const invoiceCreated = !!invoiceId;
       showError(`Payment failed: ${errMessage}. ${
@@ -793,9 +792,8 @@ export function POS() {
       const currentBatches = [...(orderBatches[selectedTableId] || [])];
       const orderNum = currentBatches.length + 1;
       const displayOrderNumber = `Order #${orderNum}`;
-      const entityLabel = posMode === 'tables'
-        ? `T${selectedTableInfo?.table_number ?? selectedTableId}`
-        : `R${selectedTableInfo?.room_number || selectedTableInfo?.number || selectedTableId}`;
+      const entityLabel = posMode === 'tables'          ? `T${(selectedTableInfo as any)?.table_number ?? selectedTableId}`
+        : `R${(selectedTableInfo as any)?.room_number || (selectedTableInfo as any)?.number || selectedTableId}`;
 
       // 3. Non-critical activity log
       logActivitySafe({
@@ -1053,7 +1051,7 @@ export function POS() {
                   {selectedTableInfo ? (
                     <>
                       <span className="text-sm font-extrabold text-foreground tabular-nums">
-                        {posMode === 'tables' ? `T${selectedTableInfo.table_number}` : `R${selectedTableInfo.room_number || selectedTableInfo.number}`}
+                        {posMode === 'tables' ? `T${(selectedTableInfo as any).table_number}` : `R${(selectedTableInfo as any).room_number || (selectedTableInfo as any).number}`}
                       </span>
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${posMode === 'tables'
                         ? (TABLE_STATUS_COLORS[selectedTableInfo.status] || 'bg-gray-400')
@@ -1353,7 +1351,7 @@ export function POS() {
                 </motion.div>)}
                 {selectedTableInfo && (<motion.div className={`flex items-center gap-2 mt-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${posMode === 'tables' ? (selectedTableInfo.status === 'available' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20' : 'bg-amber-50 text-amber-700 dark:bg-amber-950/20') : 'bg-violet-50 text-violet-700 dark:bg-violet-950/20'}`} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}>
                   {posMode === 'tables' ? <Table2 className="h-4 w-4 shrink-0" /> : <BedDouble className="h-4 w-4 shrink-0" />}
-                  <span>{posMode === 'tables' ? `Table ${selectedTableInfo.table_number}` : `Room ${selectedTableInfo.room_number || selectedTableInfo.number}`}</span>
+                  <span>{posMode === 'tables' ? `Table ${(selectedTableInfo as any).table_number}` : `Room ${(selectedTableInfo as any).room_number || (selectedTableInfo as any).number}`}</span>
                   <span className="text-xs ml-auto capitalize">{selectedTableInfo.status}</span>
                 </motion.div>)}
               </div>

@@ -29,7 +29,7 @@ import {
 } from "@/lib/services/inventory-service"
 import { Plus, Edit, Trash2, PlusCircle, MinusCircle, Package, Search, ArrowUpDown, AlertTriangle, Clock, Download, History } from "lucide-react"
 import type { InventoryItem } from "@/types"
-import { pageTransitionFast, staggerContainerFast, pulseIndicator } from "@/lib/animations/presets"
+import { pageTransitionFast, staggerContainerFast } from "@/lib/animations/presets"
 
 // ── Constants ──────────────────────────────────────────────────────────────
 

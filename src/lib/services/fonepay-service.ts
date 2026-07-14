@@ -241,7 +241,7 @@ export function connectFonepayWebSocket(
  */
 export async function pollFonepayPayment(
   paymentRefId: string,
-  expectedAmount: number,
+  _expectedAmount: number,
   onStatusChange?: (status: string) => void,
   signal?: AbortSignal,
 ): Promise<{ success: boolean; message?: string }> {

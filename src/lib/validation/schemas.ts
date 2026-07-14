@@ -41,7 +41,7 @@ export const referenceString = z.string().max(100, 'Reference too long').trim().
 
 /** DB-safe payment method (the 4 base channels stored in payments table) */
 export const dbPaymentMethod = z.enum(
-  DB_PAYMENT_CHANNEL_VALUES as [string, ...string[]],
+  [...DB_PAYMENT_CHANNEL_VALUES] as [string, ...string[]],
   { errorMap: () => ({ message: `Payment method must be one of: ${DB_PAYMENT_CHANNEL_VALUES.join(', ')}` })},
 )
 

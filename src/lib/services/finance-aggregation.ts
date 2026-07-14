@@ -171,7 +171,7 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
 
   // 2. Outstanding receivables: for unpaid invoices, subtract non-credit payments
   const unpaidInvoiceIds = invoices
-    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'refunded')
+    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled')
     .map(inv => inv.id)
 
   let outstandingReceivables = 0
@@ -196,7 +196,7 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
     }
 
     for (const inv of invoices) {
-      if (inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'refunded') {
+      if (inv.status !== 'paid' && inv.status !== 'cancelled') {
         const paid = paidByInvoice[inv.id] || 0
         const remaining = Math.max(0, Number(inv.total) - paid)
         outstandingReceivables += remaining
@@ -324,7 +324,7 @@ async function fetchFinancialSummaryForRange(
 
   // Outstanding receivables
   const unpaidIds = invoices
-    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'refunded')
+    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled')
     .map(inv => inv.id)
 
   let outstandingReceivables = 0
@@ -341,7 +341,7 @@ async function fetchFinancialSummaryForRange(
       }
     }
     for (const inv of invoices) {
-      if (inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'refunded') {
+      if (inv.status !== 'paid' && inv.status !== 'cancelled') {
         outstandingReceivables += Math.max(0, Number(inv.total) - (paidMap[inv.id] || 0))
       }
     }

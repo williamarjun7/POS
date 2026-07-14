@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 
 type BookingMode = 'reserve' | 'book' | 'manage'
 import { useQuery } from '@tanstack/react-query';
@@ -14,7 +14,7 @@ import { showSuccess, showError } from '../../components/ui/toast';
 import { motion } from 'framer-motion';
 import { AnimatedContainer } from '../../components/AnimatedComponents';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { Room, Invoice } from '../../types';
+import type { Room } from '../../types';
 import type { Booking } from '@/lib/services/booking-service';
 import { BookingFormModal } from '../../components/rooms/BookingFormModal';
 import { DashboardRoomTile } from '../../components/rooms/DashboardRoomTile';
@@ -27,9 +27,9 @@ import { StatCard } from '@/components/ui/stat-card';
 
 import {
   TrendingUp, ChevronRight, Users,
-  ArrowRight, DollarSign, Timer,
+  ArrowRight, DollarSign, Timer, LogOut, Sparkles, Wrench,
   BedDouble, Clock, Banknote,
-  Smartphone, QrCode, CreditCard, CircleDollarSign, TrendingDown
+  Smartphone, QrCode, CreditCard, CircleDollarSign
 } from 'lucide-react';
 import {
   useDashboardTables,

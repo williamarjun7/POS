@@ -121,9 +121,6 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
       (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     )
     const sessionStart = hasActiveBatches ? sortedBatches[0].created_at : undefined
-    const sessionDuration = sessionStart
-      ? Math.floor((Date.now() - new Date(sessionStart).getTime()) / 60000)
-      : undefined
     const customerName = hasActiveBatches
       ? (sortedBatches[0].customer_name ?? undefined)
       : undefined
@@ -136,15 +133,14 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
 
     return {
       ...rowToDashboardTable(row),
-      status: derivedStatus,
+      status: derivedStatus as DashboardTable['status'],
       running_total: runningTotal,
       totalAmount: runningTotal,
       paidAmount: paidAmount > 0 ? paidAmount : undefined,
       guestName: customerName,
       occupiedSince: sessionStart,
-      sessionStart,
-      sessionDuration,
-      batchCount,
+      // sessionStart not in DashboardTable type, excluded
+    batchCount,
       order_count: batchCount,
     }
   })
@@ -161,9 +157,6 @@ function rowToDashboardTable(row: RestaurantTableRow): Omit<DashboardTable, 'sta
     area: row.section,
     guestName: undefined,
     occupiedSince: undefined,
-    sessionStart: undefined,
-    sessionDuration: undefined,
-    batchCount: undefined,
     order_count: undefined,
     paidAmount: undefined,
     // Remaining optional fields default to undefined

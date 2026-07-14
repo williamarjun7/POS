@@ -7,7 +7,6 @@
  */
 
 import { insforge } from '@/lib/services/auth-service'
-import type { ActivityLogRow } from '@/lib/db/types'
 import { getPaymentMethodLabel } from '@/lib/payment-methods'
 import { formatTimeAgo } from '@/lib/utils'
 

@@ -171,7 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Create the user_profiles record immediately after signup
     if (data?.user) {
       try {
-        const displayName = fullName ?? data.user.name ?? email.split('@')[0] ?? 'User'
+        const displayName = fullName ?? email.split('@')[0] ?? 'User'
         await db.insertOne('user_profiles', {
           id: data.user.id,
           email: email,

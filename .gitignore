@@ -37,3 +37,9 @@ dist-ssr
 .roo
 .trae
 .windsurf
+
+# Environment variables
+.env
+
+# Windows artifacts
+nul

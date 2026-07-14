@@ -5,7 +5,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import {
-  TrendingUp, TrendingDown, Download,
+  TrendingDown, Download,
   Users, AlertTriangle, Package, PackageX, BarChart3,
   Calendar, Receipt,
 } from 'lucide-react';

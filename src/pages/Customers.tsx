@@ -26,7 +26,7 @@ import {
   CreditCard, TrendingUp,
   FileText, Check, Star, Wallet, AlertTriangle
 } from "lucide-react"
-import { pageTransitionFast, staggerContainer, staggerItem as staggerItemPreset } from "@/lib/animations/presets"
+import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
 
 /* ─── Invoice types ────────────────────────────── */
 
