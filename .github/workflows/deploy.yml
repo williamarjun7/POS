@@ -18,6 +18,7 @@ jobs:
           script: |
             cd /var/www/pos
             sudo git pull origin main
-            sudo npm install --production=false
+            sudo npm install
             sudo npx vite build
             sudo systemctl reload nginx
+            echo "Deploy complete!"
