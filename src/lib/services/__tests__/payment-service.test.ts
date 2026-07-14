@@ -120,7 +120,7 @@ describe('PaymentService — createPaymentInDb', () => {
   })
 
   it('rejects zero amount via Zod validation', async () => {
-    const { insert } = mockDb()
+    const _insert = mockDb().insert
 
     await expect(
       createPaymentInDb({
@@ -131,11 +131,11 @@ describe('PaymentService — createPaymentInDb', () => {
     ).rejects.toThrow(/amount/i)
 
     // DB insert should NOT have been called
-    expect(insert).not.toHaveBeenCalled()
+    expect(_insert).not.toHaveBeenCalled()
   })
 
   it('rejects negative amount via Zod validation', async () => {
-    const { insert } = mockDb()
+    const _insert = mockDb().insert
 
     await expect(
       createPaymentInDb({
@@ -145,11 +145,11 @@ describe('PaymentService — createPaymentInDb', () => {
       }),
     ).rejects.toThrow(/amount/i)
 
-    expect(insert).not.toHaveBeenCalled()
+    expect(_insert).not.toHaveBeenCalled()
   })
 
   it('rejects invalid payment method via Zod validation', async () => {
-    const { insert } = mockDb()
+    const _insert = mockDb().insert
 
     await expect(
       createPaymentInDb({
@@ -160,7 +160,7 @@ describe('PaymentService — createPaymentInDb', () => {
       }),
     ).rejects.toThrow(/method/i)
 
-    expect(insert).not.toHaveBeenCalled()
+    expect(_insert).not.toHaveBeenCalled()
   })
 
   it('rejects missing invoiceId via Zod validation', async () => {
@@ -184,7 +184,7 @@ describe('PaymentService — recordPaymentSafe', () => {
   })
 
   it('returns the created payment on success', async () => {
-    const { insert, single } = mockDb()
+    const { single } = mockDb()
     single.mockResolvedValue({ data: mockPaymentRow, error: null })
 
     const result = await recordPaymentSafe({
@@ -199,7 +199,7 @@ describe('PaymentService — recordPaymentSafe', () => {
   })
 
   it('returns null instead of throwing on DB failure', async () => {
-    const { insert, single } = mockDb()
+    const { single } = mockDb()
     single.mockRejectedValue(new Error('DB connection lost'))
 
     const result = await recordPaymentSafe({
@@ -213,7 +213,7 @@ describe('PaymentService — recordPaymentSafe', () => {
   })
 
   it('returns null on DB constraint violation', async () => {
-    const { insert, single } = mockDb()
+    const { single } = mockDb()
     single.mockResolvedValue({
       data: null,
       error: { message: 'violates foreign key constraint', code: '23503' },
@@ -235,9 +235,9 @@ describe('PaymentService — fetchPaymentsFromDb', () => {
   })
 
   it('returns an empty array when DB returns no data', async () => {
-    const { limit, order } = mockDb()
+    const { limit: _limit, order } = mockDb()
     order.mockReturnValueOnce(
-      Promise.resolve({ data: null, error: null })
+      Promise.resolve({ data: null as any, error: null })
     )
 
     const result = await fetchPaymentsFromDb()
@@ -245,11 +245,11 @@ describe('PaymentService — fetchPaymentsFromDb', () => {
   })
 
   it('maps DB rows to camelCase Payment objects', async () => {
-    const { limit, order } = mockDb()
+    const { limit: _limit, order } = mockDb()
     // Set up order to resolve with 2 rows when limit is not chained
     order.mockReturnValueOnce(
       Promise.resolve({
-        data: [mockPaymentRow, { ...mockPaymentRow, id: UUID2, amount: 500 }],
+        data: [mockPaymentRow, { ...mockPaymentRow, id: UUID2, amount: 500 }] as any,
         error: null,
       })
     )
@@ -269,7 +269,7 @@ describe('PaymentService — fetchPaymentsByInvoiceFromDb', () => {
 
   it('queries payments filtered by invoice_id', async () => {
     const { eq, order } = mockDb()
-    order.mockResolvedValue({ data: [mockPaymentRow], error: null })
+    order.mockResolvedValue({ data: [mockPaymentRow] as any, error: null })
 
     const result = await fetchPaymentsByInvoiceFromDb(INV_ID)
     expect(eq).toHaveBeenCalledWith('invoice_id', INV_ID)

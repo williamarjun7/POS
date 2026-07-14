@@ -222,13 +222,13 @@ export function SmartDropdown({
             role="menu"
             initial={
               shouldReduceMotion
-                ? false
+                ? { opacity: 1, scale: 1, y: 0 }
                 : { opacity: 0, scale: 0.95, y: pos.openUpward ? 6 : -6 }
             }
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={
               shouldReduceMotion
-                ? false
+                ? { opacity: 1, scale: 1, y: 0 }
                 : { opacity: 0, scale: 0.95, y: pos.openUpward ? 6 : -6 }
             }
             transition={{ duration: 0.12, ease: "easeOut" }}

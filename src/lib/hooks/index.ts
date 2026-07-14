@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { db } from '@/lib/db/insforge'
 import type { OrderBatchRow, OrderBatchItemRow } from '@/lib/db/types'
-import type { OrderBatch as FrontendOrderBatch, OrderBatchItem as FrontendOrderBatchItem, CartItemStatus } from '@/types'
+import type { OrderBatch as FrontendOrderBatch, CartItemStatus } from '@/types'
 import { insforge } from '@/lib/services/auth-service'
 import { dashboardKeys } from '@/lib/core/query-keys'
 import {
@@ -336,14 +336,6 @@ export function useReleaseAllTables() {
 }
 
 // ─── Table CRUD Hooks ──────────────────────────────────────────
-
-const tableKeys = {
-  all: ['operations', 'tables'] as const,
-}
-
-const roomKeys = {
-  all: ['operations', 'rooms'] as const,
-}
 
 const housekeepingKeys = {
   all: ['operations', 'housekeeping'] as const,

@@ -24,7 +24,7 @@ import { useServerPagination } from "@/lib/hooks/useServerPagination"
 import { usePaymentsList } from '@/lib/services/payment-service'
 import { logActivitySafe } from '@/lib/services/activity-log-service'
 import { insforge } from '@/lib/services/auth-service'
-import { pageTransitionFast, staggerContainerFast } from "@/lib/animations/presets"
+import { pageTransitionFast } from "@/lib/animations/presets"
 import {
   BarChart,
   Bar,
@@ -114,7 +114,7 @@ export function Finance() {
   // ── React Query hooks (shared, accurate, auto-refreshing) ──
   // useFinancialSummaryForRange handles both range-filtered and all-time queries
   // (when dates are undefined, it falls back to all-time in the queryFn)
-  const { data: financialSummary, isLoading: summaryLoading } = useFinancialSummaryForRange(rangeStart, rangeEnd)
+  const { data: financialSummary } = useFinancialSummaryForRange(rangeStart, rangeEnd)
   const { data: revenueByDayData, isLoading: revenueLoading } = useRevenueByDay(
     isAllTimeMode ? 30 : 7,
     rangeStart,

@@ -24,7 +24,7 @@ export interface TableStats {
 
 const staggerItem: Variants = {
   hidden: { opacity: 0, y: 12 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: "easeOut" } },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: "easeOut" as const } },
 }
 
 // ── Summary Stat Card ────────────────────────────────────────
@@ -119,9 +119,9 @@ export function SummaryDashboard({ roomStats, tableStats, activeTab }: {
       <AnimatePresence mode="wait">
         <motion.div
           key={activeTab}
-          initial={shouldReduceMotion ? false : { opacity: 0, y: 8 }}
+          initial={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={shouldReduceMotion ? false : { opacity: 0, y: -8 }}
+          exit={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: -8 }}
           transition={{ duration: 0.2, ease: "easeOut" }}
           className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4"
         >

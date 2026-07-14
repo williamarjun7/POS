@@ -113,7 +113,7 @@ export interface UseExpensesReturn {
   /** Delete an expense */
   deleteExpense: (id: string) => Promise<void>;
   /** Refetch from DB */
-  refresh: () => Promise<void>;
+  refresh: () => void;
 }
 
 export function useExpenses(): UseExpensesReturn {

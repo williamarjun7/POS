@@ -33,7 +33,7 @@ function rowVariants(delay: number) {
     visible: (i: number) => ({
       opacity: 1,
       y: 0,
-      transition: { delay: i * delay, duration: 0.2, ease: "easeOut" },
+      transition: { delay: i * delay, duration: 0.2, ease: "easeOut" as const },
     }),
   }
 }

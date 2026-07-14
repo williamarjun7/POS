@@ -219,7 +219,7 @@ export function Expenses() {
               <Button variant="outline" size="sm" onClick={refresh}>Retry</Button>
             </div>
           ) : filtered.length === 0 ? (
-            <EmptyState icon="Receipt" title="No expenses found" description={search || categoryFilter !== "all" ? "Try adjusting your filters" : "Record your first expense to get started."} action={
+            <EmptyState icon="Receipt" title="No expenses found" description={categoryFilter !== "all" ? "Try adjusting your filters" : "Record your first expense to get started."} action={
               <Button size="sm" onClick={openCreateModal}><Plus className="h-4 w-4" /> New Expense</Button>
             } />
           ) : (

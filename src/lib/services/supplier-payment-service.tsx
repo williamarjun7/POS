@@ -142,7 +142,7 @@ export interface UseSupplierPaymentsReturn {
   /** Get payments for a specific supplier (non-cached, always fetches fresh) */
   getPaymentsBySupplier: (supplierId: string) => Promise<SupplierPayment[]>;
   /** Refetch from DB */
-  refresh: () => Promise<void>;
+  refresh: () => void;
 }
 
 export function useSupplierPayments(): UseSupplierPaymentsReturn {

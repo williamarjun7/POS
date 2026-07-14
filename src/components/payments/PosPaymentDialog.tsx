@@ -131,14 +131,13 @@ export function PosPaymentDialog({
       .from('customers')
       .select('id, name, phone')
       .order('name', { ascending: true })
-      .then(({ data, error }) => {
+      .then(({ data, error }: { data: Array<{id:string;name:string;phone:string|null}> | null; error: Error | null }) => {
         if (cancelled) return;
         if (!error && data) {
           setCustomersList(data as Array<{id:string;name:string;phone:string|null}>);
         }
         setCustomersLoading(false);
-      })
-      .catch(() => { if (!cancelled) setCustomersLoading(false); });
+      });
     return () => { cancelled = true; };
   }, []);
   const filteredCustomers = useMemo(() => {

@@ -9,7 +9,6 @@ import { db, insforge } from '@/lib/db/insforge'
 import type {
   PaymentRow,
   InvoiceRow,
-  ExpenseRow,
   CustomerRow,
   InventoryItemRow,
   RoomRow,
@@ -120,8 +119,8 @@ async function dailySalesReport(params: GenerateParams) {
       .select('*')
       .gte('created_at', from),
   ])
-  const payments = (paymentsRes.data ?? []) as PaymentRow[]
-  const invoices = (invoicesRes.data ?? []) as InvoiceRow[]
+  const payments = ((paymentsRes as any).data ?? []) as PaymentRow[]
+  const invoices = ((invoicesRes as any).data ?? []) as InvoiceRow[]
 
   const rows: string[][] = []
   for (const inv of invoices) {
@@ -183,15 +182,11 @@ async function monthlySalesReport(params: GenerateParams) {
 
 async function categoryWiseSales(params: GenerateParams) {
   // Fetch actual sales data from invoice_items joined with menu_items
-  const [invoicesRes, itemsRes] = await Promise.all([
-    db.findMany<import('./types').InvoiceRow>('invoices'),
-    insforge.database
-      .from('invoice_items')
-      .select('name, quantity, total_price'),
-  ])
+  const itemsRes = await insforge.database
+    .from('invoice_items')
+    .select('name, quantity, total_price')
 
   const invoiceItems = (itemsRes.data ?? []) as Array<{ name: string; quantity: number; total_price: number }>
-  const cats = new Map<string, string>()
   // Map menu items to categories
   const menuItems = (await db.findMany<MenuItemRow>('menu_items')).data ?? []
   const menuCats = (await db.findMany<MenuCategoryRow>('menu_categories')).data ?? []
@@ -398,11 +393,15 @@ export async function generateReport(params: GenerateParams): Promise<void> {
   if (!handler) {
     // Fallback: generic data export (last 30 days, or custom range)
     const from = params.startDate ? `${params.startDate}T00:00:00Z` : startOfDay(-30)
-    const { data: invoicesRes } = await insforge.database
+    await insforge.database
       .from('invoices')
       .select('*')
       .gte('created_at', from)
-    const rows = (invoicesRes.data ?? []).map((inv) => [
+    const { data: fallbackData } = await insforge.database
+      .from('invoices')
+      .select('invoice_number, customer_name, created_at, status, total')
+      .gte('created_at', from)
+    const fallbackRows = (fallbackData ?? []).map((inv: any) => [
       inv.invoice_number,
       inv.customer_name,
       fmtDate(inv.created_at),
@@ -410,7 +409,7 @@ export async function generateReport(params: GenerateParams): Promise<void> {
       fmtCurrency(inv.total),
     ])
     triggerDownload(
-      { title: params.reportTitle, headers: ['Invoice', 'Customer', 'Date', 'Status', 'Amount'], rows },
+      { title: params.reportTitle, headers: ['Invoice', 'Customer', 'Date', 'Status', 'Amount'], rows: fallbackRows },
       `report-${params.reportId}`,
       params.format,
     )

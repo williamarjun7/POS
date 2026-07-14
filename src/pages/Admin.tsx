@@ -28,7 +28,7 @@ import type { Branch } from "@/lib/services/branch-service"
 import type { User, UserRole } from "@/types"
 import { insforge, signUp } from "@/lib/services/auth-service"
 import type { FeatureFlagRow } from "@/lib/db/types"
-import { pageTransitionFast, staggerContainer, cardEntry, tableRow, iconWiggle, progressBar } from "@/lib/animations/presets"
+import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
 
 // --- Types ---
 

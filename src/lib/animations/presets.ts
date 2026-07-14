@@ -105,7 +105,7 @@ export const staggerItemFast = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.25, ease: 'easeOut' },
+    transition: { duration: 0.25, ease: easeOut },
   },
 }
 
@@ -146,7 +146,7 @@ export const cardHoverSoft = {
   rest: { y: 0 },
   hover: {
     y: -2,
-    transition: { duration: 0.2, ease: 'easeOut' },
+    transition: { duration: 0.2, ease: easeOut },
   },
   tap: { y: 0 },
 }
@@ -164,7 +164,7 @@ export const buttonHover = { scale: 1.02 }
 export const spinnerRotate = {
   animate: {
     rotate: 360,
-    transition: { repeat: Infinity, duration: 0.8, ease: 'linear' },
+    transition: { repeat: Infinity, duration: 0.8, ease: 'linear' as const },
   },
 }
 
@@ -180,7 +180,7 @@ export const tableRow = {
   visible: (i: number) => ({
     opacity: 1,
     x: 0,
-    transition: { delay: i * 0.03, duration: 0.2, ease: 'easeOut' },
+    transition: { delay: i * 0.03, duration: 0.2, ease: easeOut },
   }),
 }
 
@@ -214,7 +214,7 @@ export const modalContent = {
     opacity: 0,
     scale: 0.95,
     y: 10,
-    transition: { duration: 0.15, ease: 'easeIn' },
+    transition: { duration: 0.15, ease: easeIn },
   },
 }
 
@@ -230,7 +230,7 @@ export const drawerSlideRight = {
   },
   exit: {
     x: '100%',
-    transition: { duration: 0.2, ease: 'easeIn' },
+    transition: { duration: 0.2, ease: easeIn },
   },
 }
 
@@ -242,7 +242,7 @@ export const drawerSlideLeft = {
   },
   exit: {
     x: '-100%',
-    transition: { duration: 0.2, ease: 'easeIn' },
+    transition: { duration: 0.2, ease: easeIn },
   },
 }
 
@@ -256,13 +256,13 @@ export const dropdownOpen = {
     opacity: 1,
     scale: 1,
     y: 0,
-    transition: { duration: 0.12, ease: 'easeOut' },
+    transition: { duration: 0.12, ease: easeOut },
   },
   exit: {
     opacity: 0,
     scale: 0.95,
     y: -4,
-    transition: { duration: 0.08, ease: 'easeIn' },
+    transition: { duration: 0.08, ease: easeIn },
   },
 }
 
@@ -275,7 +275,7 @@ export const tabIndicator = {
   visible: {
     width: '100%',
     opacity: 1,
-    transition: { duration: 0.2, ease: 'easeOut' },
+    transition: { duration: 0.2, ease: easeOut },
   },
 }
 
@@ -283,12 +283,12 @@ export const tabContent = {
   enter: {
     opacity: 1,
     x: 0,
-    transition: { duration: 0.25, ease: 'easeOut' },
+    transition: { duration: 0.25, ease: easeOut },
   },
   exit: {
     opacity: 0,
     x: -15,
-    transition: { duration: 0.15, ease: 'easeIn' },
+    transition: { duration: 0.15, ease: easeIn },
   },
 }
 
@@ -307,7 +307,7 @@ export const slideInRight = {
   visible: {
     opacity: 1,
     x: 0,
-    transition: { type: 'spring', stiffness: 300, damping: 25 },
+    transition: { type: 'spring' as const, stiffness: 300, damping: 25 },
   },
   exit: { opacity: 0, x: 60, transition: { duration: 0.15 } },
 }
@@ -318,13 +318,13 @@ export const notificationItem = {
     opacity: 1,
     x: 0,
     height: 'auto',
-    transition: { duration: 0.3, ease: 'easeOut' },
+    transition: { duration: 0.3, ease: easeOut },
   },
   exit: {
     opacity: 0,
     x: -20,
     height: 0,
-    transition: { duration: 0.2, ease: 'easeIn' },
+    transition: { duration: 0.2, ease: easeIn },
   },
 }
 
@@ -350,13 +350,13 @@ export const errorMessage = {
     opacity: 1,
     y: 0,
     height: 'auto',
-    transition: { duration: 0.2, ease: 'easeOut' },
+    transition: { duration: 0.2, ease: easeOut },
   },
   exit: {
     opacity: 0,
     y: -4,
     height: 0,
-    transition: { duration: 0.15, ease: 'easeIn' },
+    transition: { duration: 0.15, ease: easeIn },
   },
 }
 
@@ -365,7 +365,7 @@ export const validationIcon = {
   visible: {
     opacity: 1,
     scale: 1,
-    transition: { duration: 0.15, ease: 'easeOut' },
+    transition: { duration: 0.15, ease: easeOut },
   },
 }
 
@@ -403,7 +403,7 @@ export const progressBar = {
   hidden: { width: 0 },
   visible: (width: number) => ({
     width: `${width}%`,
-    transition: { duration: 0.8, ease: 'easeOut' },
+    transition: { duration: 0.8, ease: easeOut },
   }),
 }
 
@@ -416,7 +416,7 @@ export const chartReveal = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.6, ease: 'easeOut', delay: 0.2 },
+    transition: { duration: 0.6, ease: easeOut, delay: 0.2 },
   },
 }
 
@@ -436,7 +436,7 @@ export const chartScaleIn = {
 export const pulseIndicator = {
   animate: {
     scale: [1, 1.1, 1],
-    transition: { duration: 1.5, repeat: Infinity, ease: 'easeInOut' },
+    transition: { duration: 1.5, repeat: Infinity, ease: easeInOut },
   },
 }
 
@@ -444,7 +444,7 @@ export const pingIndicator = {
   animate: {
     scale: [1, 1.3, 1],
     opacity: [0.7, 0, 0.7],
-    transition: { duration: 1.5, repeat: Infinity, ease: 'easeInOut' },
+    transition: { duration: 1.5, repeat: Infinity, ease: easeInOut },
   },
 }
 
@@ -457,12 +457,12 @@ export const accordionContent = {
   visible: {
     height: 'auto',
     opacity: 1,
-    transition: { duration: 0.25, ease: 'easeOut' },
+    transition: { duration: 0.25, ease: easeOut },
   },
   exit: {
     height: 0,
     opacity: 0,
-    transition: { duration: 0.2, ease: 'easeIn' },
+    transition: { duration: 0.2, ease: easeIn },
   },
 }
 
@@ -473,7 +473,7 @@ export const accordionContent = {
 export const iconBounce = {
   animate: {
     y: [0, -3, 0],
-    transition: { duration: 1.5, repeat: Infinity, ease: 'easeInOut' },
+    transition: { duration: 1.5, repeat: Infinity, ease: easeInOut },
   },
 }
 
@@ -494,7 +494,7 @@ export const fadeInUp = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.35, ease: 'easeOut' as const },
+    transition: { duration: 0.35, ease: easeOut },
   },
   exit: { opacity: 0, y: -10, transition: { duration: 0.2 } },
 }

@@ -55,12 +55,12 @@ const staggerContainer = {
 
 const staggerItem = {
   hidden: { opacity: 0, y: 12 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: "easeOut" } },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: "easeOut" as const } },
 }
 
 const tabVariants = {
-  enter: { opacity: 1, x: 0, transition: { duration: 0.25, ease: "easeOut" } },
-  exit: { opacity: 0, x: -20, transition: { duration: 0.15, ease: "easeIn" } },
+  enter: { opacity: 1, x: 0, transition: { duration: 0.25, ease: "easeOut" as const } },
+  exit: { opacity: 0, x: -20, transition: { duration: 0.15, ease: "easeIn" as const } },
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -861,7 +861,7 @@ export function Operations() {
     occupied: tableList.filter(t => t.status === "occupied").length,
     available: tableList.filter(t => t.status === "available" || t.status === "free").length,
     reserved: tableList.filter(t => t.status === "reserved").length,
-    disabled: tableList.filter(t => t.status === "disabled").length,
+    disabled: tableList.filter(t => t.status === "disabled" || t.status === "out_of_order").length,
     activeOrders: tableList.filter(t => t.status === "occupied" && !!t.running_total).length,
     pendingBills: tableList.filter(t => t.status === "occupied" && (t.running_total ?? 0) > 0).length,
   }), [tableList])

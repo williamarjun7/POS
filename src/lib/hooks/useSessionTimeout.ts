@@ -32,6 +32,8 @@ interface SessionTimeoutResult {
   dismissWarning: () => void
   /** Manually reset the inactivity timer */
   resetTimer: () => void
+  /** Force logout immediately */
+  logout: () => Promise<void>
   /** The time (ms) remaining before the warning shows */
   warnAt: number
   /** The total timeout duration (ms) */
