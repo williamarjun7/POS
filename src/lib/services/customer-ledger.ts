@@ -109,6 +109,20 @@ export async function recordCreditCharge(
     throw payError
   }
 
+  // Backfill the invoice's customer_id so the FK relationship is intact.
+  // The invoice was created before the customer existed, so customer_id was NULL.
+  if (safe.invoiceId) {
+    const { error: invUpdateError } = await db.update(
+      'invoices',
+      { customer_id: customer.id },
+      { id: safe.invoiceId },
+    )
+    if (invUpdateError) {
+      console.error('Failed to backfill invoice customer_id:', invUpdateError)
+      // Non-fatal — the invoice is already committed; the payment is linked
+    }
+  }
+
   // Update the customer's credit balance
   const newBalance = (customer.credit_balance ?? 0) + safe.amount
   const { error: updateError } = await db.update(

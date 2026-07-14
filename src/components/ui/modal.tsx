@@ -8,6 +8,7 @@ interface BaseModalProps {
   onClose: () => void
   title: string
   children: ReactNode
+  footer?: ReactNode
   className?: string
   /**
    * xs  = max-w-sm (320px) – short confirms, alerts
@@ -29,7 +30,7 @@ const sizeClasses = {
   full: "max-w-[90vw]",
 }
 
-export function BaseModal({ open, onClose, title, children, className, size = "md" }: BaseModalProps) {
+export function BaseModal({ open, onClose, title, children, footer, className, size = "md" }: BaseModalProps) {
   return (
     <AnimatePresence>
       {open && (
@@ -48,13 +49,13 @@ export function BaseModal({ open, onClose, title, children, className, size = "m
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.2, ease: "easeOut" }}
             className={cn(
-              "w-full rounded-xl border bg-card shadow-xl",
+              "w-full rounded-xl border bg-card shadow-xl flex flex-col max-h-[85vh]",
               sizeClasses[size],
               className
             )}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <div className="flex items-center justify-between border-b border-border px-6 py-4 shrink-0">
               <h3 className="text-base font-semibold text-foreground">{title}</h3>
               <button
                 onClick={onClose}
@@ -64,7 +65,12 @@ export function BaseModal({ open, onClose, title, children, className, size = "m
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="px-6 py-5">{children}</div>
+            <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
+            {footer && (
+              <div className="shrink-0 border-t border-border px-6 py-4">
+                {footer}
+              </div>
+            )}
           </motion.div>
         </motion.div>
       )}

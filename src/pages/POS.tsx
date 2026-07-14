@@ -47,6 +47,16 @@ const npr = (amount: number) => formatCurrency(amount, 2);
 
 const categoryIcons: Record<string, React.ElementType> = {
   coffee: Coffee, breakfast: Egg, lunch: UtensilsCrossed, bar: Wine,
+  alcohol: Wine, beer: Wine, wine: Wine, liquor: Wine, whiskey: Wine,
+  tobacco: Coffee, cigarette: Coffee, smoke: Coffee,
+  hookah: Coffee, sheesha: Coffee, shisha: Coffee,
+  juice: Coffee, smoothie: Coffee, shake: Coffee, soda: Coffee,
+  dessert: Coffee, ice: Coffee, cake: Coffee, pastry: Coffee,
+  tea: Coffee, green: Coffee, milk: Coffee,
+  soup: UtensilsCrossed, salad: UtensilsCrossed, sandwich: UtensilsCrossed, pizza: UtensilsCrossed,
+  noodle: UtensilsCrossed, rice: UtensilsCrossed, curry: UtensilsCrossed,
+  starter: UtensilsCrossed, appetizer: UtensilsCrossed, snack: UtensilsCrossed,
+  main: UtensilsCrossed, special: UtensilsCrossed, combo: UtensilsCrossed,
 };
 
 function getIconForCategory(name: string): React.ElementType {
@@ -356,16 +366,25 @@ export function POS() {
 
   // ─── Previous batches for selected table ─────────
   const tableBatches = selectedTableId ? (orderBatches[selectedTableId] || []) : [];
-  const previousBatches = tableBatches;
+  // ─── Filter for display: only show batches with unpaid items ───
+  // This ensures that after full payment, the Previous Batches section
+  // disappears and the table looks like a fresh start.
+  // tableBatches is still used for payment logic (needs all batches).
+  const activePreviousBatches = useMemo(
+    () => tableBatches.filter(b =>
+      b.items.some(i => i.status !== 'paid' && i.status !== 'credit' && i.status !== 'cancelled')
+    ),
+    [tableBatches]
+  );
 
   // ─── Running total across ALL batches (previous + current cart) ─
   const unpaidPreviousTotal = useMemo(
-    () => previousBatches.reduce((sum, batch) =>
+    () => tableBatches.reduce((sum, batch) =>
       sum + batch.items
         .filter(bi => bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled')
         .reduce((s, bi) => s + bi.unit_price * bi.quantity, 0),
     0),
-    [previousBatches],
+    [tableBatches],
   );
   const totalRunning = unpaidPreviousTotal + newSubtotal;
 
@@ -430,6 +449,12 @@ export function POS() {
   // ─── Handle payment complete ──────────────────────
   const handlePaymentComplete = useCallback(async (providedInvoiceNumber?: string, paymentResult?: PaymentResult) => {
     if (!selectedTableId) return;
+    // ── Guard: Only block if nothing to pay AND no payment was processed ──
+    if (!paymentResult && allUnpaidItemsForPayment.length === 0) {
+      showError('Nothing to pay — all items are already settled or the cart is empty.');
+      setShowPayment(false);
+      return;
+    }
     let invoiceTotal = paymentResult?.grandTotal ?? 0;
     let totalSettled = (paymentResult?.paidAmount ?? 0) + (paymentResult?.creditAmount ?? 0);
     let remainingBalance = Math.max(0, invoiceTotal - totalSettled);
@@ -711,10 +736,29 @@ export function POS() {
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        // Show warning to user — payment was processed but customer record is incomplete
+        showError(`Warning: Credit charge for ${paymentResult.creditCustomerName} could not be recorded (${errMsg}). The invoice and payment were created, but the customer record and invoice-to-customer link are missing. Please contact an administrator to fix this.`);
         if (import.meta.env.DEV) console.error('[PAYMENT] credit charge failed:', errMsg);
       }
     }
     logPayment('completed', { invoiceNumber: invNumber, invoiceId, totalAmount: paymentResult.grandTotal, method: paymentResult.paymentMethod, unpaidItems: newUnpaidTotal });
+
+    // ── Safety net: close table session via RPC (belt-and-suspenders) ──
+    // The database triggers (trg_order_batches_auto_close_session) already
+    // auto-close the session when all batches transition to paid/cancelled.
+    // This RPC call is a safety net for edge cases where the trigger might
+    // not have fired (e.g., batch was already paid before trigger existed,
+    // or a race condition). Fire-and-forget — errors are non-critical.
+    if (selectedTableId && (remainingBalance <= 0 || isCreditPayment)) {
+      db.rpc('close_table_session', { p_table_id: selectedTableId })
+        .then(({ data, error }: { data: any; error: any }) => {
+          if (error) {
+            logPayment('close_session_rpc_failed', { error: error.message || error });
+          } else if (data && typeof data === 'object' && 'success' in data && data.success) {
+            logPayment('close_session_rpc_ok', { session_id: (data as any).session_id });
+          }
+        });
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // CLEAR POS SESSION — runs only after all DB writes succeeded
@@ -722,6 +766,17 @@ export function POS() {
     clearCart();
     setCustomerName('');
     try { sessionStorage.removeItem(CART_STORAGE_KEY); } catch { /* ignore */ }
+
+    // ── For fully settled payments: reset table selection & local batches ──
+    // Partial payments keep the table selection so the cashier can continue.
+    if (remainingBalance <= 0 || paymentResult.creditAmount) {
+      setSelectedTableId('');
+      setOrderBatches(prev => {
+        const updated = { ...prev };
+        delete updated[selectedTableId];
+        return updated;
+      });
+    }
 
     // ponytail: only invalidate dashboard-facing keys, batch to avoid serial awaits
     Promise.all([
@@ -1195,28 +1250,31 @@ export function POS() {
                 </AnimatePresence>
               </motion.div>
 
-              {/* Customer input */}
+              {/* Customer input — compact with label */}
               <motion.div
                 className="relative shrink-0"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2, type: 'spring' as const, stiffness: 400, damping: 28 }}
               >
-                <div className="flex items-center gap-2 h-10 rounded-xl border border-border bg-card/50 px-3.5
+                <div className="flex items-center gap-0.5 h-10 rounded-xl border border-border bg-card/50
                                 transition-all duration-200
                                 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400
                                 hover:border-emerald-300 dark:hover:border-emerald-700">
-                  <UserIcon className="h-4 w-4 text-muted-foreground/60 shrink-0" />
+                  <span className="flex items-center gap-1 pl-3.5 text-xs font-medium text-muted-foreground/70 shrink-0">
+                    <UserIcon className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Customer:</span>
+                  </span>
                   <input
-                    placeholder="Customer name"
+                    placeholder="Walk-in"
                     value={customerName}
                     onChange={e => setCustomerName(e.target.value)}
-                    className="bg-transparent outline-none w-28 sm:w-32 text-sm placeholder:text-muted-foreground/40"
+                    className="bg-transparent outline-none w-24 sm:w-28 text-sm placeholder:text-muted-foreground/40"
                   />
                   {customerName && (
                     <button
                       onClick={() => setCustomerName('')}
-                      className="p-0.5 rounded hover:bg-muted transition-colors shrink-0"
+                      className="p-0.5 rounded hover:bg-muted transition-colors shrink-0 mr-1"
                       tabIndex={-1}
                     >
                       <X className="h-3.5 w-3.5 text-muted-foreground/60" />
@@ -1356,13 +1414,13 @@ export function POS() {
                 </motion.div>)}
               </div>
 
-              <div className="overflow-y-auto no-scrollbar min-h-0 p-5 space-y-4">                {previousBatches.length > 0 && (
+              <div className="overflow-y-auto no-scrollbar min-h-0 p-5 space-y-4">                {activePreviousBatches.length > 0 && (
                   <div className="space-y-3">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                       Previous Batches
-                      <span className="text-[10px] font-normal text-muted-foreground/60">({previousBatches.length})</span>
+                      <span className="text-[10px] font-normal text-muted-foreground/60">({activePreviousBatches.length})</span>
                     </p>
-                    {previousBatches.map((batch, idx) => (
+                    {activePreviousBatches.map((batch, idx) => (
                       <div key={batch.id} className="rounded-lg border border-muted bg-muted/20 p-3 opacity-75">
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center gap-2">
@@ -1463,8 +1521,8 @@ export function POS() {
                 <RequirePermission permission="orders.create">
                   <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handlePlaceOrder} disabled={!selectedTableId || newCartItems.length === 0}
                     className="w-full h-14 rounded-xl bg-emerald-500 text-background font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all shadow-sm shadow-emerald-500/20">
-                    {previousBatches.length > 0 ? (
-                      <>Create Another Order Batch {totalNewCartItems > 0 && <>({totalNewCartItems})</>}</>
+                    {activePreviousBatches.length > 0 ? (
+                      <>Create Another Order Batch</>
                     ) : (
                       <>Place Order ({totalNewCartItems})</>
                     )}
@@ -1505,13 +1563,13 @@ export function POS() {
               <button onClick={() => setMobileCartOpen(false)} className="p-1 hover:bg-muted rounded-lg transition-colors"><X className="h-5 w-5" /></button>
             </div>
             <div className="overflow-y-auto min-h-0 p-4 space-y-4">
-              {previousBatches.length > 0 && (
+              {activePreviousBatches.length > 0 && (
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                     Previous Batches
-                    <span className="text-[10px] font-normal text-muted-foreground/60">({previousBatches.length})</span>
+                    <span className="text-[10px] font-normal text-muted-foreground/60">({activePreviousBatches.length})</span>
                   </p>
-                  {previousBatches.map((batch, idx) => (
+                  {activePreviousBatches.map((batch, idx) => (
                     <div key={batch.id} className="rounded-lg border border-muted bg-muted/20 p-3 opacity-75">
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-2">
@@ -1589,12 +1647,11 @@ export function POS() {
                 {selectedTableId && (<button onClick={() => setShowPayment(true)} disabled={allUnpaidItemsForPayment.length === 0} className="h-14 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-semibold hover:from-amber-400 hover:to-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"><Receipt className="h-4 w-4" /> Pay Bill</button>)}
                 <button onClick={() => navigate('/orders')} className="h-12 rounded-lg border-2 border-border text-sm font-medium hover:bg-muted transition-colors">View Bills</button>
               </div>
-              <button onClick={handlePlaceOrder} disabled={!selectedTableId || newCartItems.length === 0} className="w-full h-14 rounded-xl bg-emerald-500 text-background font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm">
-                {previousBatches.length > 0 ? (
-                  <>Create Another Order Batch {totalNewCartItems > 0 && <>({totalNewCartItems})</>}</>
-                ) : (
-                  <>Place Order ({totalNewCartItems})</>
-                )}
+              <button onClick={handlePlaceOrder} disabled={!selectedTableId || newCartItems.length === 0} className="w-full h-14 rounded-xl bg-emerald-500 text-background font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm">                    {activePreviousBatches.length > 0 ? (
+                      <>Create Another Order Batch</>
+                    ) : (
+                      <>Place Order ({totalNewCartItems})</>
+                    )}
               </button>
             </div>
           </motion.div>

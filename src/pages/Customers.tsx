@@ -1,11 +1,12 @@
 import { useState, useMemo, useCallback, useEffect } from "react"
 import { motion } from "framer-motion"
+import { useQueryClient } from '@tanstack/react-query'
 import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
 import { StatusBadge } from "@/components/StatusBadge"
 import { DataTable, type Column } from "@/components/DataTable"
 import { BaseModal } from "@/components/ui/modal"
-import { FormInput, FormSelect, FormTextarea, FormActions } from "@/components/ui/form-field"
+import { FormInput, FormSelect, FormActions } from "@/components/ui/form-field"
 import { StatCard } from "@/components/ui/stat-card"
 
 import { Button } from "@/components/ui/button"
@@ -16,32 +17,28 @@ import { useCustomers } from "@/lib/services/customer-service"
 import { idempotencyGuard } from "@/lib/services/idempotency-guard"
 import { logActivitySafe } from '@/lib/services/activity-log-service'
 import { insforge } from '@/lib/services/auth-service'
+import { customerKeys } from '@/lib/services/customer-ledger'
+import { invoiceKeys } from '@/lib/core/query-keys'
 import { useServerPagination } from "@/lib/hooks/useServerPagination"
 import type { Customer } from "@/lib/services/customer-service"
 import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
 import { getPaymentMethodLabel } from "@/lib/payment-methods"
 import type { PaymentMethod } from "@/types"
 import {
-  Plus, Edit, Trash2, Phone, Mail, Search, Filter, X,
-  CreditCard, TrendingUp,
-  FileText, Check, Star, Wallet, AlertTriangle
+  Plus, Edit, Trash2, Phone, Mail, Search, Filter, X, Check,
+  CreditCard, TrendingUp, Loader2, CheckCircle2
 } from "lucide-react"
 import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
+import { CustomerProfile } from "@/components/customers/CustomerProfile"
 
 /* ─── Invoice types ────────────────────────────── */
-
-interface InvoiceItem {
-  name: string
-  quantity: number
-  price: number
-}
 
 interface Invoice {
   id: string
   invoiceNumber: string
   customerId: string
   customerName: string
-  items: InvoiceItem[]
+  items: { name: string; quantity: number; price: number }[]
   subtotal: number
   tax: number
   discount: number
@@ -196,302 +193,44 @@ function CustomerFormModal({
   )
 }
 
-function CustomerProfileDrawer({
-  open,
-  customer,
-  onClose,
-  onReceivePayment,
-}: {
-  open: boolean
-  customer: Customer | null
-  onClose: () => void
-  onReceivePayment: (customerId: string, amount: number, method: string, notes: string) => Promise<void> | void
-}) {
-  const [showPaymentInline, setShowPaymentInline] = useState(false)
-  const [payMethod, setPayMethod] = useState("cash")
-  const [payAmount, setPayAmount] = useState("")
-  const [payNotes, setPayNotes] = useState("")
-
-  const [customerInvoices, setCustomerInvoices] = useState<Invoice[]>([])
-  const [_invoicesLoading, setInvoicesLoading] = useState(false)
-  const [refreshCounter, setRefreshCounter] = useState(0)
-
-  // Fetch invoices from DB when customer changes or after payment
-  useEffect(() => {
-    if (!customer) {
-      setCustomerInvoices([])
-      return
-    }
-    setInvoicesLoading(true)
-    ;(async () => {
-      try {
-        const { data, error } = await insforge.database
-          .from('invoices')
-          .select('*')
-          .eq('customer_name', customer.name)
-          .order('created_at', { ascending: false })
-        if (error) throw error
-        setCustomerInvoices((data ?? []).map(row => ({
-          id: row.id,
-          invoiceNumber: row.invoice_number,
-          customerId: row.customer_id ?? row.id,
-          customerName: row.customer_name,
-          items: [],
-          subtotal: row.subtotal,
-          tax: row.tax,
-          discount: row.discount,
-          total: row.total,
-          status: row.status as Invoice['status'],
-          paymentMethod: (row.payment_method as Invoice['paymentMethod']) ?? 'cash',
-          createdAt: row.created_at,
-          dueDate: row.due_date ?? undefined,
-        })))
-      } catch {
-        setCustomerInvoices([])
-      } finally {
-        setInvoicesLoading(false)
-      }
-    })()
-  }, [customer, refreshCounter])
-
-  const outstandingInvoices = useMemo(() => {
-    return customerInvoices.filter((inv) => inv.status !== "paid")
-  }, [customerInvoices])
-
-  const totalOutstanding = useMemo(() => {
-    return outstandingInvoices.reduce((sum, inv) => sum + inv.total, 0)
-  }, [outstandingInvoices])
-
-  const paymentHistory = useMemo(() => {
-    if (!customer) return []
-    return customerInvoices
-      .filter((inv) => inv.status === "paid")
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  }, [customerInvoices, customer])
-
-  if (!customer) return null
-
-  const stats = [
-    { label: "Total Orders", value: customer.totalOrders, icon: FileText, color: "text-primary" },
-    { label: "Total Spent", value: formatCurrency(customer.totalSpent), icon: TrendingUp, color: "text-success" },
-    { label: "Loyalty Points", value: formatNumber(customer.loyaltyPoints), icon: Star, color: "text-warning" },
-    { label: "Credit Balance", value: formatCurrency(customer.creditBalance), icon: Wallet, color: "text-destructive" },
-  ]
-
-  const handlePay = async () => {
-    const amt = parseFloat(payAmount) || 0
-    if (amt <= 0) { showError("Enter an amount"); return }
-    await onReceivePayment(customer.id, amt, payMethod, payNotes)
-    setShowPaymentInline(false)
-    setPayAmount("")
-    setPayNotes("")
-    setRefreshCounter(prev => prev + 1)
-  }
-
-  return (
-    <BaseModal open={open} onClose={onClose} title="Customer Profile" size="lg">
-      <div className="space-y-6">
-        <div className="flex items-start gap-4">
-          <Avatar name={customer.name} size="lg" />
-          <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-semibold text-foreground truncate">{customer.name}</h3>
-            <div className="mt-1 space-y-0.5 text-sm text-muted-foreground">
-              {customer.phone && (
-                <div className="flex items-center gap-1.5">
-                  <Phone className="h-3 w-3" /> {customer.phone}
-                </div>
-              )}
-              {customer.email && (
-                <div className="flex items-center gap-1.5">
-                  <Mail className="h-3 w-3" /> {customer.email}
-                </div>
-              )}
-              {customer.address && (
-                <div className="text-xs text-muted-foreground">{customer.address}</div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          {stats.map((stat) => (
-            <div
-              key={stat.label}
-              className="flex items-center gap-3 rounded-xl border border-border bg-muted/50 px-4 py-3"
-            >
-              <stat.icon className={cn("h-5 w-5 shrink-0", stat.color)} />
-              <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">{stat.label}</p>
-                <p className="text-sm font-semibold text-foreground truncate">{stat.value}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {totalOutstanding > 0 && (
-          <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-destructive" />
-                <span className="text-sm font-medium text-foreground">Outstanding Balance</span>
-              </div>
-              <span className="text-lg font-bold text-destructive">{formatCurrency(totalOutstanding)}</span>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">{outstandingInvoices.length} unpaid invoice(s)</p>
-          </div>
-        )}
-
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            onClick={() => setShowPaymentInline(!showPaymentInline)}
-            disabled={totalOutstanding === 0}
-          >
-            <CreditCard className="h-4 w-4" /> Receive Payment
-          </Button>
-        </div>
-
-        {showPaymentInline && totalOutstanding > 0 && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            className="rounded-xl border border-border bg-muted/30 p-4 space-y-3"
-          >
-            <div className="grid grid-cols-2 gap-3">
-              <FormSelect
-                label="Method"
-                value={payMethod}
-                onChange={(e) => setPayMethod(e.target.value)}
-                options={paymentMethodOptions}
-              />
-              <FormInput
-                label="Amount"
-                type="number"
-                value={payAmount}
-                onChange={(e) => setPayAmount(e.target.value)}
-                placeholder={`Max: ${formatCurrency(totalOutstanding)}`}
-                min={0}
-              />
-            </div>
-            <FormTextarea
-              label="Notes"
-              value={payNotes}
-              onChange={(e) => setPayNotes(e.target.value)}
-              placeholder="Optional..."
-              rows={1}
-            />
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setShowPaymentInline(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handlePay}
-                disabled={!payAmount || parseFloat(payAmount) <= 0}
-                className="bg-success hover:bg-success/90"
-              >
-                <Check className="h-4 w-4" /> Confirm
-              </Button>
-            </div>
-          </motion.div>
-        )}
-
-        <div>
-          <h4 className="mb-3 text-sm font-semibold text-foreground">All Invoices</h4>
-          {customerInvoices.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">No invoices found</p>
-          ) : (
-            <div className="overflow-hidden rounded-xl border border-border max-h-64 overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-muted/80 backdrop-blur">
-                  <tr className="border-b border-border">
-                    <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Invoice</th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Date</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Amount</th>
-                    <th className="px-3 py-2 text-center text-xs font-medium text-muted-foreground">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {customerInvoices.map((inv) => (
-                    <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                      <td className="px-3 py-2 font-medium text-foreground">{inv.invoiceNumber}</td>
-                      <td className="px-3 py-2 text-muted-foreground">{formatDateTime(inv.createdAt)}</td>
-                      <td className="px-3 py-2 text-right font-medium text-foreground">{formatCurrency(inv.total)}</td>
-                      <td className="px-3 py-2 text-center">
-                        <StatusBadge label={inv.status} variant={paymentStatusVariant[inv.status]} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {paymentHistory.length > 0 && (
-          <div>
-            <h4 className="mb-3 text-sm font-semibold text-foreground">Payment History</h4>
-            <div className="space-y-2">
-              {paymentHistory.map((inv) => (
-                <div key={inv.id} className="flex items-center justify-between rounded-xl border border-border bg-muted/30 px-4 py-2.5">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-success/10">
-                      <Check className="h-4 w-4 text-success" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-foreground">{inv.invoiceNumber}</p>
-                      <p className="text-xs text-muted-foreground">{formatDateTime(inv.createdAt)} &middot; <PaymentMethodBadge method={inv.paymentMethod} size="sm" showIcon={false} /></p>
-                    </div>
-                  </div>
-                  <span className="text-sm font-semibold text-success">{formatCurrency(inv.total)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {customer.notes && (
-          <div>
-            <h4 className="mb-2 text-sm font-semibold text-foreground">Notes</h4>
-            <div className="rounded-xl border border-border bg-muted/30 px-4 py-3">
-              <p className="text-sm text-muted-foreground">{customer.notes}</p>
-            </div>
-          </div>
-        )}
-      </div>
-    </BaseModal>
-  )
-}
-
 function ReceivePaymentModal({
   open,
   customers,
+  initialCustomerId,
   onClose,
   onReceive,
 }: {
   open: boolean
   customers: Customer[]
+  initialCustomerId?: string | null
   onClose: () => void
-  onReceive: (customerId: string, amount: number, method: string, notes: string) => Promise<void> | void
+  onReceive: (customerId: string, amount: number, method: string, notes: string, invoiceIds?: string[]) => Promise<void> | void
 }) {
-  const [selectedCustomerId, setSelectedCustomerId] = useState("")
+  // ── State ─────────────────────────────────────────────────
+  const fromProfile = !!initialCustomerId
+  const [selectedCustomerId, setSelectedCustomerId] = useState(initialCustomerId ?? "")
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>([])
   const [paymentSplits, setPaymentSplits] = useState<PaymentSplit[]>([{ method: "cash", amount: 0 }])
   const [notes, setNotes] = useState("")
   const [customerInvoices, setCustomerInvoices] = useState<Invoice[]>([])
-  const [_invoicesLoading, setInvoicesLoading] = useState(false)
+  const [invoicesLoading, setInvoicesLoading] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [refreshCounter, setRefreshCounter] = useState(0)
 
-  // Fetch invoices for the selected customer
+  // ── Sync initialCustomerId from profile ────────────────────
   useEffect(() => {
-    if (!selectedCustomerId) {
-      setCustomerInvoices([])
+    if (open && initialCustomerId) {
+      setSelectedCustomerId(initialCustomerId)
+      setSelectedInvoiceIds([])
+      setPaymentSplits([{ method: "cash", amount: 0 }])
+      setNotes("")
+    }
+  }, [initialCustomerId, open])
+
+  // ── Fetch invoices for selected customer ───────────────────
+  useEffect(() => {
+    if (!selectedCustomerId || !open) {
+      if (!selectedCustomerId) setCustomerInvoices([])
       return
     }
     const selected = customers.find(c => c.id === selectedCustomerId)
@@ -505,7 +244,7 @@ function ReceivePaymentModal({
           .eq('customer_name', selected.name)
           .order('created_at', { ascending: false })
         if (error) throw error
-        setCustomerInvoices((data ?? []).map(row => ({
+        const fetchedInvoices = (data ?? []).map(row => ({
           id: row.id,
           invoiceNumber: row.invoice_number,
           customerId: row.customer_id ?? row.id,
@@ -519,15 +258,27 @@ function ReceivePaymentModal({
           paymentMethod: (row.payment_method as Invoice['paymentMethod']) ?? 'cash',
           createdAt: row.created_at,
           dueDate: row.due_date ?? undefined,
-        })))
+        }))
+        setCustomerInvoices(fetchedInvoices)
+
+        // Auto-select all unpaid invoices when opened from profile
+        if (initialCustomerId && fetchedInvoices.length > 0) {
+          const unpaidIds = fetchedInvoices
+            .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled')
+            .map(inv => inv.id)
+          if (unpaidIds.length > 0) {
+            setSelectedInvoiceIds(unpaidIds)
+          }
+        }
       } catch {
         setCustomerInvoices([])
       } finally {
         setInvoicesLoading(false)
       }
     })()
-  }, [selectedCustomerId, customers, refreshCounter])
+  }, [selectedCustomerId, customers, refreshCounter, open, initialCustomerId])
 
+  // ── Derived data ────────────────────────────────────────────
   const creditCustomers = useMemo(
     () => customers.filter((c) => c.creditBalance > 0),
     [customers]
@@ -541,7 +292,7 @@ function ReceivePaymentModal({
   const outstandingInvoices = useMemo(() => {
     if (!selectedCustomerId) return []
     return customerInvoices.filter(
-      (inv) => inv.status !== "paid"
+      (inv) => inv.status !== 'paid' && inv.status !== 'cancelled'
     )
   }, [selectedCustomerId, customerInvoices])
 
@@ -554,6 +305,7 @@ function ReceivePaymentModal({
   const totalPaid = paymentSplits.reduce((sum, s) => sum + s.amount, 0)
   const remaining = selectedTotal - totalPaid
 
+  // ── Handlers ───────────────────────────────────────────────
   const toggleInvoice = (id: string) => {
     setSelectedInvoiceIds((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
@@ -584,57 +336,155 @@ function ReceivePaymentModal({
   }
 
   const handleReceive = async () => {
-    if (!selectedCustomerId || selectedInvoiceIds.length === 0) return
+    if (!selectedCustomerId || selectedInvoiceIds.length === 0 || isSubmitting) return
     if (totalPaid <= 0) {
-      showError("Enter payment amount")
+      showError('Enter payment amount')
       return
     }
     if (remaining < -1) {
-      showError("Payment amount exceeds total")
+      showError('Payment amount exceeds total')
       return
     }
-    await onReceive(selectedCustomerId, totalPaid, paymentSplits[0].method, notes)
-    setSelectedCustomerId("")
-    setSelectedInvoiceIds([])
-    setPaymentSplits([{ method: "cash", amount: 0 }])
-    setNotes("")
-    setRefreshCounter(prev => prev + 1)
+
+    setIsSubmitting(true)
+    try {
+      // Pass all splits with their individual amounts so the parent can create
+      // separate payment records per method
+      const splitsJson = JSON.stringify(paymentSplits.map(s => ({
+        method: s.method,
+        amount: s.amount || 0,
+      })))
+      await onReceive(selectedCustomerId, totalPaid, splitsJson, notes, selectedInvoiceIds)
+      showSuccess(`Payment of ${formatCurrency(totalPaid)} received${notes ? ` — ${notes}` : ''}`)
+      setSelectedInvoiceIds([])
+      setPaymentSplits([{ method: "cash", amount: 0 }])
+      setNotes("")
+      if (!fromProfile) {
+        setSelectedCustomerId("")
+      }
+      // Close the modal after successful payment
+      onClose()
+    } catch {
+      showError('Failed to record payment. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
-  return (
-    <BaseModal open={open} onClose={onClose} title="Receive Payment" size="lg">
-      <div className="space-y-5">
-        <FormSelect
-          label="Select Customer"
-          value={selectedCustomerId}
-          onChange={(e) => {
-            setSelectedCustomerId(e.target.value)
-            setSelectedInvoiceIds([])
-          }}
-          options={[
-            { value: "", label: "Choose a customer..." },
-            ...creditCustomers.map((c) => ({ value: c.id, label: `${c.name} (${formatCurrency(c.creditBalance)} credit)` })),
-          ]}
-        />
+  // ── Keyboard shortcuts ─────────────────────────────────────
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        onClose()
+      }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !isSubmitting) {
+        handleReceive()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, isSubmitting, handleReceive, onClose])
 
-        {outstandingInvoices.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-sm font-semibold text-foreground">Outstanding Invoices</h4>
-              <button
-                type="button"
-                onClick={selectAllInvoices}
-                className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
-              >
-                {selectedInvoiceIds.length === outstandingInvoices.length ? "Deselect All" : "Select All"}
-              </button>
+  // ── Render ─────────────────────────────────────────────────
+  const canSubmit = totalPaid > 0 && selectedInvoiceIds.length > 0 && !isSubmitting
+
+  return (
+    <BaseModal
+      open={open}
+      onClose={() => { if (!isSubmitting) onClose() }}
+      title={fromProfile && selectedCustomer ? `Receive Payment — ${selectedCustomer.name}` : "Receive Payment"}
+      size="md"
+      footer={
+        <div className="flex items-center justify-end gap-3">
+          <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting} size="sm">
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={handleReceive}
+            disabled={!canSubmit}
+            className="bg-success hover:bg-success/90 min-w-[140px]"
+            size="sm"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Processing...
+              </>
+            ) : (
+              <>
+                <Check className="h-4 w-4" /> Confirm Payment
+              </>
+            )}
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        {/* Outstanding credit line - compact header replacement */}
+        {fromProfile && selectedCustomer && (
+          <div className="flex items-center justify-between -mt-1 mb-1">
+            <span className="text-sm text-muted-foreground">
+              Outstanding Credit: <span className="font-semibold text-foreground">{formatCurrency(selectedCustomer.creditBalance)}</span>
+            </span>
+            {outstandingInvoices.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {outstandingInvoices.length} unpaid
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Standalone customer selector */}
+        {!fromProfile && (
+          <FormSelect
+            label="Select Customer"
+            value={selectedCustomerId}
+            onChange={(e) => {
+              setSelectedCustomerId(e.target.value)
+              setSelectedInvoiceIds([])
+            }}
+            options={[
+              { value: "", label: "Choose a customer..." },
+              ...creditCustomers.map((c) => ({ value: c.id, label: `${c.name} (${formatCurrency(c.creditBalance)} credit)` })),
+            ]}
+          />
+        )}
+
+        {/* Loading state */}
+        {invoicesLoading && (
+          <div className="flex items-center justify-center py-6">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading invoices...
             </div>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
+          </div>
+        )}
+
+        {/* Outstanding invoices - compact design */}
+        {!invoicesLoading && outstandingInvoices.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Outstanding Invoices
+              </h4>
+              {outstandingInvoices.length > 1 && (
+                <button
+                  type="button"
+                  onClick={selectAllInvoices}
+                  className="text-[11px] font-medium text-primary hover:text-primary/80 transition-colors"
+                >
+                  {selectedInvoiceIds.length === outstandingInvoices.length ? "Deselect All" : "Select All"}
+                </button>
+              )}
+            </div>
+            <div className="space-y-1 max-h-36 overflow-y-auto">
               {outstandingInvoices.map((inv) => (
                 <label
                   key={inv.id}
                   className={cn(
-                    "flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors cursor-pointer",
+                    "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 transition-colors cursor-pointer",
                     selectedInvoiceIds.includes(inv.id)
                       ? "border-primary bg-primary/5"
                       : "border-border hover:bg-muted/50"
@@ -644,15 +494,16 @@ function ReceivePaymentModal({
                     type="checkbox"
                     checked={selectedInvoiceIds.includes(inv.id)}
                     onChange={() => toggleInvoice(inv.id)}
-                    className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                    className="h-3.5 w-3.5 rounded border-border text-primary focus:ring-primary shrink-0"
                   />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground">{inv.invoiceNumber}</p>
-                    <p className="text-xs text-muted-foreground">{formatDateTime(inv.createdAt)} &middot; {inv.items.length} item(s)</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-foreground">{formatCurrency(inv.total)}</p>
-                    <StatusBadge label={inv.status} variant={paymentStatusVariant[inv.status]} />
+                  <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{inv.invoiceNumber}</p>
+                      <p className="text-[11px] text-muted-foreground">{formatDateTime(inv.createdAt)}</p>
+                    </div>
+                    <span className="text-sm font-semibold text-foreground shrink-0">
+                      {formatCurrency(inv.total)}
+                    </span>
                   </div>
                 </label>
               ))}
@@ -660,47 +511,60 @@ function ReceivePaymentModal({
           </div>
         )}
 
+        {/* No outstanding invoices */}
+        {!invoicesLoading && selectedCustomerId && outstandingInvoices.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-6 text-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-success/10 mb-2">
+              <CheckCircle2 className="h-5 w-5 text-success" />
+            </div>
+            <p className="text-sm font-medium text-foreground">All paid up</p>
+            <p className="text-xs text-muted-foreground mt-0.5">This customer has no outstanding invoices.</p>
+          </div>
+        )}
+
+        {/* Payment form */}
         {selectedInvoiceIds.length > 0 && (
           <>
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-semibold text-foreground">Payment Details</h4>
+            <div className="border-t border-border pt-3">
+              <div className="flex items-center justify-between mb-2.5">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Payment</h4>
                 <button
                   type="button"
                   onClick={addSplit}
                   className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
                 >
-                  + Split Payment
+                  + Split
                 </button>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {paymentSplits.map((split, index) => (
-                  <div key={index} className="grid grid-cols-[1fr_120px] gap-3 items-end">
+                  <div key={index} className="grid grid-cols-[1fr_130px] gap-2.5 items-end">
                     <FormSelect
-                      label={index === 0 ? "Payment Method" : `Method ${index + 1}`}
+                      label={index === 0 ? 'Method' : `Method ${index + 1}`}
                       value={split.method}
-                      onChange={(e) => updateSplit(index, "method", e.target.value)}
+                      onChange={(e) => updateSplit(index, 'method', e.target.value)}
                       options={paymentMethodOptions}
                     />
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       <label className="block text-xs font-medium text-muted-foreground">Amount</label>
                       <div className="flex gap-1">
                         <input
                           type="number"
-                          value={split.amount || ""}
-                          onChange={(e) => updateSplit(index, "amount", parseFloat(e.target.value) || 0)}
+                          value={split.amount || ''}
+                          onChange={(e) => updateSplit(index, 'amount', parseFloat(e.target.value) || 0)}
                           onWheel={e => (e.target as HTMLInputElement).blur()}
-                          className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                          placeholder="0"
+                          className="h-9 w-full rounded-lg border border-border bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
+                          placeholder="Enter amount"
                           min={0}
+                          autoFocus={index === 0}
                         />
                         {paymentSplits.length > 1 && (
                           <button
                             type="button"
                             onClick={() => removeSplit(index)}
-                            className="h-10 w-10 shrink-0 flex items-center justify-center rounded-xl border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                            className="h-9 w-9 shrink-0 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
                           >
-                            <X className="h-4 w-4" />
+                            <X className="h-3.5 w-3.5" />
                           </button>
                         )}
                       </div>
@@ -708,76 +572,54 @@ function ReceivePaymentModal({
                   </div>
                 ))}
               </div>
+
+              {/* Quick-fill button */}
+              {totalPaid === 0 && selectedTotal > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setPaymentSplits([{ method: paymentSplits[0].method, amount: selectedTotal }])}
+                  className="mt-2 w-full rounded-lg border border-dashed border-muted-foreground/30 px-3 py-2 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-colors"
+                >
+                  Pay full amount — {formatCurrency(selectedTotal)}
+                </button>
+              )}
             </div>
 
-            <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 space-y-1.5">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Total Outstanding</span>
+            {/* Live summary - compact single line */}
+            <div className="flex items-center justify-between gap-4 rounded-lg bg-muted/40 px-3 py-2.5 border border-border/50">
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-muted-foreground">Outstanding:</span>
                 <span className="font-medium text-foreground">{formatCurrency(selectedTotal)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Amount Paid</span>
-                <span className="font-medium text-success">{formatCurrency(totalPaid)}</span>
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-muted-foreground">Receiving:</span>
+                <span className={cn('font-medium', totalPaid > 0 ? 'text-success' : 'text-muted-foreground')}>
+                  {formatCurrency(totalPaid)}
+                </span>
               </div>
-              <div className="border-t border-border pt-1.5 flex justify-between text-sm">
-                <span className="text-muted-foreground font-medium">Remaining</span>
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-muted-foreground">Remaining:</span>
                 <span className={cn(
-                  "font-semibold",
-                  remaining <= 0 ? "text-success" : "text-destructive"
+                  'font-semibold',
+                  remaining <= 0 ? 'text-success' : remaining > 0 && totalPaid > 0 ? 'text-destructive' : 'text-muted-foreground'
                 )}>
                   {formatCurrency(remaining)}
                 </span>
               </div>
             </div>
 
-            <FormTextarea
-              label="Notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Optional payment notes..."
-              rows={2}
-            />
-
-            <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
-              <h4 className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Receipt Preview</h4>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Customer</span>
-                  <span className="font-medium text-foreground">{selectedCustomer?.name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Invoices</span>
-                  <span className="text-foreground">{selectedInvoiceIds.map((id) => outstandingInvoices.find((i) => i.id === id)?.invoiceNumber).join(", ")}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Payment</span>
-                  <span className="text-foreground">{paymentSplits.map((s) => `${getPaymentMethodLabel(s.method)}: ${formatCurrency(s.amount)}`).join(" + ")}</span>
-                </div>
-                <div className="border-t border-border pt-1.5 flex justify-between font-semibold">
-                  <span className="text-foreground">Total Received</span>
-                  <span className="text-success">{formatCurrency(totalPaid)}</span>
-                </div>
-              </div>
+            {/* Notes - compact */}
+            <div>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Notes (optional)"
+                rows={1}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors resize-none placeholder:text-muted-foreground/60"
+              />
             </div>
 
-            <FormActions>
-              <Button type="button" variant="outline" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={handleReceive}
-                disabled={totalPaid <= 0 || selectedInvoiceIds.length === 0}
-                className="bg-success hover:bg-success/90"
-              >
-                <Check className="h-4 w-4" /> Confirm Payment
-              </Button>
-            </FormActions>
           </>
-        )}
-
-        {selectedCustomerId && outstandingInvoices.length === 0 && (
-          <p className="text-sm text-muted-foreground text-center py-4">No outstanding invoices for this customer</p>
         )}
       </div>
     </BaseModal>
@@ -785,7 +627,9 @@ function ReceivePaymentModal({
 }
 
 export function Customers() {
-  const { customers, isLoading: _isLoading, loadError: _loadError, isSaving: _isSaving, addCustomer, editCustomer, removeCustomer, refresh: _refreshCustomers } = useCustomers()
+  const queryClient = useQueryClient()
+  const { customers, isLoading: _isLoading, loadError: _loadError, isSaving: _isSaving, addCustomer, editCustomer, removeCustomer } = useCustomers()
+  const [profileRefreshCounter, setProfileRefreshCounter] = useState(0)
   // Server-side pagination for the DataTable
   const {
     data: customerPage,
@@ -793,6 +637,7 @@ export function Customers() {
     page: customerPageNum,
     setPage: setCustomerPage,
     isLoading: customerLoading,
+    refresh: refreshCustomerPage,
   } = useServerPagination<import('@/lib/db/types').CustomerRow>('customers', { pageSize: 15, orderBy: 'name', orderDir: 'asc' })
 
   // Map DB rows to Customer type for DataTable display
@@ -819,6 +664,8 @@ export function Customers() {
   const [deleteConfirm, setDeleteConfirm] = useState<Customer | null>(null)
   const [viewingCustomer, setViewingCustomer] = useState<Customer | null>(null)
   const [showPayment, setShowPayment] = useState(false)
+  const [paymentCustomerId, setPaymentCustomerId] = useState<string | null>(null)
+  const [paymentSelectedInvoiceIds, setPaymentSelectedInvoiceIds] = useState<string[]>([])
 
   const totalCustomers = customers.length
   const activeCustomers = customers.filter((c) => daysSince(c.lastVisit) <= 7).length
@@ -895,58 +742,133 @@ export function Customers() {
     setDeleteConfirm(null)
   }
 
-  const handleReceivePayment = async (customerId: string, amount: number, method: string, notes: string) => {
+  const handleReceivePayment = async (
+    customerId: string,
+    amount: number,
+    method: string,
+    notes: string,
+    invoiceIds?: string[],
+  ) => {
     try {
       const current = customers.find((c) => c.id === customerId)
-      if (current) {
-        // Check idempotency (prevent duplicate payments)
-        const { isDuplicate, proceed, idempotencyKey } = await idempotencyGuard.check({
-          entityType: 'customer',
-          entityId: customerId,
-          amount,
-          discriminator: method,
-        })
+      if (!current) {
+        showError('Customer not found')
+        return
+      }
 
-        if (!proceed) {
-          if (isDuplicate) {
-            showSuccess('Payment already processed')
-          }
-          setShowPayment(false)
-          return
+      // Check idempotency (prevent duplicate payments)
+      const { isDuplicate, proceed, idempotencyKey } = await idempotencyGuard.check({
+        entityType: 'customer',
+        entityId: customerId,
+        amount,
+        discriminator: method,
+      })
+
+      if (!proceed) {
+        if (isDuplicate) {
+          showSuccess('Payment already processed')
         }
+        setShowPayment(false)
+        return
+      }
 
-        // Update customer credit balance
-        await editCustomer(customerId, {
-          creditBalance: Math.max(0, current.creditBalance - amount),
-          totalSpent: current.totalSpent + amount,
-        })
+      // Parse splits — each split becomes one payment record
+      let splits: Array<{ method: string; amount: number }>
+      try {
+        splits = JSON.parse(method)
+      } catch {
+        // Legacy: method is a simple string, treat as single split
+        splits = [{ method, amount }]
+      }
 
-        // Create payment record in DB so it flows to Finance, Dashboard, Reports
-        await insforge.database
+      // Create payment records via direct DB insert (customer-level, not invoice-level)
+      // Using raw insert because createPaymentInDb requires a single invoiceId (UUID)
+      // which doesn't fit the customer-payment pattern against multiple invoices.
+      for (const split of splits) {
+        if (split.amount <= 0) continue
+        const { error: payError } = await insforge.database
           .from('payments')
           .insert([{
             customer_id: customerId,
-            amount,
-            payment_method: method,
+            amount: split.amount,
+            payment_method: split.method,
             reference: idempotencyKey,
             notes: notes || `Payment received from ${current.name}`,
           }])
-
-        // Log activity (non-critical)
-        logActivitySafe({
-          activityType: 'payment_received',
-          entityId: customerId,
-          entityLabel: `Customer payment from ${current.name}`,
-          status: 'completed',
-          amount,
-          details: `Payment of ${formatCurrency(amount)} received from ${current.name} via ${method}${notes ? ` — ${notes}` : ''}`,
-        })
+        if (payError) {
+          throw new Error(`Payment insert failed: ${payError.message || 'Unknown DB error'}`)
+        }
       }
-      showSuccess(`Payment of ${formatCurrency(amount)} received${notes ? ` — ${notes}` : ""}`)
-    } catch {
-      showError("Failed to record payment. Check your connection.")
+
+      // Update customer credit balance (don't inflate totalSpent)
+      await editCustomer(customerId, {
+        creditBalance: Math.max(0, current.creditBalance - amount),
+      })
+
+      // Update invoice statuses — only for the selected invoices
+      if (invoiceIds && invoiceIds.length > 0) {
+        const { data: invData } = await insforge.database
+          .from('invoices')
+          .select('id, total')
+          .in('id', invoiceIds)
+        if (invData) {
+          for (const row of invData as Array<{ id: string; total: number }>) {
+            const isFullyCovered = amount >= (Number(row.total) - 0.01)
+            const newStatus = isFullyCovered ? 'paid' : 'partial'
+            await insforge.database
+              .from('invoices')
+              .update({ status: newStatus })
+              .eq('id', row.id)
+          }
+        }
+      }
+
+      // Log activity (non-critical)
+      logActivitySafe({
+        activityType: 'payment_received',
+        entityId: customerId,
+        entityLabel: `Customer payment from ${current.name}`,
+        status: 'completed',
+        amount,
+        details: `Payment of ${formatCurrency(amount)} received from ${current.name} via ${method}${notes ? ` — ${notes}` : ''}`,
+      })
+
+      // ── Invalidate ALL relevant React Query caches ──────────────
+      // refetchType: 'all' ensures inactive queries (e.g., Finance tabs that
+      // aren't currently open) also refetch when the user navigates back.
+      queryClient.invalidateQueries({ queryKey: ['dashboard'], refetchType: 'all' })
+      queryClient.invalidateQueries({ queryKey: ['batches'], refetchType: 'all' })
+      queryClient.invalidateQueries({ queryKey: ['analytics'], refetchType: 'all' })
+      queryClient.invalidateQueries({ queryKey: ['finance'], refetchType: 'all' })
+
+      // Customer keys — so useCustomerBalance, useCustomerLedger, etc. refetch
+      queryClient.invalidateQueries({ queryKey: customerKeys.all, refetchType: 'all' })
+
+      // Invoice keys — so invoice detail pages update
+      if (invoiceIds) {
+        for (const invId of invoiceIds) {
+          queryClient.invalidateQueries({ queryKey: invoiceKeys.detail(invId), refetchType: 'all' })
+          queryClient.invalidateQueries({ queryKey: invoiceKeys.payments(invId), refetchType: 'all' })
+        }
+      }
+
+      // ── Refresh local state ────────────────────────────────────
+      // Trigger profile refresh if we're viewing this customer
+      if (viewingCustomer?.id === customerId) {
+        setProfileRefreshCounter(prev => prev + 1)
+      }
+
+      // Refresh the server-paginated table data as well
+      await refreshCustomerPage()
+
+      // Refresh customer list to update balances in the table
+      await refreshCustomers()
+
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Unknown error'
+      showError(`Failed to record payment: ${errMsg}`)
+      throw new Error('Payment recording failed')
     }
-    setShowPayment(false)
   }
 
   const columns: Column<Customer>[] = [
@@ -1131,23 +1053,69 @@ export function Customers() {
         )}
       </div>
 
-      <motion.div
-        variants={fadeUp}
-        initial="hidden"
-        animate="visible"
-        className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm"
-      >
-        <DataTable
-          columns={columns}
-          data={filteredCustomers}
-          searchable={false}
-          loading={customerLoading}
-          totalPages={customerPages}
-          currentPage={customerPageNum}
-          onPageChange={setCustomerPage}
-          onRowClick={(row) => setViewingCustomer(row)}
-        />
-      </motion.div>
+      {/* Two-column layout: table on left, profile on right */}
+      <div className={cn(
+        "flex gap-4",
+        viewingCustomer ? "flex-col lg:flex-row" : "flex-col"
+      )}>
+        <div className={cn(
+          "min-w-0",
+          viewingCustomer ? "lg:w-1/2 xl:w-3/5" : "w-full"
+        )}>
+          <motion.div
+            variants={fadeUp}
+            initial="hidden"
+            animate="visible"
+            className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm"
+          >
+            <DataTable
+              columns={columns}
+              data={filteredCustomers}
+              searchable={false}
+              loading={customerLoading}
+              totalPages={customerPages}
+              currentPage={customerPageNum}
+              onPageChange={setCustomerPage}
+              onRowClick={(row) => setViewingCustomer(row)}
+            />
+          </motion.div>
+        </div>
+
+        {/* Profile Panel - Slide-in on desktop, overlay on mobile */}
+        <div className={cn(
+          viewingCustomer
+            ? "fixed inset-0 z-50 lg:relative lg:inset-auto lg:z-auto lg:w-1/2 xl:w-2/5"
+            : "hidden"
+        )}>
+          {/* Backdrop for mobile */}
+          {viewingCustomer && (
+            <div
+              className="fixed inset-0 bg-black/30 lg:hidden"
+              onClick={() => setViewingCustomer(null)}
+            />
+          )}
+          <div className="relative h-full lg:h-auto lg:max-h-[calc(100vh-16rem)] lg:rounded-xl lg:border lg:border-border lg:shadow-sm lg:overflow-hidden">
+            <CustomerProfile
+              customer={viewingCustomer}
+              open={!!viewingCustomer}
+              onClose={() => setViewingCustomer(null)}
+              onEdit={() => {
+                setEditingCustomer(viewingCustomer)
+                setShowForm(true)
+              }}
+              onNewSale={() => {
+                window.location.href = `/pos?customer=${viewingCustomer?.id}`
+              }}
+              onRecordPayment={(customerId) => {
+                setPaymentCustomerId(customerId)
+                setShowPayment(true)
+              }}
+              isMobile={false}
+              refreshKey={profileRefreshCounter}
+            />
+          </div>
+        </div>
+      </div>
 
       <CustomerFormModal
         open={showForm}
@@ -1156,17 +1124,11 @@ export function Customers() {
         onClose={() => { setShowForm(false); setEditingCustomer(null) }}
       />
 
-      <CustomerProfileDrawer
-        open={!!viewingCustomer}
-        customer={viewingCustomer}
-        onClose={() => setViewingCustomer(null)}
-        onReceivePayment={handleReceivePayment}
-      />
-
       <ReceivePaymentModal
         open={showPayment}
         customers={customers}
-        onClose={() => setShowPayment(false)}
+        initialCustomerId={paymentCustomerId}
+        onClose={() => { setShowPayment(false); setPaymentCustomerId(null) }}
         onReceive={handleReceivePayment}
       />
 

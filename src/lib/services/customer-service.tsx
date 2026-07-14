@@ -1,15 +1,21 @@
 /**
  * CustomerService
  * ─────────────────
- * DB-backed CRUD for customers.
+ * DB-backed CRUD for customers with React Query integration.
  *
  * Table: public.customers
  * RLS: authenticated users can SELECT, INSERT, UPDATE, DELETE
+ *
+ * The useCustomers() hook now uses React Query internally so that
+ * cache invalidation (e.g., via customerKeys.all or ['customers'])
+ * automatically refreshes the customer list without manual calls.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { insforge } from '@/lib/services/auth-service'
 import type { CustomerRow } from '@/lib/db/types'
+import { customerKeys } from '@/lib/services/customer-ledger'
 
 /* ─── Frontend Customer type (camelCase) ─────────────────── */
 
@@ -25,6 +31,19 @@ export interface Customer {
   loyaltyPoints: number
   creditBalance: number
   notes?: string
+}
+
+/* ─── React Query Keys ──────────────────────────────────── */
+
+/**
+ * Customer query keys for React Query.
+ * Uses the same ['customers'] prefix as customerKeys from customer-ledger
+ * so that invalidation of one also triggers the other.
+ */
+export const customerQueryKeys = {
+  all: ['customers'] as const,
+  list: () => ['customers', 'list'] as const,
+  detail: (id: string) => ['customers', 'detail', id] as const,
 }
 
 /* ─── Mapper ──────────────────────────────────────────────── */
@@ -116,7 +135,7 @@ async function deleteCustomerFromDb(id: string): Promise<void> {
   if (error) throw error
 }
 
-/* ─── React Hook ──────────────────────────────────────────── */
+/* ─── React Query Hook ─────────────────────────────────────── */
 
 export interface UseCustomersReturn {
   customers: Customer[]
@@ -130,72 +149,71 @@ export interface UseCustomersReturn {
 }
 
 export function useCustomers(): UseCustomersReturn {
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [isSaving, setIsSaving] = useState(false)
+  const queryClient = useQueryClient()
 
-  const refresh = useCallback(async () => {
-    setLoadError(null)
-    try {
-      const data = await fetchCustomersFromDb()
-      setCustomers(data)
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to load customers')
-    }
-  }, [])
+  // ── Query: fetch all customers ─────────────────────────────
+  const { data: customers = [], isLoading, error } = useQuery({
+    queryKey: customerQueryKeys.list(),
+    queryFn: fetchCustomersFromDb,
+    staleTime: 10_000,
+  })
 
-  useEffect(() => {
-    let cancelled = false
+  // ── Mutation: create customer ──────────────────────────────
+  const createMutation = useMutation({
+    mutationFn: createCustomerInDb,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: customerQueryKeys.all })
+      queryClient.invalidateQueries({ queryKey: customerKeys.all })
+    },
+  })
 
-    ;(async () => {
-      setIsLoading(true)
-      try {
-        const data = await fetchCustomersFromDb()
-        if (!cancelled) setCustomers(data)
-      } catch (err) {
-        if (!cancelled) {
-          setLoadError(err instanceof Error ? err.message : 'Failed to load customers')
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    })()
+  // ── Mutation: update customer ──────────────────────────────
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<Omit<Customer, 'id'>> }) => {
+      return updateCustomerInDb(id, data)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: customerQueryKeys.all })
+      queryClient.invalidateQueries({ queryKey: customerKeys.all })
+    },
+  })
 
-    return () => { cancelled = true }
-  }, [])
+  // ── Mutation: delete customer ──────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: deleteCustomerFromDb,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: customerQueryKeys.all })
+      queryClient.invalidateQueries({ queryKey: customerKeys.all })
+    },
+  })
+
+  // ── Wrapped async helpers ──────────────────────────────────
 
   const addCustomer = useCallback(async (data: Omit<Customer, 'id'>) => {
-    setIsSaving(true)
-    try {
-      const created = await createCustomerInDb(data)
-      setCustomers(prev => [created, ...prev])
-      return created
-    } finally {
-      setIsSaving(false)
-    }
-  }, [])
+    return createMutation.mutateAsync(data)
+  }, [createMutation])
 
   const editCustomer = useCallback(async (id: string, data: Partial<Omit<Customer, 'id'>>) => {
-    setIsSaving(true)
-    try {
-      const updated = await updateCustomerInDb(id, data)
-      setCustomers(prev => prev.map(c => (c.id === id ? updated : c)))
-      return updated
-    } finally {
-      setIsSaving(false)
-    }
-  }, [])
+    return updateMutation.mutateAsync({ id, data })
+  }, [updateMutation])
 
   const removeCustomer = useCallback(async (id: string) => {
-    setIsSaving(true)
-    try {
-      await deleteCustomerFromDb(id)
-      setCustomers(prev => prev.filter(c => c.id !== id))
-    } finally {
-      setIsSaving(false)
-    }
-  }, [])
+    return deleteMutation.mutateAsync(id)
+  }, [deleteMutation])
 
-  return { customers, isLoading, loadError, isSaving, addCustomer, editCustomer, removeCustomer, refresh }
+  const refresh = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: customerQueryKeys.all, refetchType: 'all' })
+    await queryClient.invalidateQueries({ queryKey: customerKeys.all, refetchType: 'all' })
+  }, [queryClient])
+
+  return {
+    customers,
+    isLoading,
+    loadError: error?.message ?? null,
+    isSaving: createMutation.isPending || updateMutation.isPending || deleteMutation.isPending,
+    addCustomer,
+    editCustomer,
+    removeCustomer,
+    refresh,
+  }
 }

@@ -148,7 +148,15 @@ export function PosPaymentDialog({
     );
   }, [customersList, customerSearch]);
 
+  // ─── Items — bail out early if nothing to pay ─────────
   const items = useMemo(() => unpaidItems ?? [], [unpaidItems]);
+  // Guard: close dialog immediately if there are no unpaid items
+  if (items.length === 0) {
+    // Prevents opening an empty payment dialog (Issue #3)
+    setTimeout(() => { onClose?.(); }, 50);
+    return null;
+  }
+
   const subtotal = useMemo(() => items.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0), [items]);
   const discountAmount = useMemo(() => {
     if (discountType === 'percentage') return subtotal * (Math.min(discountValue, 100) / 100);
@@ -184,7 +192,11 @@ export function PosPaymentDialog({
       grandTotal: effectiveGrandTotal,
       paidAmount: inv.paidAmount,
       creditAmount: extraCredit?.amount ?? (inv.paymentMethod.startsWith('Credit') ? effectiveGrandTotal - inv.paidAmount : undefined),
-      creditCustomerName: extraCredit?.customerName ?? (inv.paymentMethod.startsWith('Credit(') ? inv.paymentMethod.slice(7, -1) : undefined),
+      creditCustomerName: extraCredit?.customerName ?? (() => {
+        // Extract customer name from "Credit (Name)" or "Partial (X) + Credit (Name)"
+        const match = inv.paymentMethod.match(/Credit\s*\(([^)]+)\)/);
+        return match ? match[1] : undefined;
+      })(),
     };
   };
 
