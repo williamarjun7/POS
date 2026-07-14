@@ -19,5 +19,5 @@ jobs:
             cd /var/www/pos
             sudo git pull origin main
             sudo npm install --production=false
-            sudo npm run build
+            sudo npx vite build
             sudo systemctl reload nginx
