@@ -30,6 +30,10 @@ jobs:
           VITE_INSFORGE_URL: ${{ secrets.VITE_INSFORGE_URL }}
           VITE_INSFORGE_ANON_KEY: ${{ secrets.VITE_INSFORGE_ANON_KEY }}
 
+      - name: Get version from package.json
+        id: version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
@@ -49,16 +53,45 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease
 
+      - name: Rename APK with version
+        run: |
+          mkdir -p dist-apk
+          cp android/app/build/outputs/apk/release/app-release.apk "dist-apk/highlands-pos-${{ steps.version.outputs.VERSION }}.apk"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pos-apk-release
-          path: android/app/build/outputs/apk/release/*.apk
+          name: pos-apk-${{ steps.version.outputs.VERSION }}
+          path: dist-apk/*.apk
           retention-days: 30
 
-      - name: Create GitHub Release
+      - name: Deploy APK to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          source: "dist-apk/*.apk"
+          target: "/var/www/pos/downloads"
+          strip_components: 1
+
+      - name: Update latest version file on server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: 22
+          script: |
+            echo "${{ steps.version.outputs.VERSION }}" > /var/www/pos/downloads/latest-version.txt
+            chmod 644 /var/www/pos/downloads/*.apk
+            chmod 644 /var/www/pos/downloads/latest-version.txt
+            echo "APK deployed: highlands-pos-${{ steps.version.outputs.VERSION }}.apk"
+
+      - name: Create GitHub Release (optional)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/release/*.apk
+          files: dist-apk/*.apk
           generate_release_notes: true
