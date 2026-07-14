@@ -194,3 +194,49 @@ html.theme-transitioning *::after {
   th { background: #f0f0f0 !important; font-weight: 600 !important; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ── Android/Capacitor Styles ── */
+@supports (-webkit-touch-callout: none) {
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input, textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+.pos-item {
+  -webkit-touch-callout: none;
+}
+
+button, a, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.android-back-feedback:active {
+  opacity: 0.7;
+  transform: scale(0.98);
+  transition: opacity 0.1s, transform 0.1s;
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Prevent overscroll bounce on Android */
+html {
+  overscroll-behavior: none;
+}
+
+/* Fix for Android keyboard pushing content up */
+ion-content,
+.ion-content {
+  --keyboard-offset: 0px;
+}
