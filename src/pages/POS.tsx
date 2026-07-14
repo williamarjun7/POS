@@ -1,0 +1,1628 @@
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Coffee, Egg, UtensilsCrossed, Wine, Search, X, Plus, Minus,
+  User as UserIcon, Table2, ChevronLeft, ChevronRight, ShoppingCart,
+  Grid3X3, ArrowLeft, Receipt, Trash2, Keyboard, Zap, Lock, ChevronDown, BedDouble,
+} from 'lucide-react';
+import { PageTransition } from '@/components/ui/PageTransition';
+import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
+import { showSuccess, showError } from '@/components/ui/toast';
+import { RequirePermission } from '@/lib/core/PermissionGuards';
+import { recordCreditCharge } from '@/lib/services/customer-ledger';
+import { getNextInvoiceNumber } from '@/lib/services/sequence-service';
+import { useMenuCategories, useMenuItems } from '@/lib/api/menu.hooks';
+import { useDashboardTables, useRooms, useTableBatches } from '@/lib/hooks';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useRateLimit } from '@/lib/hooks/useRateLimit'
+import { recordPaymentSafe } from '@/lib/services/payment-service';
+import { toPaymentMethodKey } from '@/lib/payment-methods';
+import { logActivitySafe } from '@/lib/services/activity-log-service';
+import { insforge } from '@/lib/services/auth-service';
+import { insertInvoiceItems } from '@/lib/services/invoice-items-service';
+import { idempotencyGuard } from '@/lib/services/idempotency-guard';
+import { deductStockForSoldItems } from '@/lib/services/inventory-service';
+import { db } from '@/lib/db/insforge';
+// TABLE_STATUS_LABELS/COLORS removed — inlined below
+import { formatCurrency } from '@/lib/utils';
+
+import type { OrderBatch, OrderBatchItem, CartItemStatus } from '@/types';
+import type { MenuItem } from '@/types';
+
+// ─── Types ───────────────────────────────────────────────────
+
+interface CartLine {
+  menu_item_id: string;
+  name: string;
+  quantity: number;
+  unit_price: number;
+  notes: string;
+  status: 'pending';
+}
+
+// ─── Helpers ─────────────────────────────────────────────────
+
+const npr = (amount: number) => formatCurrency(amount, 2);
+
+const categoryIcons: Record<string, React.ElementType> = {
+  coffee: Coffee, breakfast: Egg, lunch: UtensilsCrossed, bar: Wine,
+};
+
+function getIconForCategory(name: string): React.ElementType {
+  const key = Object.keys(categoryIcons).find((k) => name.toLowerCase().includes(k));
+  return key ? categoryIcons[key] : UtensilsCrossed;
+}
+
+// Inline table status mappings
+const TABLE_STATUS_LABELS: Record<string, string> = {
+  available: 'Available', free: 'Available', occupied: 'Occupied', reserved: 'Reserved',
+  cleaning: 'Cleaning', maintenance: 'Maintenance', dirty: 'Needs Cleaning',
+  disabled: 'Disabled', out_of_order: 'Out of Order',
+}
+const TABLE_STATUS_COLORS: Record<string, string> = {
+  available: 'bg-emerald-500', free: 'bg-emerald-500', occupied: 'bg-orange-500',
+  reserved: 'bg-blue-500', cleaning: 'bg-cyan-500', maintenance: 'bg-red-500',
+  dirty: 'bg-amber-500', needs_checkout: 'bg-orange-500', needs_payment: 'bg-red-500',
+}
+
+// ─── Animation Variants ─────────────────────────────────────
+
+const stagger = {
+  hidden: { opacity: 0 },
+  show: { opacity: 1, transition: { staggerChildren: 0.04 } },
+};
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 12, scale: 0.97 },
+  show: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring' as const, stiffness: 400, damping: 25 } },
+};
+
+const slideIn = {
+  hidden: { x: '100%', opacity: 0 },
+  show: { x: 0, opacity: 1, transition: { type: 'spring' as const, stiffness: 300, damping: 30 } },
+  exit: { x: '100%', opacity: 0, transition: { duration: 0.2 } },
+};
+
+const scaleIn = {
+  hidden: { scale: 0.8, opacity: 0 },
+  show: { scale: 1, opacity: 1, transition: { type: 'spring' as const, stiffness: 500, damping: 25 } },
+};
+
+
+
+// ─── Component ───────────────────────────────────────────────
+
+export function POS() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedCat, setSelectedCat] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [cartPanelOpen, setCartPanelOpen] = useState(true);
+  const [mobileCartOpen, setMobileCartOpen] = useState(false);
+  const [selectedTableId, setSelectedTableId] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [newCartItems, setNewCartItems] = useState<CartLine[]>([]);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  const [lastAdded, setLastAdded] = useState<string | null>(null);
+  const [orderBatches, setOrderBatches] = useState<Record<string, OrderBatch[]>>({});
+
+  const [posMode, setPosMode] = useState<'tables' | 'rooms'>('tables');
+  const [entityDropdownOpen, setEntityDropdownOpen] = useState(false);
+  const [entitySearchQuery, setEntitySearchQuery] = useState('');
+  const entityDropdownRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // ─── Live data from database ──────────────────────
+  const { data: categories } = useMenuCategories();
+  const { data: menuItemsData } = useMenuItems({ available: true });
+  const { data: allTables = [] } = useDashboardTables();
+  const { data: allRooms = [] } = useRooms();
+  const tables = useMemo(() => allTables.filter((t: any) => t.status !== 'disabled'), [allTables]);
+  const rooms = useMemo(() => allRooms.filter((r: any) => r.status !== 'out_of_order'), [allRooms]);
+  const categoriesList = useMemo(() => categories ?? [], [categories]);
+  const catNameToId = useMemo(() => {
+    const map = new Map<string, string>();
+    categoriesList.forEach(c => map.set(c.name, c.id));
+    return map;
+  }, [categoriesList]);
+  const menuItemsList = useMemo(() =>
+    (menuItemsData?.data ?? []).map(item => ({
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      price: item.price,
+      category_id: catNameToId.get(item.category) ?? item.category,
+      is_available: item.available,
+      image: item.image,
+    })),
+    [menuItemsData, catNameToId]
+  );
+
+  // ─── Keyboard Shortcuts ────────────────────────────
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    
+    const isSearchFocused = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+    
+    switch (e.key) {
+      case '/':
+        if (!isSearchFocused) {
+          e.preventDefault();
+          searchRef.current?.focus();
+        }
+        break;
+      case '1': if (!isSearchFocused) setSelectedCat('all'); break;
+      case 'c': if (!e.ctrlKey && !e.metaKey && !isSearchFocused) setCartPanelOpen(prev => !prev); break;
+      case 'Escape':
+        setEntityDropdownOpen(false);
+        setEntitySearchQuery('');
+        setSearchQuery('');
+        setMobileCartOpen(false);
+        setShowShortcuts(false);
+        break;
+      case '?':
+        if (e.shiftKey) setShowShortcuts(prev => !prev);
+        break;
+    }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
+  // ─── Entity dropdown click-outside ────────────────
+  useEffect(() => {
+    if (!entityDropdownOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (entityDropdownRef.current && !entityDropdownRef.current.contains(e.target as Node)) {
+        setEntityDropdownOpen(false);
+        setEntitySearchQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [entityDropdownOpen]);
+
+  // ─── Read table/room from URL query params (navigated from Dashboard) ─
+  useEffect(() => {
+    const tableId = searchParams.get('table');
+    const roomId = searchParams.get('room');
+    const targetId = tableId || roomId;
+    if (targetId) {
+      setSelectedTableId(targetId);
+      // Keep the URL params so a page refresh still restores the table selection.
+      // Only clean up if there's no table/room in the URL (fresh page load with
+      // leftover localStorage state or manual navigation).
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Filtered items ────────────────────────────────
+  const filteredByCategory = selectedCat === 'all'
+    ? menuItemsList
+    : menuItemsList.filter(i => i.category_id === selectedCat);
+
+  const q = searchQuery.toLowerCase();
+  const filteredItems = q
+    ? filteredByCategory.filter(i => i.name.toLowerCase().includes(q) || (i.description ?? '').toLowerCase().includes(q))
+    : filteredByCategory;
+
+  const availableItems = filteredItems.filter(i => i.is_available).sort((a, b) => a.name.localeCompare(b.name));
+
+  // ─── Cart computations ─────────────────────────────
+  const cartItemIds = useMemo(() => new Set(newCartItems.map(c => c.menu_item_id)), [newCartItems]);
+  const cartCountByItem = useMemo(() => 
+    newCartItems.reduce((acc, c) => { acc[c.menu_item_id] = (acc[c.menu_item_id] ?? 0) + c.quantity; return acc; }, {} as Record<string, number>),
+    [newCartItems]
+  );
+  const cartCountByCategory = useMemo(() =>
+    categoriesList.reduce((acc, cat) => {
+      const catItems = menuItemsList.filter(i => i.category_id === cat.id);
+      acc[cat.id] = catItems.reduce((sum, i) => sum + (cartCountByItem[i.id] ?? 0), 0);
+      return acc;
+    }, {} as Record<string, number>),
+    [cartCountByItem, categoriesList, menuItemsList]
+  );
+  const totalNewCartItems = useMemo(() => newCartItems.reduce((s, l) => s + l.quantity, 0), [newCartItems]);
+  const newSubtotal = useMemo(() => newCartItems.reduce((s, l) => s + l.unit_price * l.quantity, 0), [newCartItems]);
+
+  const selectedEntity = posMode === 'tables' ? tables : rooms;
+  const selectedTableInfo = selectedEntity.find((t: any) => t.id === selectedTableId);
+  const filteredEntities = useMemo(() => {
+    const q = entitySearchQuery.toLowerCase();
+    if (!q) return selectedEntity;
+    return selectedEntity.filter((entity: any) => {
+      const number = posMode === 'tables'
+        ? `Table ${entity.table_number}`
+        : `Room ${entity.room_number || entity.number || ''}`;
+      const status = posMode === 'tables'
+        ? (TABLE_STATUS_LABELS[entity.status] || entity.status)
+        : entity.status;
+      return number.toLowerCase().includes(q) || status.toLowerCase().includes(q);
+    });
+  }, [selectedEntity, entitySearchQuery, posMode]);
+
+  // ─── Cart functions ────────────────────────────────
+  function addToCart(item: MenuItem) {
+    setCartPanelOpen(true);
+    setLastAdded(item.id);
+    setTimeout(() => setLastAdded(null), 600);
+    setNewCartItems(prev => {
+      const existing = prev.find(l => l.menu_item_id === item.id);
+      if (existing) return prev.map(l => l.menu_item_id === item.id ? { ...l, quantity: l.quantity + 1 } : l);
+      return [...prev, { menu_item_id: item.id, name: item.name, quantity: 1, unit_price: item.price, notes: '', status: 'pending' as const }];
+    });
+  }
+
+  function removeItem(menuItemId: string) {
+    setNewCartItems(prev => prev.filter(l => l.menu_item_id !== menuItemId))
+  }
+
+  function clearCart() {
+    setNewCartItems([]);
+  }
+
+  function updateQty(menuItemId: string, delta: number) {
+    setNewCartItems(prev =>
+      prev.map(l => {
+        if (l.menu_item_id !== menuItemId) return l
+        return { ...l, quantity: Math.max(0, l.quantity + delta) }
+      })
+        .filter(l => l.quantity > 0)
+    );
+  }
+
+  function updateNotes(menuItemId: string, notes: string) {
+    setNewCartItems(prev => prev.map(l => l.menu_item_id === menuItemId ? { ...l, notes } : l));
+  }
+
+  // ─── Cart persistence (sessionStorage) ────────────
+  // Uses sessionStorage so cart data is automatically cleared when the
+  // browser tab closes — preventing the next user on a shared terminal
+  // from seeing the previous user's orders, prices, or customer info.
+  // sessionStorage is also scoped per tab, not per origin, so concurrent
+  // POS sessions on different tabs won't interfere.
+  const CART_STORAGE_KEY = 'pos_cart_state';
+
+  // Restore cart from sessionStorage on mount
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(CART_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.cartItems && Array.isArray(parsed.cartItems)) {
+          setNewCartItems(parsed.cartItems);
+        }
+        if (parsed.selectedTableId) {
+          setSelectedTableId(parsed.selectedTableId);
+        }
+        if (parsed.customerName) {
+          setCustomerName(parsed.customerName);
+        }
+      }
+    } catch { /* ignore corrupt sessionStorage */ }
+  }, []);
+
+  // Save cart to sessionStorage on changes
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(CART_STORAGE_KEY, JSON.stringify({
+        cartItems: newCartItems,
+        selectedTableId,
+        customerName,
+      }));
+    } catch { /* sessionStorage full or unavailable */ }
+  }, [newCartItems, selectedTableId, customerName]);
+
+  // ─── Load batches from DB when table is selected ─
+  // Always fetch batches whenever a table/room is selected — the hook handles
+  // null internally.  We no longer gate on selectedTableInfo?.status to avoid
+  // a race where useDashboardTables() hasn't loaded yet on first mount.
+  const { data: fetchedBatches } = useTableBatches(selectedTableId || null);
+
+  // Track initial mount so we don't unnecessarily clear on first load
+  const isFirstTableSelection = useRef(true);
+
+  // Clear local batches when the user explicitly switches to a different table
+  // (but NOT on the very first selection from URL params / localStorage restore).
+  // The !selectedTableId guard prevents the empty-string mount from consuming
+  // the one-time pass — only a real non-empty table ID can trigger the clear.
+  useEffect(() => {
+    if (!selectedTableId) return; // No table selected yet — nothing to clear
+    if (isFirstTableSelection.current) {
+      isFirstTableSelection.current = false;
+      return; // First real selection — don't clear
+    }
+    // User switched to a different table
+    setOrderBatches({});
+    setNewCartItems([]);
+  }, [selectedTableId]);
+
+  // Populate local state from DB when batches finish loading
+  // Submitted orders are displayed separately in Previous Batches.
+  // The editable draft cart starts empty for new items only.
+  useEffect(() => {
+    if (fetchedBatches) {
+      setOrderBatches(prev => ({
+        ...prev,
+        [selectedTableId]: fetchedBatches,
+      }));
+    }
+  }, [fetchedBatches, selectedTableId]);
+
+  // ─── Previous batches for selected table ─────────
+  const tableBatches = selectedTableId ? (orderBatches[selectedTableId] || []) : [];
+  const previousBatches = tableBatches;
+
+  // ─── Running total across ALL batches (previous + current cart) ─
+  const previousBatchesTotal = useMemo(
+    () => previousBatches.reduce((s, b) => s + b.subtotal, 0),
+    [previousBatches],
+  );
+  const unpaidPreviousTotal = useMemo(
+    () => previousBatches.reduce((sum, batch) =>
+      sum + batch.items
+        .filter(bi => bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled')
+        .reduce((s, bi) => s + bi.unit_price * bi.quantity, 0),
+    0),
+    [previousBatches],
+  );
+  const totalRunning = unpaidPreviousTotal + newSubtotal;
+
+  // ─── Compute all unpaid items across batches + cart ─
+  const allUnpaidItemsForPayment = useMemo(() => {
+    const items: Array<{
+      id: string;
+      item_name: string;
+      quantity: number;
+      unit_price: number;
+      payment_status: string;
+      batch_id?: string;
+    }> = [];
+
+    for (const batch of tableBatches) {
+      for (const bi of batch.items) {
+        if (bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled') {
+          items.push({
+            id: bi.id,
+            item_name: bi.name,
+            quantity: bi.quantity,
+            unit_price: bi.unit_price,
+            payment_status: 'pending',
+            batch_id: batch.id,
+          });
+        }
+      }
+    }
+
+    for (const ci of newCartItems) {
+      const key = `cart-${ci.menu_item_id}`;
+      items.push({
+        id: key,
+        item_name: ci.name,
+        quantity: ci.quantity,
+        unit_price: ci.unit_price,
+        payment_status: 'pending',
+      });
+    }
+
+    return items;
+  }, [tableBatches, newCartItems]);
+
+  // ─── Rate limit for order placement ──────────────────
+  const { checkLimit: checkOrderLimit } = useRateLimit({ cooldownMs: 2000, maxAttempts: 10 })
+
+  // ─── Dev-only payment logging helper ────────────────
+  // Logs are stripped in production to prevent sensitive payment data
+  // from leaking to browser consoles on shared terminals.
+  const logPayment = (event: string, details: Record<string, unknown>) => {
+    if (import.meta.env.DEV) {
+      const entry = {
+        event: `payment.${event}`,
+        timestamp: new Date().toISOString(),
+        tableId: selectedTableId,
+        ...details,
+      };
+      console.log('[PAYMENT]', JSON.stringify(entry));
+    }
+  };
+
+  // ─── Handle payment complete ──────────────────────
+  const handlePaymentComplete = useCallback(async (providedInvoiceNumber?: string, paymentResult?: PaymentResult) => {
+    if (!selectedTableId) return;
+    setShowPayment(false);
+    // IMPORTANT: cart is NOT cleared here — clearing before DB persistence
+    //     would destroy the user's items if the payment transaction fails.
+    //     Cart reset happens only AFTER the DB transaction succeeds (below).
+    if (!paymentResult) { showSuccess('Payment processed'); return; }
+
+    logPayment('start', {
+      method: paymentResult.paymentMethod,
+      amount: paymentResult.grandTotal,
+      creditAmount: paymentResult.creditAmount,
+      creditCustomer: paymentResult.creditCustomerName,
+      paidItemCount: paymentResult.paidItemIds?.length,
+      batchIds: tableBatches.map(b => b.id),
+      customerName,
+    });
+
+    const paidItemIds = new Set(paymentResult.paidItemIds || []);
+    const isCreditPayment = paymentResult.paymentMethod?.startsWith('Credit');
+    const hasSplitCredit = (paymentResult.creditAmount ?? 0) > 0;
+    let creditRemaining = paymentResult.creditAmount ?? 0;
+    let newUnpaidTotal = 0;
+
+    const subtotal = tableBatches.reduce((s, b) => s + b.subtotal, 0) + newSubtotal;
+    const discount = 0;
+
+    // 1. Build invoice items from cart and previous batches
+    const invoiceItemsList = [
+      ...(newCartItems.map(item => ({
+        name: item.name,
+        quantity: item.quantity,
+        unitPrice: item.unit_price,
+      }))),
+      ...(tableBatches.flatMap(b =>
+        b.items
+          .filter(bi => bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled')
+          .map(bi => ({
+            name: bi.name,
+            quantity: bi.quantity,
+            unitPrice: bi.unit_price,
+          }))
+      )),
+    ];
+
+    // 0. Generate sequential invoice number
+    const invNumber = providedInvoiceNumber ?? await getNextInvoiceNumber();
+    logPayment('invoice_number_generated', { invoiceNumber: invNumber });
+
+    // 0a. Validate payment amount before any DB writes
+    if (!paymentResult.grandTotal || paymentResult.grandTotal <= 0) {
+      const zeroAmountError = {
+        message: 'Cannot record a payment with zero total. Please check the bill items and discount.',
+        invoiceNumber: invNumber,
+        method: paymentResult.paymentMethod,
+        amount: paymentResult.grandTotal,
+        tableId: selectedTableId,
+      };
+      if (import.meta.env.DEV) console.error('[PAYMENT] zero-amount rejected:', zeroAmountError.message);
+      showError('Cannot process a zero-amount payment. Check the bill items and try again.');
+      return;
+    }
+
+    // 1. Check idempotency (prevent duplicate payments)
+    const { isDuplicate, proceed, idempotencyKey } = await idempotencyGuard.check({
+      entityType: 'batch',
+      entityId: tableBatches[0]?.id ?? selectedTableId,
+      amount: paymentResult.grandTotal,
+      discriminator: invNumber,
+    });
+
+    if (!proceed) {
+      logPayment('blocked_by_idempotency', { isDuplicate, idempotencyKey });
+      if (isDuplicate) {
+        showSuccess('Payment already processed');
+      }
+      return;
+    }
+    logPayment('idempotency_passed', { idempotencyKey });
+
+    // 2. Determine invoice status based on actual amount received vs total
+    //    An invoice is only 'paid' when total settled >= invoice total
+    //    Otherwise it's 'partial' (remaining balance due)
+    const invoiceTotal = paymentResult.grandTotal ?? subtotal;
+    const totalSettled = (paymentResult.paidAmount ?? 0) + (paymentResult.creditAmount ?? 0);
+    const remainingBalance = Math.max(0, invoiceTotal - totalSettled);
+    let invoiceStatus: string;
+    if (isCreditPayment) {
+      invoiceStatus = 'credit_invoice';
+    } else if (remainingBalance <= 0) {
+      invoiceStatus = 'paid';
+    } else {
+      invoiceStatus = 'partial';
+    }
+
+    // 2. Create invoice record first
+    let invoiceId: string | null = null;
+    try {
+      const { data: invData, error: invError } = await insforge.database
+        .from('invoices')
+        .insert([{
+          invoice_number: invNumber,
+          customer_name: paymentResult.creditCustomerName || customerName || 'Walk-in',
+          table_id: selectedTableId,
+          order_batch_ids: tableBatches.map(b => b.id),
+          subtotal,
+          tax: 0,
+          discount,
+          total: invoiceTotal,
+          status: invoiceStatus,
+          payment_method: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
+        }])
+        .select()
+        .single();
+
+      if (invError) {
+        logPayment('invoice_insert_failed', { error: invError, invoiceNumber: invNumber });
+        throw invError;
+      }
+      invoiceId = invData.id;
+      logPayment('invoice_created', { invoiceId, invoiceNumber: invNumber, status: invoiceStatus, paidAmount: paymentResult.paidAmount, remaining: remainingBalance });
+
+      // For full credit payments, skip recordPaymentSafe — recordCreditCharge handles it
+      // to avoid duplicate payment records. For other methods, record normally.
+      if (!isCreditPayment || hasSplitCredit) {
+        const paymentRecord = await recordPaymentSafe({
+          invoiceId: invoiceId,
+          batchId: tableBatches[0]?.id ?? null,
+          amount: paymentResult.grandTotal,
+          paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
+          reference: idempotencyKey,
+          notes: `Payment via ${paymentResult.paymentMethod ?? 'cash'}`,
+        });
+
+        if (!paymentRecord) {
+          logPayment('payment_record_failed', { invoiceId, amount: paymentResult.grandTotal, method: paymentResult.paymentMethod });
+          throw new Error(`Failed to record payment of ${npr(paymentResult.grandTotal)} via ${paymentResult.paymentMethod}. The database rejected the insert — check that the amount is valid.`);
+        }
+        logPayment('payment_recorded', { invoiceId, paymentId: paymentRecord.id, amount: paymentResult.grandTotal, method: paymentResult.paymentMethod });
+      } else {
+        logPayment('payment_skipped_credit', { invoiceId, reason: 'full credit - recordCreditCharge handles it' });
+      }
+
+      // 3. Write invoice items to invoice_items table
+      if (invoiceItemsList.length > 0 && invoiceId) {
+        const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList);
+        logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length });
+      } else {
+        logPayment('invoice_items_skipped', { invoiceId, reason: invoiceItemsList.length === 0 ? 'no items' : 'no invoiceId' });
+      }
+
+      // 4. Log activity (non-critical)
+      logActivitySafe({
+        activityType: 'payment_received',
+        entityId: invoiceId,
+        entityLabel: `Invoice ${invNumber ?? invoiceId}`,
+        status: isCreditPayment ? 'pending' : 'completed',
+        amount: paymentResult.grandTotal,
+        userName: customerName || 'System',
+        location: selectedTableId ? `Table ${selectedTableInfo?.table_number ?? selectedTableId}` : 'POS',
+        details: `Payment of ${npr(paymentResult.grandTotal)} via ${paymentResult.paymentMethod ?? 'cash'}. Items: ${invoiceItemsList.length}`,
+      });
+
+      // 5. Deduct inventory for sold items (non-critical)
+      if (invoiceItemsList.length > 0 && !isCreditPayment) {
+        await deductStockForSoldItems(invoiceItemsList);
+        logPayment('inventory_deducted', { itemCount: invoiceItemsList.length });
+      }
+
+      // 6. Table status is now derived from batch existence — no manual status update needed
+      //    The table becomes 'available' in the derived view once all batches are paid/cancelled.
+
+      // 7. Persist batch item statuses to DB so re-fetches don't show them as pending
+      if (paidItemIds.size > 0) {
+        try {
+          await insforge.database
+            .from('order_batch_items')
+            .update({ status: isCreditPayment ? 'credit' : 'paid' })
+            .in('id', Array.from(paidItemIds));
+          logPayment('batch_items_updated', { paidItemCount: paidItemIds.size });
+
+          // 8. Also update batch-level status in DB (paid / partial)
+          //    Compute new status the same way as the local state update below
+          for (const batch of tableBatches) {
+            const hasPaidItemInThisBatch = batch.items.some(bi => paidItemIds.has(bi.id));
+            if (!hasPaidItemInThisBatch) continue;
+
+            const allSettled = batch.items.every(bi =>
+              paidItemIds.has(bi.id)
+                ? true  // being paid now
+                : bi.status === 'paid' || bi.status === 'credit' || bi.status === 'cancelled'
+            );
+            const somePaid = batch.items.some(bi =>
+              paidItemIds.has(bi.id) || bi.status === 'paid' || bi.status === 'credit'
+            );
+
+            let newBatchStatus: string | null = null;
+            if (allSettled) newBatchStatus = 'paid';
+            else if (somePaid) newBatchStatus = 'partial';
+
+            if (newBatchStatus) {
+              await insforge.database
+                .from('order_batches')
+                .update({ status: newBatchStatus })
+                .eq('id', batch.id);
+              logPayment('batch_status_updated', { batchId: batch.id, status: newBatchStatus });
+            }
+          }
+        } catch (batchErr) {
+          // Non-critical — local state still reflects the payment correctly
+          logPayment('batch_status_update_failed', { error: batchErr });
+        }
+      }
+
+      logPayment('db_persistence_complete', { invoiceId, invoiceNumber: invNumber, totalAmount: paymentResult.grandTotal });
+    } catch (err) {
+      const errMessage = err instanceof Error ? err.message : typeof err === 'object' && err !== null ? JSON.stringify(err) : 'Unknown error';
+      const errorDetails = {
+        message: errMessage,
+        invoiceNumber: invNumber,
+        invoiceId,
+        method: paymentResult.paymentMethod,
+        amount: paymentResult.grandTotal,
+        tableId: selectedTableId,
+      };
+      if (import.meta.env.DEV) console.error('[PAYMENT] payment failed:', errMessage);
+      const invoiceCreated = !!invoiceId;
+      showError(`Payment failed: ${errMessage}. ${
+        invoiceCreated
+          ? `Invoice #${invNumber ?? ''} was created but could not be fully processed.`
+          : `Invoice #${invNumber ?? ''} could not be created.`
+      }`);
+      return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CODE AFTER THIS POINT ONLY RUNS IF DB PERSISTENCE SUCCEEDED
+    // ═══════════════════════════════════════════════════════════════
+
+    setOrderBatches(prev => {
+      const batches = prev[selectedTableId];
+      if (!batches) return prev;
+      const updatedBatches = batches.map(batch => {
+        const creditItemIds = new Set<string>();
+        if (hasSplitCredit) {
+          const sortedItems = [...batch.items].filter(bi => paidItemIds.has(bi.id)).sort((a, b) => (b.unit_price * b.quantity) - (a.unit_price * a.quantity));
+          for (const item of sortedItems) {
+            const itemValue = item.unit_price * item.quantity;
+            if (creditRemaining >= itemValue) { creditItemIds.add(item.id); creditRemaining -= itemValue; }
+            else if (creditRemaining > 0) { creditItemIds.add(item.id); creditRemaining = 0; }
+          }
+        }
+        const updatedItems = batch.items.map(bi => {
+          if (paidItemIds.has(bi.id)) {
+            if (hasSplitCredit && creditItemIds.has(bi.id)) return { ...bi, status: 'credit' as CartItemStatus };
+            return { ...bi, status: (isCreditPayment ? 'credit' : 'paid') as CartItemStatus };
+          }
+          return bi;
+        });
+        const settledStatuses: CartItemStatus[] = ['paid', 'credit', 'cancelled'];
+        const allSettled = updatedItems.every(i => settledStatuses.includes(i.status));
+        const somePaid = updatedItems.some(i => i.status === 'paid' || i.status === 'credit');
+        const paidAmount = updatedItems.filter(i => i.status === 'paid' || i.status === 'credit').reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
+        for (const bi of updatedItems) { if (bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled') { newUnpaidTotal += bi.unit_price * bi.quantity; } }
+        return { ...batch, items: updatedItems, status: allSettled ? 'paid' : somePaid ? 'partial' : batch.status, paid_amount: paidAmount };
+      });
+      return { ...prev, [selectedTableId]: updatedBatches };
+    });
+
+    if (paymentResult.creditCustomerName) {
+      try {
+        if (paymentResult.creditAmount && paymentResult.creditAmount > 0) {
+          await recordCreditCharge(paymentResult.creditCustomerName, paymentResult.creditAmount, invNumber, `Credit from ${paymentResult.paymentMethod || 'partial payment'}`, invoiceId ?? undefined);
+          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.creditAmount, invoiceNumber: invNumber });
+        } else if (isCreditPayment && !hasSplitCredit) {
+          await recordCreditCharge(paymentResult.creditCustomerName, paymentResult.grandTotal, invNumber, 'Full credit charge', invoiceId ?? undefined);
+          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.grandTotal, invoiceNumber: invNumber, type: 'full' });
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        if (import.meta.env.DEV) console.error('[PAYMENT] credit charge failed:', errMsg);
+      }
+    }
+    logPayment('completed', { invoiceNumber: invNumber, invoiceId, totalAmount: paymentResult.grandTotal, method: paymentResult.paymentMethod, unpaidItems: newUnpaidTotal });
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLEAR POS SESSION — runs only after all DB writes succeeded
+    // ═══════════════════════════════════════════════════════════════
+    clearCart();
+    setCustomerName('');
+    try { sessionStorage.removeItem(CART_STORAGE_KEY); } catch { /* ignore */ }
+
+    // ponytail: only invalidate dashboard-facing keys, batch to avoid serial awaits
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] }),
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'rooms'] }),
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] }),
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'pendingInvoices'] }),
+      queryClient.invalidateQueries({ queryKey: ['batches'] }),
+    ]);
+
+    // Don't navigate to dashboard for partial payments — the cashier may continue
+    // paying the remaining balance from the same POS session.
+    if (remainingBalance > 0 && !paymentResult.creditAmount) {
+      showSuccess(`Partial payment received${paymentResult.paymentMethod ? ` via ${paymentResult.paymentMethod}` : ''}! Rs. ${npr(remainingBalance)} remaining.`);
+    } else {
+      showSuccess(`Payment received${paymentResult.paymentMethod ? ` via ${paymentResult.paymentMethod}` : ''}!`);
+      navigate('/dashboard');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTableId, orderBatches, newCartItems, newSubtotal, customerName, queryClient, navigate]);
+
+  async function handlePlaceOrder() {
+    if (newCartItems.length === 0 || !selectedTableId) return;
+    // Rate limit — prevent rapid duplicate order submissions
+    if (!checkOrderLimit()) return;
+
+    const batchId = crypto.randomUUID();
+    const batchItems: OrderBatchItem[] = newCartItems.map((item) => ({
+      id: crypto.randomUUID(), menu_item_id: item.menu_item_id, name: item.name, quantity: item.quantity, unit_price: item.unit_price, notes: item.notes, status: 'pending' as CartItemStatus, batch_id: batchId,
+    }));
+    const newSubtotalForThisBatch = newCartItems.reduce((s, l) => s + l.unit_price * l.quantity, 0);
+    const batch: OrderBatch = { id: batchId, table_id: selectedTableId, customer_name: customerName || undefined, items: batchItems, status: 'pending', created_at: new Date().toISOString(), is_locked: true, subtotal: newSubtotalForThisBatch, paid_amount: 0 };
+
+    try {
+      // 1. Persist to database — insert batch and items
+      await db.insertOne('order_batches', {
+        id: batchId,
+        table_id: selectedTableId,
+        customer_name: customerName || null,
+        status: 'pending',
+        is_locked: true,
+        subtotal: newSubtotalForThisBatch,
+        discount: 0,
+        paid_amount: 0,
+      });
+
+      if (batchItems.length > 0) {
+        await db.insertMany('order_batch_items', batchItems.map(item => ({
+          id: item.id,
+          batch_id: batchId,
+          menu_item_id: item.menu_item_id,
+          name: item.name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          notes: item.notes,
+          status: 'pending',
+        })));
+      }
+
+      // Table status is now derived from batch existence — no manual status update needed
+
+      // 2. Update local state
+      setOrderBatches(prev => ({
+        ...prev,
+        [selectedTableId]: [...(prev[selectedTableId] || []), batch],
+      }));
+
+      const currentBatches = [...(orderBatches[selectedTableId] || [])];
+      const orderNum = currentBatches.length + 1;
+      const displayOrderNumber = `Order #${orderNum}`;
+      const entityLabel = posMode === 'tables'
+        ? `T${selectedTableInfo?.table_number ?? selectedTableId}`
+        : `R${selectedTableInfo?.room_number || selectedTableInfo?.number || selectedTableId}`;
+
+      // 3. Non-critical activity log
+      logActivitySafe({
+        activityType: 'order_created',
+        entityId: batchId,
+        entityLabel: displayOrderNumber,
+        status: 'pending',
+        amount: newSubtotal,
+        userName: customerName || 'System',
+        location: entityLabel,
+        details: `${displayOrderNumber} (${totalNewCartItems} items) placed. Customer: ${customerName || 'Walk-in'}. Items: ${batchItems.map(i => `${i.name}×${i.quantity}`).join(', ')}`,
+      });
+
+      showSuccess(`${displayOrderNumber} (${totalNewCartItems} items) placed!`);
+      // Clear the cart — submitted items are now persisted in the database and
+      // displayed in the Previous Batches section. The editable cart starts
+      // fresh for the next batch.
+      clearCart();
+      setCustomerName('');
+      try { sessionStorage.removeItem(CART_STORAGE_KEY); } catch { /* ignore */ }
+
+      // ponytail: only dashboard-facing keys, batched
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'pendingInvoices'] }),
+        queryClient.invalidateQueries({ queryKey: ['batches'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'orders'] }),
+      ]);
+
+      // 5. Navigate back to Dashboard so the cashier sees the updated table status
+      navigate('/dashboard');
+    } catch (err) {
+      if (import.meta.env.DEV) console.error('Failed to place order:', err);
+      showError('Failed to place order. The cart has been preserved — please try again.');
+    }
+  }
+
+  // ─── RENDER ───────────────────────────────────────
+
+  return (
+    <PageTransition className="flex flex-col h-[calc(100vh-8rem)] lg:h-[calc(100vh-9rem)] bg-background border-t-4 border-t-emerald-500">
+      <motion.div className="flex items-center gap-2 px-4 h-12 border-b border-emerald-200 dark:border-emerald-800 shrink-0 lg:hidden"
+        style={{ background: 'linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%)' }}
+        animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
+        transition={{ duration: 8, repeat: Infinity, ease: 'linear' }}>
+        <button className="flex items-center gap-1 text-sm font-medium text-emerald-50 hover:text-white"><ArrowLeft className="h-4 w-4" /><span>Home</span></button>
+        <span className="text-xs font-semibold text-emerald-50 ml-auto tracking-widest">POS</span>
+        <button onClick={() => setShowShortcuts(true)} className="p-1 rounded-lg hover:bg-white/20 transition-colors"><Keyboard className="h-4 w-4 text-emerald-100" /></button>
+      </motion.div>
+
+      <div className="flex flex-col lg:flex-row flex-1 min-h-0">
+        {/* ─── Category Sidebar (Desktop) ─── */}
+        <div className="hidden lg:flex flex-col shrink-0">
+          <motion.div
+            className="flex flex-col items-center gap-1 py-4 h-full overflow-y-auto no-scrollbar border-r border-border bg-card/70 backdrop-blur-xl"
+            initial={{ x: -20, opacity: 0 }}
+            animate={{ x: 0, opacity: 1, width: sidebarOpen ? 180 : 64 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+          >
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="mb-2 p-1.5 rounded-lg hover:bg-muted/80 transition-all duration-200 shrink-0 active:scale-95">
+              {sidebarOpen ? <ChevronLeft className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+            </button>
+            <motion.div className="flex flex-col items-center gap-1 w-full" variants={stagger} initial="hidden" animate="show">
+              <motion.button variants={fadeUp} onClick={() => setSelectedCat('all')}
+                className={`flex flex-col items-center gap-1 w-full px-2 shrink-0 ${selectedCat === 'all' ? 'opacity-100' : 'opacity-60 hover:opacity-100'} transition-all duration-200 relative group`}
+                whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                <div className={`w-12 h-12 lg:w-14 lg:h-14 rounded-xl flex items-center justify-center transition-all duration-300 ${selectedCat === 'all' ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'bg-muted text-foreground group-hover:bg-muted/80'}`}>
+                  <Grid3X3 className="h-5 w-5 lg:h-6 lg:w-6" />
+                </div>
+                {sidebarOpen && (
+                  <motion.span className="text-[11px] font-medium text-center leading-tight" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                    All
+                  </motion.span>
+                )}
+              </motion.button>
+              {categoriesList.map((cat, idx) => {
+                const Icon = getIconForCategory(cat.name);
+                const catCount = cartCountByCategory[cat.id] ?? 0;
+                return (
+                  <motion.button key={cat.id} variants={fadeUp} onClick={() => setSelectedCat(cat.id)}
+                    className={`flex flex-col items-center gap-1 w-full px-2 shrink-0 ${selectedCat === cat.id ? 'opacity-100' : 'opacity-60 hover:opacity-100'} transition-all duration-200 relative group`}
+                    whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+                    <div className={`relative w-12 h-12 lg:w-14 lg:h-14 rounded-xl flex items-center justify-center transition-all duration-300 ${selectedCat === cat.id ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'bg-muted text-foreground group-hover:bg-muted/80'}`}>
+                      <Icon className="h-5 w-5 lg:h-6 lg:w-6" />
+                      <AnimatePresence>{catCount > 0 && (<motion.span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-emerald-500 text-[11px] font-bold text-white shadow-sm" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} key={catCount}>{catCount}</motion.span>)}</AnimatePresence>
+                    </div>
+                    {sidebarOpen && (
+                      <motion.span className="text-[11px] font-medium text-center leading-tight" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                        {cat.name}
+                      </motion.span>
+                    )}
+                    {sidebarOpen && (
+                      <span className="text-[9px] text-muted-foreground/50 font-mono">[{idx + 1}]</span>
+                    )}
+                  </motion.button>
+                );
+              })}
+            </motion.div>
+          </motion.div>
+        </div>
+
+        {/* ─── Category Sidebar (Mobile) ─── */}
+        <div className="flex lg:hidden items-center gap-2 p-2 overflow-x-auto no-scrollbar border-b border-border bg-card/70">
+          <button onClick={() => { setSelectedCat('all'); }}
+            className={`flex flex-col items-center gap-1 shrink-0 px-2 ${selectedCat === 'all' ? 'opacity-100' : 'opacity-60 hover:opacity-100'} transition-all duration-200`}>
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${selectedCat === 'all' ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'bg-muted text-foreground'}`}>
+              <Grid3X3 className="h-5 w-5" />
+            </div>
+            <span className="text-[11px] font-medium text-center leading-tight">All</span>
+          </button>
+          {categoriesList.map((cat) => {
+            const Icon = getIconForCategory(cat.name);
+            const catCount = cartCountByCategory[cat.id] ?? 0;
+            return (
+              <button key={cat.id} onClick={() => setSelectedCat(cat.id)}
+                className={`flex flex-col items-center gap-1 shrink-0 px-2 ${selectedCat === cat.id ? 'opacity-100' : 'opacity-60 hover:opacity-100'} transition-all duration-200`}>
+                <div className={`relative w-12 h-12 rounded-xl flex items-center justify-center ${selectedCat === cat.id ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'bg-muted text-foreground'}`}>
+                  <Icon className="h-5 w-5" />
+                  {catCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-emerald-500 text-[11px] font-bold text-white shadow-sm">
+                      {catCount}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] font-medium text-center leading-tight whitespace-nowrap">{cat.name}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ─── Menu Grid ─── */}
+        <section className="flex-1 p-4 lg:p-5 overflow-y-auto no-scrollbar">
+          {/* ─── Header ─── */}
+          <div className="mb-4 space-y-3">
+            {/* Title row */}
+            <div className="flex items-center justify-between">
+              <motion.h1
+                className="text-base font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-2"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+              >
+                <motion.span
+                  className="w-1.5 h-4 rounded-full bg-emerald-500 inline-block shrink-0"
+                  animate={{ scaleY: [1, 1.3, 1] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                />
+                Point of Sale
+              </motion.h1>
+              {/* Item count badge */}
+              <motion.div
+                className="flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/30 px-3 py-1"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.2, type: 'spring' as const, stiffness: 400, damping: 25 }}
+              >
+                <Grid3X3 className="h-3.5 w-3.5 text-emerald-500" />
+                <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                  {availableItems.length}
+                </span>
+                <span className="text-xs text-emerald-500/70 dark:text-emerald-400/70">items</span>
+              </motion.div>
+            </div>
+
+            {/* Toolbar row */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+              {/* Search - primary action */}
+              <motion.div
+                className="relative flex-1 min-w-0 sm:max-w-md"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1, type: 'spring' as const, stiffness: 400, damping: 28 }}
+              >
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60 pointer-events-none" />
+                <input
+                  ref={searchRef}
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search menu items..."
+                  className="w-full h-10 rounded-xl border border-border bg-card/50 pl-10 pr-12 text-sm outline-none
+                             transition-all duration-200
+                             placeholder:text-muted-foreground/40
+                             focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 focus:bg-card focus:shadow-sm focus:shadow-emerald-500/5
+                             hover:border-emerald-300 dark:hover:border-emerald-700"
+                />
+                {/* Keyboard shortcut badge */}
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:flex items-center gap-1 rounded-md border border-border/60 bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/60 pointer-events-none">
+                  <Keyboard className="h-2.5 w-2.5" />
+                  <span>/</span>
+                </div>
+              </motion.div>
+
+              {/* Tables / Rooms mode toggle */}
+              <motion.div
+                className="flex shrink-0 rounded-xl border border-border bg-card/50 p-0.5"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.13, type: 'spring' as const, stiffness: 400, damping: 28 }}
+              >
+                <button
+                  onClick={() => { setPosMode('tables'); setSelectedTableId(''); setEntityDropdownOpen(false); setEntitySearchQuery(''); }}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-all duration-200 ${
+                    posMode === 'tables'
+                      ? 'bg-emerald-500 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Table2 className="h-3.5 w-3.5" />
+                  <span>Tables</span>
+                </button>
+                <button
+                  onClick={() => { setPosMode('rooms'); setSelectedTableId(''); setEntityDropdownOpen(false); setEntitySearchQuery(''); }}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-all duration-200 ${
+                    posMode === 'rooms'
+                      ? 'bg-violet-500 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <BedDouble className="h-3.5 w-3.5" />
+                  <span>Rooms</span>
+                </button>
+              </motion.div>
+
+              {/* Entity selector dropdown (tables or rooms) */}
+              <motion.div
+                ref={entityDropdownRef}
+                className="relative shrink-0"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.15, type: 'spring' as const, stiffness: 400, damping: 28 }}
+              >
+                {/* Trigger chip */}
+                <button
+                  onClick={() => setEntityDropdownOpen(prev => !prev)}
+                  className={`flex items-center gap-2 h-10 rounded-xl border px-3.5 min-w-[160px]
+                              transition-all duration-200 select-none
+                              ${
+                                entityDropdownOpen
+                                  ? posMode === 'tables'
+                                    ? 'border-emerald-400 ring-2 ring-emerald-500/30 bg-card shadow-sm'
+                                    : 'border-violet-400 ring-2 ring-violet-500/30 bg-card shadow-sm'
+                                  : posMode === 'tables'
+                                    ? 'border-border bg-card/50 hover:border-emerald-300 dark:hover:border-emerald-700'
+                                    : 'border-border bg-card/50 hover:border-violet-300 dark:hover:border-violet-700'
+                              }`}
+                  aria-haspopup="listbox"
+                  aria-expanded={entityDropdownOpen}
+                  aria-label={posMode === 'tables' ? 'Select table' : 'Select room'}
+                >
+                  {posMode === 'tables' ? (
+                    <Table2 className={`h-4 w-4 shrink-0 ${selectedTableInfo ? 'text-emerald-500' : 'text-muted-foreground/60'}`} />
+                  ) : (
+                    <BedDouble className={`h-4 w-4 shrink-0 ${selectedTableInfo ? 'text-violet-500' : 'text-muted-foreground/60'}`} />
+                  )}
+                  {selectedTableInfo ? (
+                    <>
+                      <span className="text-sm font-extrabold text-foreground tabular-nums">
+                        {posMode === 'tables' ? `T${selectedTableInfo.table_number}` : `R${selectedTableInfo.room_number || selectedTableInfo.number}`}
+                      </span>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${posMode === 'tables'
+                        ? (TABLE_STATUS_COLORS[selectedTableInfo.status] || 'bg-gray-400')
+                        : selectedTableInfo.status === 'occupied' ? 'bg-orange-500'
+                          : selectedTableInfo.status === 'vacant' || selectedTableInfo.status === 'available' ? 'bg-emerald-500'
+                            : selectedTableInfo.status === 'reserved' ? 'bg-blue-500'
+                              : selectedTableInfo.status === 'cleaning' ? 'bg-cyan-500'
+                                : 'bg-gray-400'
+                      }`} />
+                      <span className="text-xs font-semibold text-muted-foreground capitalize hidden sm:inline">
+                        {posMode === 'tables'
+                          ? (TABLE_STATUS_LABELS[selectedTableInfo.status] || selectedTableInfo.status)
+                          : selectedTableInfo.status}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-sm font-extrabold text-muted-foreground/60 flex-1 text-left">
+                      {posMode === 'tables' ? 'Select Table' : 'Select Room'}
+                    </span>
+                  )}
+                  <motion.div
+                    animate={{ rotate: entityDropdownOpen ? 180 : 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
+                  </motion.div>
+                </button>
+
+                {/* Dropdown panel */}
+                <AnimatePresence>
+                  {entityDropdownOpen && (
+                    <motion.div
+                      className="absolute top-full left-0 right-0 mt-1.5 z-50 rounded-xl border border-border bg-card shadow-xl shadow-black/5 overflow-hidden"
+                      initial={{ opacity: 0, y: -6, scaleY: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                      exit={{ opacity: 0, y: -6, scaleY: 0.95 }}
+                      transition={{ duration: 0.15, ease: 'easeOut' }}
+                      style={{ transformOrigin: 'top center' }}
+                      role="listbox"
+                    >
+                      {/* Search input */}
+                      <div className="relative border-b border-border">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50 pointer-events-none" />
+                        <input
+                          value={entitySearchQuery}
+                          onChange={e => setEntitySearchQuery(e.target.value)}
+                          placeholder={`Search ${posMode}...`}
+                          className="w-full h-9 bg-transparent pl-9 pr-3 text-sm outline-none placeholder:text-muted-foreground/40"
+                          autoFocus
+                        />
+                      </div>
+
+                      {/* Options list */}
+                      <div className="max-h-60 overflow-y-auto no-scrollbar py-1.5">
+                        {/* "None" option */}
+                        <button
+                          onClick={() => { setSelectedTableId(''); setEntityDropdownOpen(false); setEntitySearchQuery(''); }}
+                          className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-colors text-left
+                            ${
+                              !selectedTableId
+                                ? posMode === 'tables'
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400'
+                                  : 'bg-violet-50 dark:bg-violet-950/20 text-violet-600 dark:text-violet-400'
+                                : 'text-muted-foreground hover:bg-muted'
+                            }`}
+                        >
+                          <div className="w-5 h-5 rounded-md border border-dashed border-border flex items-center justify-center">
+                            <X className="h-3 w-3 text-muted-foreground/50" />
+                          </div>
+                          <span className="font-semibold">{posMode === 'tables' ? 'No table' : 'No room'}</span>
+                        </button>
+
+                        {/* Divider */}
+                        <div className="mx-3 my-1 border-t border-border/50" />
+
+                        {filteredEntities.length === 0 && entitySearchQuery && (
+                          <div className="px-3.5 py-8 text-center text-sm text-muted-foreground">
+                            No {posMode} match your search
+                          </div>
+                        )}
+
+                        {filteredEntities.map((entity: any) => {
+                          const isSelected = entity.id === selectedTableId;
+                          const entityNumber = posMode === 'tables' ? entity.table_number : (entity.room_number || entity.number || '');
+                          const statusLabel = posMode === 'tables'
+                            ? (TABLE_STATUS_LABELS[entity.status] || entity.status)
+                            : entity.status;
+                          const colorClass = posMode === 'tables'
+                            ? (TABLE_STATUS_COLORS[entity.status] || 'bg-gray-400')
+                            : entity.status === 'occupied' ? 'bg-orange-500'
+                              : entity.status === 'vacant' || entity.status === 'available' ? 'bg-emerald-500'
+                                : entity.status === 'reserved' ? 'bg-blue-500'
+                                  : entity.status === 'cleaning' ? 'bg-cyan-500'
+                                    : 'bg-gray-400';
+                          const runningTotal = posMode === 'tables' && entity.status === 'occupied' ? entity.running_total : null;
+
+                          return (
+                            <button
+                              key={entity.id}
+                              onClick={() => { setSelectedTableId(entity.id); setEntityDropdownOpen(false); setEntitySearchQuery(''); }}
+                              role="option"
+                              aria-selected={isSelected}
+                              className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-colors text-left
+                                ${
+                                  isSelected
+                                    ? posMode === 'tables'
+                                      ? 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400'
+                                      : 'bg-violet-50 dark:bg-violet-950/20 text-violet-600 dark:text-violet-400'
+                                    : 'text-foreground hover:bg-muted'
+                                }`}
+                            >
+                              {posMode === 'tables' ? (
+                                <Table2 className={`h-4 w-4 shrink-0 ${isSelected ? 'text-emerald-500' : 'text-muted-foreground/50'}`} />
+                              ) : (
+                                <BedDouble className={`h-4 w-4 shrink-0 ${isSelected ? 'text-violet-500' : 'text-muted-foreground/50'}`} />
+                              )}
+                              <div className="flex-1 flex items-center gap-2 min-w-0">
+                                <span className={`font-bold tabular-nums ${
+                                  isSelected
+                                    ? posMode === 'tables'
+                                      ? 'text-emerald-600 dark:text-emerald-400'
+                                      : 'text-violet-600 dark:text-violet-400'
+                                    : 'text-foreground'
+                                }`}>
+                                  {posMode === 'tables' ? `T${entityNumber}` : `R${entityNumber}`}
+                                </span>
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${colorClass}`} />
+                                <span className="text-xs text-muted-foreground capitalize truncate">{statusLabel}</span>
+                              </div>
+                              {runningTotal != null && (
+                                <span className="text-xs font-semibold tabular-nums text-amber-600 dark:text-amber-400 shrink-0">
+                                  {npr(runningTotal)}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+
+              {/* Customer input */}
+              <motion.div
+                className="relative shrink-0"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2, type: 'spring' as const, stiffness: 400, damping: 28 }}
+              >
+                <div className="flex items-center gap-2 h-10 rounded-xl border border-border bg-card/50 px-3.5
+                                transition-all duration-200
+                                focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400
+                                hover:border-emerald-300 dark:hover:border-emerald-700">
+                  <UserIcon className="h-4 w-4 text-muted-foreground/60 shrink-0" />
+                  <input
+                    placeholder="Customer name"
+                    value={customerName}
+                    onChange={e => setCustomerName(e.target.value)}
+                    className="bg-transparent outline-none w-28 sm:w-32 text-sm placeholder:text-muted-foreground/40"
+                  />
+                  {customerName && (
+                    <button
+                      onClick={() => setCustomerName('')}
+                      className="p-0.5 rounded hover:bg-muted transition-colors shrink-0"
+                      tabIndex={-1}
+                    >
+                      <X className="h-3.5 w-3.5 text-muted-foreground/60" />
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          </div>
+
+          <motion.div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3" variants={stagger} initial="hidden" animate="show" key={selectedCat}>
+            {availableItems.length === 0 && (
+              <div className="col-span-full flex flex-col items-center justify-center py-16 text-muted-foreground">
+                <ShoppingCart className="h-12 w-12 mb-3 text-muted-foreground/20" />
+                <p className="text-lg font-semibold mb-1">No menu items loaded</p>
+                <p className="text-sm">Add menu items in the Menu page, then set up your POS categories</p>
+              </div>
+            )}
+            {availableItems.map(item => {
+              const inCart = cartItemIds.has(item.id);
+              const qty = cartCountByItem[item.id] ?? 0;
+              const justAdded = lastAdded === item.id;
+              return (
+                <motion.div key={item.id} variants={fadeUp} onClick={() => { if (!inCart) addToCart(item as any); }}
+                  className={`group relative rounded-xl border overflow-hidden text-left cursor-pointer transition-all ${inCart ? 'border-emerald-400 ring-1 ring-emerald-400/50 shadow-sm shadow-emerald-500/10' : 'border-border hover:border-emerald-300 dark:hover:border-emerald-700 bg-card'}`}
+                  whileHover={{ y: -2, transition: { duration: 0.15 } }} whileTap={{ scale: 0.97 }} layout>                    {/* ── Item Image (with CSS fallback behind) ── */}
+                  <div className={`relative h-20 lg:h-24 overflow-hidden transition-all duration-300 ${
+                    inCart
+                      ? 'bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20'
+                      : 'bg-gradient-to-br from-muted to-muted/50 group-hover:from-emerald-50 group-hover:to-emerald-50/50 dark:group-hover:from-emerald-950/20 dark:group-hover:to-transparent'
+                  }`}>
+                    {/* Fallback layer — always in DOM, visible when image is missing/broken */}
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <AnimatePresence mode="wait">
+                        {justAdded ? (
+                          <motion.div key="check" initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 0, rotate: 180 }} className="text-emerald-500">
+                            <Zap className="h-8 w-8" />
+                          </motion.div>
+                        ) : inCart ? (
+                          <motion.span key="qty" initial={{ scale: 0.5 }} animate={{ scale: 1 }} className="text-3xl font-bold text-primary/30">
+                            {qty}
+                          </motion.span>
+                        ) : (
+                          <motion.div key="icon" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-muted-foreground/30 group-hover:text-muted-foreground/50 transition-colors">
+                            <UtensilsCrossed className="h-7 w-7" />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    {/* Image layer — sits on top of fallback when it loads */}
+                    {item.image && (
+                      <img
+                        src={item.image}
+                        alt={item.name}
+                        onError={(e) => { e.currentTarget.style.display = 'none' }}
+                        className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                        loading="lazy"
+                      />
+                    )}
+
+                    {/* Dark overlay for in-cart items (above image) */}
+                    {inCart && (
+                      <div className="absolute inset-0 bg-black/20" />
+                    )}
+
+                    {/* In-cart quantity badge (above everything) */}
+                    <AnimatePresence>
+                      {inCart && item.image && (
+                        <motion.span
+                          key="qty-badge"
+                          initial={{ scale: 0.5 }}
+                          animate={{ scale: 1 }}
+                          className="absolute bottom-2 right-2 flex items-center justify-center min-w-[24px] h-6 rounded-full bg-emerald-500 text-xs font-bold text-white shadow-lg"
+                        >
+                          {qty}
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Just-added overlay (above everything) */}
+                    <AnimatePresence>
+                      {justAdded && item.image && (
+                        <motion.div
+                          key="check-overlay"
+                          initial={{ scale: 0, rotate: -180 }}
+                          animate={{ scale: 1, rotate: 0 }}
+                          exit={{ scale: 0, rotate: 180 }}
+                          className="absolute inset-0 flex items-center justify-center bg-emerald-500/40 backdrop-blur-[2px]"
+                        >
+                          <Zap className="h-8 w-8 text-white drop-shadow-lg" />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  <div className="absolute top-1.5 right-1.5 rounded-md bg-background/90 px-1.5 py-0.5 text-[11px] font-semibold shadow-sm backdrop-blur-sm">{npr(item.price)}</div>
+                  <AnimatePresence>{inCart && (<motion.div className="absolute top-1.5 left-1.5 flex items-center gap-0.5 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-md px-1.5 py-0.5 text-xs font-bold shadow-sm" initial={{ scale: 0, x: -10 }} animate={{ scale: 1, x: 0 }} exit={{ scale: 0, x: -10 }} key="badge"><ShoppingCart className="h-3 w-3" /> {qty}</motion.div>)}</AnimatePresence>
+                  <div className="p-2.5">
+                    <h3 className="text-sm font-semibold truncate">{item.name}</h3>
+                    {item.description && (<p className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5">{item.description}</p>)}
+                    <AnimatePresence>{inCart && (<motion.div className="flex items-center gap-1 mt-2" onClick={e => e.stopPropagation()} initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+                      <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(item.id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border bg-card hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
+                      <span className="w-10 text-center text-sm font-bold tabular-nums">{qty}</span>
+                      <motion.button whileTap={{ scale: 0.9 }} onClick={() => addToCart(item as any)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"><Plus className="h-4 w-4" /></motion.button>
+                    </motion.div>)}</AnimatePresence>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </motion.div>
+        </section>
+
+        {/* ─── Cart Sidebar (Desktop) ─── */}
+        <AnimatePresence mode="wait">
+          {cartPanelOpen ? (
+            <motion.aside key="cart" variants={slideIn} initial="hidden" animate="show" exit="exit"
+              className="hidden lg:grid w-full max-w-sm xl:w-96 border-l border-emerald-200 dark:border-emerald-800/50 grid-rows-[auto_1fr_auto] min-h-0 overflow-hidden lg:backdrop-blur-xl lg:bg-card/70">
+              <div className="p-4 border-b border-emerald-100 dark:border-emerald-900/30 bg-gradient-to-r from-emerald-50/50 to-transparent dark:from-emerald-950/10">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Current Order</h2>
+                    <AnimatePresence>{totalNewCartItems > 0 && (<motion.span className="flex items-center justify-center min-w-[20px] h-5 rounded-full bg-emerald-500 text-[11px] font-bold text-white px-1.5" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} key={totalNewCartItems}>{totalNewCartItems}</motion.span>)}</AnimatePresence>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {newCartItems.length > 0 && (<motion.button whileTap={{ scale: 0.9 }} onClick={clearCart} className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-xs text-destructive font-medium">Clear</motion.button>)}
+                    <motion.button whileTap={{ scale: 0.9 }} onClick={() => setCartPanelOpen(false)} className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors"><ChevronRight className="h-4 w-4 text-muted-foreground" /></motion.button>
+                  </div>
+                </div>
+                {customerName && (<motion.div className="flex items-center gap-2 rounded-lg bg-muted p-2" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+                  <UserIcon className="h-4 w-4 text-emerald-400 shrink-0" /><div className="flex-1"><p className="text-sm font-medium">{customerName}</p></div>
+                  <button onClick={() => setCustomerName('')}><X className="h-4 w-4 text-muted-foreground" /></button>
+                </motion.div>)}
+                {selectedTableInfo && (<motion.div className={`flex items-center gap-2 mt-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${posMode === 'tables' ? (selectedTableInfo.status === 'available' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20' : 'bg-amber-50 text-amber-700 dark:bg-amber-950/20') : 'bg-violet-50 text-violet-700 dark:bg-violet-950/20'}`} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}>
+                  {posMode === 'tables' ? <Table2 className="h-4 w-4 shrink-0" /> : <BedDouble className="h-4 w-4 shrink-0" />}
+                  <span>{posMode === 'tables' ? `Table ${selectedTableInfo.table_number}` : `Room ${selectedTableInfo.room_number || selectedTableInfo.number}`}</span>
+                  <span className="text-xs ml-auto capitalize">{selectedTableInfo.status}</span>
+                </motion.div>)}
+              </div>
+
+              <div className="overflow-y-auto no-scrollbar min-h-0 p-5 space-y-4">                {previousBatches.length > 0 && (
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                      Previous Batches
+                      <span className="text-[10px] font-normal text-muted-foreground/60">({previousBatches.length})</span>
+                    </p>
+                    {previousBatches.map((batch, idx) => (
+                      <div key={batch.id} className="rounded-lg border border-muted bg-muted/20 p-3 opacity-75">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <Lock className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+                            <span className="text-xs font-bold text-foreground/60">
+                              Order #{idx + 1}
+                            </span>
+                            <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
+                              batch.status === 'paid'
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                : batch.status === 'partial'
+                                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                                  : 'bg-muted text-muted-foreground'
+                            }`}>
+                              {batch.status}
+                            </span>
+                          </div>
+                        </div>
+                        {/* Items for this batch */}
+                        <div className="space-y-0.5 mb-1.5">
+                          {batch.items.map(item => {
+                            const isSettled = item.status === 'paid' || item.status === 'credit' || item.status === 'cancelled';
+                            return (
+                              <div key={item.id} className={`flex items-center justify-between text-xs transition-all duration-200 ${isSettled ? 'line-through text-muted-foreground/40' : 'text-muted-foreground'}`}>
+                                <span className={`truncate ${isSettled ? 'line-through' : ''}`}>{item.name} × {item.quantity}</span>
+                                <span className={`tabular-nums ml-2 ${isSettled ? 'line-through' : ''}`}>{npr(item.unit_price * item.quantity)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center justify-between border-t border-muted/50 pt-1">
+                          <span className="text-[10px] font-medium text-muted-foreground/60">Subtotal</span>
+                          <span className="text-xs font-semibold tabular-nums text-muted-foreground">{npr(batch.subtotal)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              <div className="mb-2">
+                    <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2">Current Order</p>
+                    {newCartItems.length > 0 ? (<motion.div layout className="space-y-2">{newCartItems.map(line => (
+                      <motion.div key={line.menu_item_id} className="flex items-start gap-3 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 hover:bg-muted/30 transition-colors" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20, height: 0, marginBottom: 0, padding: 0 }}>
+                        <motion.div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 dark:text-emerald-400 shrink-0" key={line.quantity} initial={{ scale: 1.3 }} animate={{ scale: 1 }}>{line.quantity}</motion.div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between"><span className="text-sm font-medium truncate">{line.name}</span><span className="text-sm font-medium tabular-nums ml-2">{npr(line.unit_price * line.quantity)}</span></div>
+                          <div className="flex items-center gap-1.5 mt-1.5">
+                            <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
+                            <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
+                            <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></motion.button>
+                            <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />
+                            <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></motion.button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}</motion.div>
+                ) : (
+                  <motion.div className="flex flex-col items-center justify-center py-12 text-muted-foreground" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <motion.div animate={{ y: [0, -5, 0] }} transition={{ duration: 2, repeat: Infinity }}><ShoppingCart className="h-10 w-10 mb-3 text-muted-foreground/30" /></motion.div>
+                    <p className="text-sm">Cart is empty</p><p className="text-xs mt-1">Tap items to add them</p>
+                  </motion.div>
+                )}
+              </div>
+              </div>
+
+              <div className="p-4 bg-card border-t border-border space-y-2">
+                {/* Running total — unpaid items across previous batches + current cart */}
+                <div className="space-y-1">
+                  {unpaidPreviousTotal > 0 && (
+                    <div className="flex items-center justify-between text-xs text-muted-foreground/70">
+                      <span>Previous batches</span>
+                      <span className="tabular-nums">{npr(unpaidPreviousTotal)}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between" key={newSubtotal}>
+                    <span className="text-sm text-muted-foreground">{unpaidPreviousTotal > 0 ? 'Current batch' : 'Subtotal'}</span>
+                    <span className="text-sm font-semibold tabular-nums">{npr(newSubtotal)}</span>
+                  </div>
+                  {totalRunning > 0 && (
+                    <div className="flex items-center justify-between border-t border-border pt-1.5 mt-1">
+                      <span className="text-xs font-bold uppercase text-foreground">Running Total</span>
+                      <span className="text-base font-bold tabular-nums text-amber-600 dark:text-amber-400">{npr(totalRunning)}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {selectedTableId && (
+                    <RequirePermission permission="payments.receive">
+                      <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setShowPayment(true)}
+                        disabled={allUnpaidItemsForPayment.length === 0}
+                        className="h-14 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-semibold hover:from-amber-400 hover:to-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-amber-500/20"><Receipt className="h-4 w-4" /> Pay Bill</motion.button>
+                    </RequirePermission>
+                  )}
+                  <button onClick={() => navigate('/orders')} className="h-12 rounded-lg border-2 border-border text-sm font-medium hover:bg-muted transition-colors">View Bills</button>
+                </div>
+
+                {/* "Place Order" when no batches exist, "Create Another Order Batch" when batches exist */}
+                <RequirePermission permission="orders.create">
+                  <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handlePlaceOrder} disabled={!selectedTableId || newCartItems.length === 0}
+                    className="w-full h-14 rounded-xl bg-emerald-500 text-background font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all shadow-sm shadow-emerald-500/20">
+                    {previousBatches.length > 0 ? (
+                      <>Create Another Order Batch {totalNewCartItems > 0 && <>({totalNewCartItems})</>}</>
+                    ) : (
+                      <>Place Order ({totalNewCartItems})</>
+                    )}
+                  </motion.button>
+                </RequirePermission>
+              </div>
+            </motion.aside>
+          ) : (
+            <motion.div key="collapsed" initial={{ width: 0, opacity: 0 }} animate={{ width: 48, opacity: 1 }} exit={{ width: 0, opacity: 0 }}
+              className="hidden lg:flex flex-col items-center py-4 gap-3 w-12 border-l border-border bg-card shrink-0">
+              <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => setCartPanelOpen(true)}
+                className="relative flex items-center justify-center w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 text-white hover:from-emerald-400 hover:to-emerald-500 transition-all shadow-lg shadow-emerald-500/20">
+                <ShoppingCart className="h-4 w-4" />
+                <AnimatePresence>{totalNewCartItems > 0 && (<motion.span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[16px] h-4 rounded-full bg-emerald-500 text-[10px] font-bold text-white px-1 shadow-sm" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>{totalNewCartItems}</motion.span>)}</AnimatePresence>
+              </motion.button>
+              <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* ─── Mobile Cart FAB ─── */}
+      <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => setMobileCartOpen(true)}
+        className="fixed bottom-20 right-4 z-40 lg:hidden flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30">
+        <ShoppingCart className="h-6 w-6" />
+        <AnimatePresence>{totalNewCartItems > 0 && (<motion.span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[22px] h-5 rounded-full bg-emerald-500 text-[11px] font-bold text-white px-1.5 shadow-sm" initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }} key={totalNewCartItems}>{totalNewCartItems}</motion.span>)}</AnimatePresence>
+      </motion.button>
+
+      {/* ─── Mobile Cart Drawer ─── */}
+      <AnimatePresence>{mobileCartOpen && (
+        <motion.div className="fixed inset-0 z-50 lg:hidden" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setMobileCartOpen(false)}>
+          <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+          <motion.div className="absolute bottom-0 left-0 right-0 max-h-[85vh] rounded-t-2xl bg-card shadow-2xl grid grid-rows-[auto_auto_1fr_auto] overflow-hidden"
+            initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', stiffness: 300, damping: 30 }} onClick={e => e.stopPropagation()}>
+            <div className="flex justify-center pt-2 pb-0"><div className="w-10 h-1 rounded-full bg-muted-foreground/20" /></div>
+            <div className="flex items-center justify-between p-4 border-b border-border bg-gradient-to-r from-emerald-50/50 to-transparent dark:from-emerald-950/10">
+              <div className="flex items-center gap-2"><h2 className="text-base font-semibold">Cart</h2>{totalNewCartItems > 0 && <span className="flex items-center justify-center min-w-[22px] h-5 rounded-full bg-emerald-500 text-[11px] font-bold text-white px-1.5">{totalNewCartItems}</span>}</div>
+              <button onClick={() => setMobileCartOpen(false)} className="p-1 hover:bg-muted rounded-lg transition-colors"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="overflow-y-auto min-h-0 p-4 space-y-4">
+              {previousBatches.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                    Previous Batches
+                    <span className="text-[10px] font-normal text-muted-foreground/60">({previousBatches.length})</span>
+                  </p>
+                  {previousBatches.map((batch, idx) => (
+                    <div key={batch.id} className="rounded-lg border border-muted bg-muted/20 p-3 opacity-75">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <Lock className="h-3 w-3 text-muted-foreground/40 shrink-0" />
+                          <span className="text-xs font-bold text-foreground/60">Order #{idx + 1}</span>
+                          <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
+                            batch.status === 'paid'
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                              : batch.status === 'partial'
+                                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                                : 'bg-muted text-muted-foreground'
+                          }`}>{batch.status}</span>
+                        </div>
+                      </div>
+                      <div className="space-y-0.5 mb-1.5">
+                        {batch.items.map(item => {
+                          const isSettled = item.status === 'paid' || item.status === 'credit' || item.status === 'cancelled';
+                          return (
+                            <div key={item.id} className={`flex items-center justify-between text-xs transition-all duration-200 ${isSettled ? 'line-through text-muted-foreground/40' : 'text-muted-foreground'}`}>
+                              <span className={`truncate ${isSettled ? 'line-through' : ''}`}>{item.name} × {item.quantity}</span>
+                              <span className={`tabular-nums ml-2 ${isSettled ? 'line-through' : ''}`}>{npr(item.unit_price * item.quantity)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center justify-between border-t border-muted/50 pt-1">
+                        <span className="text-[10px] font-medium text-muted-foreground/60">Subtotal</span>
+                        <span className="text-xs font-semibold tabular-nums text-muted-foreground">{npr(batch.subtotal)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {newCartItems.length > 0 ? (
+                <motion.div layout className="space-y-2"><p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2">Current Order</p>
+                  {newCartItems.map(line => (<motion.div key={line.menu_item_id} className="flex items-start gap-3 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 hover:bg-muted/30 transition-colors" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 shrink-0">{line.quantity}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between"><span className="text-sm font-medium truncate">{line.name}</span><span className="text-sm font-medium tabular-nums ml-2">{npr(line.unit_price * line.quantity)}</span></div>
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <button onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></button>
+                        <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
+                        <button onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></button>
+                        <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />
+                        <button onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></button>
+                      </div>
+                    </div>
+                  </motion.div>))}
+                </motion.div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground"><ShoppingCart className="h-10 w-10 mb-3 text-muted-foreground/30" /><p className="text-sm">Cart is empty</p><p className="text-xs mt-1">Tap items to add them</p></div>
+              )}
+            </div>
+            <div className="p-4 bg-card border-t border-border space-y-2">
+              {/* Running total — unpaid items across previous batches + current cart */}
+              <div className="space-y-1">
+                {unpaidPreviousTotal > 0 && (
+                  <div className="flex items-center justify-between text-xs text-muted-foreground/70">
+                    <span>Previous batches</span>
+                    <span className="tabular-nums">{npr(unpaidPreviousTotal)}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">{unpaidPreviousTotal > 0 ? 'Current batch' : 'Subtotal'}</span>
+                  <span className="text-sm font-semibold tabular-nums">{npr(newSubtotal)}</span>
+                </div>
+                {totalRunning > 0 && (
+                  <div className="flex items-center justify-between border-t border-border pt-1.5 mt-1">
+                    <span className="text-xs font-bold uppercase text-foreground">Running Total</span>
+                    <span className="text-base font-bold tabular-nums text-amber-600 dark:text-amber-400">{npr(totalRunning)}</span>
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {selectedTableId && (<button onClick={() => setShowPayment(true)} disabled={allUnpaidItemsForPayment.length === 0} className="h-14 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-semibold hover:from-amber-400 hover:to-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"><Receipt className="h-4 w-4" /> Pay Bill</button>)}
+                <button onClick={() => navigate('/orders')} className="h-12 rounded-lg border-2 border-border text-sm font-medium hover:bg-muted transition-colors">View Bills</button>
+              </div>
+              <button onClick={handlePlaceOrder} disabled={!selectedTableId || newCartItems.length === 0} className="w-full h-14 rounded-xl bg-emerald-500 text-background font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm">
+                {previousBatches.length > 0 ? (
+                  <>Create Another Order Batch {totalNewCartItems > 0 && <>({totalNewCartItems})</>}</>
+                ) : (
+                  <>Place Order ({totalNewCartItems})</>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}</AnimatePresence>
+
+      {/* ─── Payment Dialog ─── */}
+      {showPayment && (
+        <PosPaymentDialog orderId={`ord-${Date.now()}`} unpaidItems={allUnpaidItemsForPayment}
+          customerName={customerName || undefined} selectedTableId={selectedTableId}
+          isRoomPayment={posMode === 'rooms'}
+          onClose={() => setShowPayment(false)} onComplete={handlePaymentComplete} />
+      )}
+
+      {/* ─── Keyboard Shortcuts Modal ─── */}
+      <AnimatePresence>{showShortcuts && (
+        <motion.div className="fixed inset-0 z-[60] flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowShortcuts(false)}>
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+          <motion.div className="relative bg-card rounded-2xl shadow-2xl border border-border p-6 max-w-sm w-full" variants={scaleIn} initial="hidden" animate="show" exit="hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-bold flex items-center gap-2"><Keyboard className="h-5 w-5 text-emerald-500" />Keyboard Shortcuts</h3><button onClick={() => setShowShortcuts(false)} className="p-1 hover:bg-muted rounded-lg"><X className="h-4 w-4" /></button></div>
+            <div className="space-y-2 text-sm">{[['/', 'Focus search'],['Esc', 'Clear / Close'],['C', 'Toggle cart'],['? (Shift+)', 'Toggle shortcuts']].map(([key, desc]) => (
+              <div key={key} className="flex items-center justify-between"><span className="text-muted-foreground">{desc}</span><kbd className="px-2 py-0.5 rounded bg-muted text-xs font-mono border border-border">{key}</kbd></div>
+            ))}</div>
+          </motion.div>
+        </motion.div>
+      )}</AnimatePresence>
+    </PageTransition>
+  );
+}
