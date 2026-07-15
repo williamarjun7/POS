@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState, useCallback } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { ThemeProvider } from '@/lib/core/theme-context'
 import { AuthProvider } from '@/lib/core/auth-context'
 import { PrintSettingsProvider } from '@/lib/services/print-settings'
@@ -11,6 +11,8 @@ import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
 import { AuthorizedRoute } from '@/components/auth/AuthorizedRoute'
 import { SplashScreen } from '@/components/SplashScreen'
 import { SessionTimeoutModal } from '@/components/SessionTimeoutModal'
+import { ScrollToTop } from '@/components/ScrollToTop'
+import { RouteTransition } from '@/components/RouteTransition'
 import { useSessionTimeout } from '@/lib/hooks/useSessionTimeout'
 import { startRealtimePolling, subscribeToPostgresChanges } from '@/lib/services/realtime'
 import type { SuccessType } from '@/pages/auth/types'
@@ -142,8 +144,10 @@ export default function App() {
             <PrintSettingsProvider>
             <ToastProvider>
             <BrowserRouter>
+            <ScrollToTop />
             <Routes>
               {/* Auth routes (outside dashboard layout) */}
+              <Route element={<RouteTransition><Outlet /></RouteTransition>}>
               <Route path="/login" element={
                 <LazyRoute><LoginPage /></LazyRoute>
               } />
@@ -174,6 +178,7 @@ export default function App() {
               <Route path="/auth-error" element={
                 <LazyRoute><AuthErrorPage type="maintenance" /></LazyRoute>
               } />
+              </Route>
 
 
               <Route element={<ProtectedRoute />}>

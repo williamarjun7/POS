@@ -1,29 +1,15 @@
 import { type ReactNode } from "react"
-import { motion } from "framer-motion"
 
 interface PageTransitionProps {
   children: ReactNode
   className?: string
 }
 
-const pageVariants = {
-  hidden: { opacity: 0, y: 12 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.35, ease: "easeOut" as const },
-  },
-}
-
+/**
+ * Page-level wrapper.
+ * Route transitions are handled centrally by RouteTransition in DashboardLayout.
+ * This component is kept as a pass-through so existing pages don't need changes.
+ */
 export function PageTransition({ children, className }: PageTransitionProps) {
-  return (
-    <motion.div
-      variants={pageVariants}
-      initial="hidden"
-      animate="visible"
-      className={className}
-    >
-      {children}
-    </motion.div>
-  )
+  return <div className={className}>{children}</div>
 }

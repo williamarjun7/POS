@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { Sidebar } from "@/layouts/Sidebar"
 import { TopNav } from "@/layouts/TopNav"
+import { RouteTransition } from "@/components/RouteTransition"
 
 const SIDEBAR_WIDTH = 260
 const SIDEBAR_COLLAPSED_WIDTH = 64
@@ -51,7 +52,9 @@ export function DashboardLayout() {
         <TopNav onMobileMenuToggle={toggleMobile} />
         <main className="p-4 lg:p-6">
           <div className="mx-auto max-w-[1600px]">
-            <Outlet />
+            <RouteTransition>
+              <Outlet />
+            </RouteTransition>
           </div>
         </main>
       </motion.div>

@@ -5,6 +5,6 @@
   "speed": "1.2s",
   "stagger": true,
   "transition": 200,
-  "routes": ["/dashboard"],
+  "routes": ["/dashboard", "/pos"],
   "wait": 2000
 }

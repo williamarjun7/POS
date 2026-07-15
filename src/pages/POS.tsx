@@ -77,15 +77,39 @@ const TABLE_STATUS_COLORS: Record<string, string> = {
 }
 
 // ─── Animation Variants ─────────────────────────────────────
+// Apple-inspired smooth easing: natural deceleration curve
+// Shared across the app — see also RouteTransition.tsx
+const easeApple = [0.22, 1, 0.36, 1] as const
 
+// Orchestrated entrance — wraps the entire flex container so sections
+// appear in sequence: header → toolbar → sidebar → grid → cart
+const pageReveal = {
+  hidden: { opacity: 1 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.07, delayChildren: 0.08 },
+  },
+}
+
+// Section-level entrance — each major section slides & fades in
+const sectionReveal = {
+  hidden: { opacity: 0, y: 14 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.45, ease: easeApple },
+  },
+}
+
+// Item-level stagger within grids / lists
 const stagger = {
   hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.04 } },
+  show: { opacity: 1, transition: { staggerChildren: 0.05 } },
 };
 
 const fadeUp = {
   hidden: { opacity: 0, y: 12, scale: 0.97 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring' as const, stiffness: 400, damping: 25 } },
+  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.4, ease: easeApple } },
 };
 
 const slideIn = {
@@ -127,10 +151,13 @@ export function POS() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   // ─── Live data from database ──────────────────────
-  const { data: categories } = useMenuCategories();
-  const { data: menuItemsData } = useMenuItems({ available: true });
+  const { data: categories, isLoading: categoriesLoading } = useMenuCategories();
+  const { data: menuItemsData, isLoading: menuItemsLoading } = useMenuItems({ available: true });
   const { data: allTables = [] } = useDashboardTables();
   const { data: allRooms = [] } = useRooms();
+  const isMenuLoading = categoriesLoading || menuItemsLoading;
+
+  // ─── Derived state ────────────────────────────────
   const tables = useMemo(() => allTables.filter((t: any) => t.status !== 'disabled'), [allTables]);
   const rooms = useMemo(() => allRooms.filter((r: any) => r.status !== 'out_of_order'), [allRooms]);
   const categoriesList = useMemo(() => categories ?? [], [categories]);
@@ -900,9 +927,14 @@ export function POS() {
         <button onClick={() => setShowShortcuts(true)} className="p-1 rounded-lg hover:bg-white/20 transition-colors"><Keyboard className="h-4 w-4 text-emerald-100" /></button>
       </motion.div>
 
-      <div className="flex flex-col lg:flex-row flex-1 min-h-0">
+      <motion.div
+        className="flex flex-col lg:flex-row flex-1 min-h-0"
+        variants={pageReveal}
+        initial="hidden"
+        animate="show"
+      >
         {/* ─── Category Sidebar (Desktop) ─── */}
-        <div className="hidden lg:flex flex-col shrink-0">
+        <motion.div variants={sectionReveal} className="hidden lg:flex flex-col shrink-0">
           <motion.div
             className="flex flex-col items-center gap-1 py-4 h-full overflow-y-auto no-scrollbar border-r border-border bg-card/70 backdrop-blur-xl"
             initial={{ x: -20, opacity: 0 }}
@@ -949,10 +981,10 @@ export function POS() {
               })}
             </motion.div>
           </motion.div>
-        </div>
+        </motion.div>
 
         {/* ─── Category Sidebar (Mobile) ─── */}
-        <div className="flex lg:hidden items-center gap-2 p-2 overflow-x-auto no-scrollbar border-b border-border bg-card/70">
+        <motion.div variants={sectionReveal} className="flex lg:hidden items-center gap-2 p-2 overflow-x-auto no-scrollbar border-b border-border bg-card/70">
           <button onClick={() => { setSelectedCat('all'); }}
             className={`flex flex-col items-center gap-1 shrink-0 px-2 ${selectedCat === 'all' ? 'opacity-100' : 'opacity-60 hover:opacity-100'} transition-all duration-200`}>
             <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${selectedCat === 'all' ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'bg-muted text-foreground'}`}>
@@ -978,10 +1010,10 @@ export function POS() {
               </button>
             );
           })}
-        </div>
+        </motion.div>
 
         {/* ─── Menu Grid ─── */}
-        <section className="flex-1 p-4 lg:p-5 overflow-y-auto no-scrollbar">
+        <motion.div variants={sectionReveal} className="flex-1 p-4 lg:p-5 overflow-y-auto no-scrollbar">
           {/* ─── Header ─── */}
           <div className="mb-4 space-y-3">
             {/* Title row */}
@@ -1032,8 +1064,8 @@ export function POS() {
                              transition-all duration-200
                              placeholder:text-muted-foreground/40
                              focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 focus:bg-card focus:shadow-sm focus:shadow-emerald-500/5
-                             hover:border-emerald-300 dark:hover:border-emerald-700"
-                />
+                             hover:border-emerald-300 dark:hover:border-emerald-700              "/>
+
                 {/* Keyboard shortcut badge */}
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:flex items-center gap-1 rounded-md border border-border/60 bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/60 pointer-events-none">
                   <Keyboard className="h-2.5 w-2.5" />
@@ -1046,7 +1078,7 @@ export function POS() {
                 className="flex shrink-0 rounded-xl border border-border bg-card/50 p-0.5"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.13, type: 'spring' as const, stiffness: 400, damping: 28 }}
+                transition={{ delay: 0.1, type: 'spring' as const, stiffness: 400, damping: 28 }}
               >
                 <button
                   onClick={() => { setPosMode('tables'); setSelectedTableId(''); setEntityDropdownOpen(false); setEntitySearchQuery(''); }}
@@ -1078,7 +1110,7 @@ export function POS() {
                 className="relative shrink-0"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15, type: 'spring' as const, stiffness: 400, damping: 28 }}
+                transition={{ delay: 0.12, type: 'spring' as const, stiffness: 400, damping: 28 }}
               >
                 {/* Trigger chip */}
                 <button
@@ -1255,7 +1287,7 @@ export function POS() {
                 className="relative shrink-0"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2, type: 'spring' as const, stiffness: 400, damping: 28 }}
+                transition={{ delay: 0.14, type: 'spring' as const, stiffness: 400, damping: 28 }}
               >
                 <div className="flex items-center gap-0.5 h-10 rounded-xl border border-border bg-card/50
                                 transition-all duration-200
@@ -1285,15 +1317,41 @@ export function POS() {
             </div>
           </div>
 
-          <motion.div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3" variants={stagger} initial="hidden" animate="show" key={selectedCat}>
-            {availableItems.length === 0 && (
-              <div className="col-span-full flex flex-col items-center justify-center py-16 text-muted-foreground">
-                <ShoppingCart className="h-12 w-12 mb-3 text-muted-foreground/20" />
-                <p className="text-lg font-semibold mb-1">No menu items loaded</p>
-                <p className="text-sm">Add menu items in the Menu page, then set up your POS categories</p>
-              </div>
-            )}
-            {availableItems.map(item => {
+          {/* Menu grid with smooth crossfade between skeleton and content */}
+          <div className="relative grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3" key={selectedCat}>
+            {/* Skeleton layer — fades out when loading completes */}
+            <motion.div
+              className="col-span-full grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3"
+              animate={{ opacity: isMenuLoading ? 1 : 0 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              style={{ pointerEvents: isMenuLoading ? 'auto' : 'none', position: isMenuLoading ? 'relative' : 'absolute', inset: 0 }}
+            >
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="rounded-xl border border-border bg-card overflow-hidden">
+                  <div className="h-20 lg:h-24 bg-muted animate-pulse" />
+                  <div className="p-2.5 space-y-2">
+                    <div className="h-3 w-3/4 bg-muted animate-pulse rounded" />
+                    <div className="h-2 w-1/2 bg-muted animate-pulse rounded" />
+                  </div>
+                </div>
+              ))}
+            </motion.div>
+
+            {/* Content layer — fades in when data arrives */}
+            <motion.div
+              className="col-span-full grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3"
+              variants={stagger}
+              initial="hidden"
+              animate={isMenuLoading ? 'hidden' : 'show'}
+            >
+              {!isMenuLoading && availableItems.length === 0 ? (
+                <div className="col-span-full flex flex-col items-center justify-center py-16 text-muted-foreground">
+                  <ShoppingCart className="h-12 w-12 mb-3 text-muted-foreground/20" />
+                  <p className="text-lg font-semibold mb-1">No menu items loaded</p>
+                  <p className="text-sm">Add menu items in the Menu page, then set up your POS categories</p>
+                </div>
+              ) : null}
+              {!isMenuLoading && availableItems.map(item => {
               const inCart = cartItemIds.has(item.id);
               const qty = cartCountByItem[item.id] ?? 0;
               const justAdded = lastAdded === item.id;
@@ -1384,8 +1442,9 @@ export function POS() {
                 </motion.div>
               );
             })}
-          </motion.div>
-        </section>
+            </motion.div>
+          </div>
+        </motion.div>
 
         {/* ─── Cart Sidebar (Desktop) ─── */}
         <AnimatePresence mode="wait">
@@ -1542,7 +1601,7 @@ export function POS() {
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
+      </motion.div>
 
       {/* ─── Mobile Cart FAB ─── */}
       <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => setMobileCartOpen(true)}

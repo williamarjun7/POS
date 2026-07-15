@@ -3,6 +3,7 @@ import { useState, useCallback, useMemo } from 'react';
 type BookingMode = 'reserve' | 'book' | 'manage'
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../lib/core/auth-context';
+import { usePrefetchMenu } from '@/lib/api/menu.hooks';
 import { useNavigate } from 'react-router-dom';
 import { getDashboardReport, todayRange } from '../../lib/services/dashboard.service';
 import { dashboardKeys } from '../../lib/core/query-keys';
@@ -76,6 +77,9 @@ const TABLE_STATUS_COLORS: Record<string, string> = {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  // Prefetch menu data so POS opens instantly
+  usePrefetchMenu();
 
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [roomViewMode, setRoomViewMode] = useState<'grid' | 'list'>('grid');
