@@ -46,7 +46,7 @@ export type AppRole =
  *
  * Domains: users, branches, settings, finance, inventory, orders,
  *          menu, customers, suppliers, reports, operations,
- *          bookings, housekeeping, notifications, profile
+ *          bookings, housekeeping, profile
  *
  * Actions: manage, view, create, edit, delete, approve, export
  */
@@ -112,10 +112,6 @@ export type Permission =
   | 'housekeeping.manage' // Full housekeeping CRUD
   | 'housekeeping.view'   // View tasks
 
-  // ── Notifications ──
-  | 'notifications.view'  // View notifications
-  | 'notifications.manage' // Manage notifications
-
   // ── Print ──
   | 'print.manage'       // Manage print settings
   | 'print.execute'      // Execute print jobs
@@ -146,9 +142,7 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'reports.view', 'reports.export',
     'operations.manage', 'operations.view',
     'bookings.manage', 'bookings.create', 'bookings.cancel',
-    'housekeeping.manage', 'housekeeping.view',
-    'notifications.view', 'notifications.manage',
-    'print.manage', 'print.execute',
+    'housekeeping.manage', 'housekeeping.view',    'print.manage', 'print.execute',
     'profile.view', 'profile.edit',
   ],
   admin: [
@@ -165,9 +159,8 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'purchase_orders.manage', 'purchase_orders.create',
     'reports.view', 'reports.export',
     'operations.manage', 'operations.view',
-    'bookings.manage', 'bookings.create',    'bookings.cancel',
+    'bookings.manage', 'bookings.create', 'bookings.cancel',
     'housekeeping.manage', 'housekeeping.view',
-    'notifications.view', 'notifications.manage',
     'print.manage', 'print.execute',
     'profile.view', 'profile.edit',
   ],
@@ -187,7 +180,6 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'operations.manage', 'operations.view',
     'bookings.manage', 'bookings.create', 'bookings.cancel',
     'housekeeping.view',
-    'notifications.view', 'notifications.manage',
     'print.manage', 'print.execute',
     'profile.view', 'profile.edit',
   ],
@@ -197,21 +189,18 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'customers.view',
     'menu.view',
     'inventory.view',
-    'notifications.view',
     'print.execute',
     'profile.view', 'profile.edit',
   ],
   housekeeping: [
     'housekeeping.manage', 'housekeeping.view',
     'operations.view',
-    'notifications.view',
     'profile.view', 'profile.edit',
   ],
   receptionist: [
     'bookings.manage', 'bookings.create', 'bookings.cancel',
     'customers.manage', 'customers.view',
     'operations.view',
-    'notifications.view',
     'profile.view', 'profile.edit',
     'menu.view',
   ],
@@ -227,7 +216,6 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'reports.view',
     'operations.view',
     'housekeeping.view',
-    'notifications.view',
     'profile.view',
   ],
 }

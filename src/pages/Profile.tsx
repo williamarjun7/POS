@@ -2,7 +2,7 @@ import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
 import {
   User, Mail, Phone, Calendar, Shield, Eye, EyeOff, Save,
-  LogOut, Monitor, Smartphone, Globe, Clock, Lock, KeyRound, Bell,
+  LogOut, Monitor, Smartphone, Globe, Clock, Lock, KeyRound,
   Palette, Sun, Moon, Monitor as MonitorIcon, CheckCircle2, AlertCircle,
 } from "lucide-react"
 import { PageTransition } from "@/components/ui/PageTransition"
@@ -82,15 +82,6 @@ export function Profile() {
   const [timezone, setTimezone] = useState("UTC+5:45")
   const [dateFormat, setDateFormat] = useState("YYYY-MM-DD")
   const [currency, setCurrency] = useState("NPR")
-
-  // Notifications
-  const [pushNotifications, setPushNotifications] = useState(true)
-  const [emailAlerts, setEmailAlerts] = useState(true)
-  const [smsAlerts, setSmsAlerts] = useState(false)
-  const [orderNotifications, setOrderNotifications] = useState(true)
-  const [paymentNotifications, setPaymentNotifications] = useState(true)
-  const [inventoryAlerts, setInventoryAlerts] = useState(false)
-  const [maintenanceAlerts, setMaintenanceAlerts] = useState(true)
 
   // Appearance
   const [theme, setTheme] = useState<"light" | "dark" | "system">("system")
@@ -223,15 +214,10 @@ export function Profile() {
     showSuccess("Preferences saved successfully")
   }
 
-  const handleSaveNotifications = () => {
-    showSuccess("Notification preferences saved successfully")
-  }
-
   const tabs = [
     { id: "profile", label: "Profile" },
     { id: "security", label: "Security" },
     { id: "preferences", label: "Preferences" },
-    { id: "notifications", label: "Notifications" },
     { id: "appearance", label: "Appearance" },
   ]
 
@@ -615,47 +601,6 @@ export function Profile() {
                   <Button onClick={handleSavePreferences}>
                     <Save className="h-4 w-4" />
                     Save Preferences
-                  </Button>
-                </FormActions>
-              </motion.div>
-            )}
-
-            {/* Notifications Tab */}
-            {activeTab === "notifications" && (
-              <motion.div variants={pageTransitionFast} initial="hidden" animate="visible" className="rounded-xl border border-border bg-card p-6 space-y-6">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                    <Bell className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground">Notification Preferences</h3>
-                    <p className="text-sm text-muted-foreground">Choose how you want to be notified</p>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <h4 className="text-sm font-semibold text-foreground mb-3">Channels</h4>
-                  <div className="space-y-4">
-                    <FormToggle label="Push Notifications" description="Receive push notifications in your browser" checked={pushNotifications} onChange={setPushNotifications} />
-                    <FormToggle label="Email Alerts" description="Receive alerts via email" checked={emailAlerts} onChange={setEmailAlerts} />
-                    <FormToggle label="SMS Alerts" description="Receive alerts via SMS" checked={smsAlerts} onChange={setSmsAlerts} />
-                  </div>
-                </div>
-
-                <div className="border-t border-border pt-6 space-y-1">
-                  <h4 className="text-sm font-semibold text-foreground mb-3">Categories</h4>
-                  <div className="space-y-4">
-                    <FormToggle label="Order Notifications" description="Get notified about new and updated orders" checked={orderNotifications} onChange={setOrderNotifications} />
-                    <FormToggle label="Payment Notifications" description="Get notified about payment received and refunds" checked={paymentNotifications} onChange={setPaymentNotifications} />
-                    <FormToggle label="Inventory Alerts" description="Get notified when stock is low" checked={inventoryAlerts} onChange={setInventoryAlerts} />
-                    <FormToggle label="Maintenance Alerts" description="Get notified about system maintenance" checked={maintenanceAlerts} onChange={setMaintenanceAlerts} />
-                  </div>
-                </div>
-
-                <FormActions>
-                  <Button onClick={handleSaveNotifications}>
-                    <Save className="h-4 w-4" />
-                    Save Notification Preferences
                   </Button>
                 </FormActions>
               </motion.div>

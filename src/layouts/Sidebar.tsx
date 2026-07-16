@@ -40,7 +40,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     { label: "Analytics", icon: "BarChart3", href: "/analytics", permission: "reports.view" },
     { label: "Reports", icon: "FileText", href: "/reports", permission: "reports.view" },
     { label: "Administration", icon: "Settings", href: "/admin", permission: "users.manage" },
-    { label: "Notifications", icon: "Bell", href: "/notifications", permission: "notifications.view" },
     { label: "Profile", icon: "UserCheck", href: "/profile", permission: "profile.view" },
     { label: "Print Settings", icon: "Printer", href: "/print-settings", permission: "print.manage" },
     { label: "Room Types", icon: "BedDouble", href: "/room-types", permission: "operations.manage" },
@@ -56,7 +55,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     '/orders': badges.orders,
     '/operations': badges.operations,
     '/inventory': badges.inventory,
-    '/notifications': badges.notifications,
   }
 
   return (

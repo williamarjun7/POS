@@ -128,7 +128,6 @@ export type MaintenancePriority = "low" | "medium" | "high" | "urgent"
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked_in" | "completed"
 export type ExpenseCategory = "utilities" | "supplies" | "maintenance" | "staff" | "marketing" | "other"
 export type UserRole = "admin" | "manager" | "cashier" | "waiter" | "housekeeper" | "receptionist"
-export type NotificationType = "payment" | "inventory" | "reservation" | "system" | "order" | "maintenance"
 
 export interface DiningTable {
   id: string
@@ -256,16 +255,6 @@ export interface User {
   phone: string
   active: boolean
   lastLogin: string
-}
-
-export interface Notification {
-  id: string
-  type: NotificationType
-  title: string
-  message: string
-  timestamp: Date
-  read: boolean
-  actionUrl?: string
 }
 
 export interface HousekeepingTask {

@@ -52,7 +52,6 @@ const OperationalAnalytics = lazy(() => import('@/pages/OperationalAnalytics').t
 const Reports = lazy(() => import('@/pages/Reports').then(m => ({ default: m.Reports })))
 const Admin = lazy(() => import('@/pages/Admin').then(m => ({ default: m.Admin })))
 const PrintSettingsPage = lazy(() => import('@/pages/PrintSettings').then(m => ({ default: m.PrintSettingsPage })))
-const Notifications = lazy(() => import('@/pages/Notifications').then(m => ({ default: m.Notifications })))
 const Profile = lazy(() => import('@/pages/Profile').then(m => ({ default: m.Profile })))
 const Billing = lazy(() => import('@/pages/Billing').then(m => ({ default: m.Billing })))
 const NotFound = lazy(() => import('@/pages/NotFound').then(m => ({ default: m.NotFound })))
@@ -256,11 +255,6 @@ export default function App() {
                 <Route path="print-settings" element={
                   <AuthorizedRoute permission="print.manage" showAccessDenied>
                     <LazyRoute><PrintSettingsPage /></LazyRoute>
-                  </AuthorizedRoute>
-                } />
-                <Route path="notifications" element={
-                  <AuthorizedRoute permission="notifications.view" showAccessDenied>
-                    <LazyRoute><Notifications /></LazyRoute>
                   </AuthorizedRoute>
                 } />
                 <Route path="profile" element={

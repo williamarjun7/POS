@@ -293,7 +293,7 @@ export const tabContent = {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// TOASTS & NOTIFICATIONS
+// TOASTS
 // ═══════════════════════════════════════════════════════════════════
 
 export const toastEnter = {
@@ -310,22 +310,6 @@ export const slideInRight = {
     transition: { type: 'spring' as const, stiffness: 300, damping: 25 },
   },
   exit: { opacity: 0, x: 60, transition: { duration: 0.15 } },
-}
-
-export const notificationItem = {
-  hidden: { opacity: 0, x: -20, height: 0 },
-  visible: {
-    opacity: 1,
-    x: 0,
-    height: 'auto',
-    transition: { duration: 0.3, ease: easeOut },
-  },
-  exit: {
-    opacity: 0,
-    x: -20,
-    height: 0,
-    transition: { duration: 0.2, ease: easeIn },
-  },
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -467,7 +451,7 @@ export const accordionContent = {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// ICON BOUNCE (for notifications, alerts)
+// ICON BOUNCE
 // ═══════════════════════════════════════════════════════════════════
 
 export const iconBounce = {

@@ -1,0 +1,18 @@
+[auth]
+disable_signup = true
+require_email_verification = true
+verify_email_method = "code"
+reset_password_method = "code"
+
+[auth.password]
+min_length = 6
+require_number = false
+require_lowercase = false
+require_uppercase = false
+require_special_char = false
+
+[storage]
+max_file_size_mb = 50
+
+[schedules]
+retention_days = 7

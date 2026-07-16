@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react"
 import { useNavigate, useLocation } from "react-router-dom"
-import { Sun, Moon, Bell, LogOut, User, Settings } from "lucide-react"
+import { Sun, Moon, LogOut, User, Settings } from "lucide-react"
 import { useTheme } from "@/lib/core/theme-context"
 import { useAuth } from "@/lib/core/auth-context"
 import logo from "@/assets/logo.png"
@@ -37,7 +37,7 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
       { label: 'Inventory', href: '/inventory' }, { label: 'Suppliers', href: '/suppliers' },
       { label: 'Expenses', href: '/expenses' }, { label: 'Finance', href: '/finance' },
       { label: 'Analytics', href: '/analytics' }, { label: 'Reports', href: '/reports' },
-      { label: 'Administration', href: '/admin' }, { label: 'Notifications', href: '/notifications' },
+      { label: 'Administration', href: '/admin' },
       { label: 'Profile', href: '/profile' }, { label: 'Print Settings', href: '/print-settings' },
       { label: 'Room Types', href: '/room-types' },
     ]
@@ -79,13 +79,6 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
 
 
         <div className="ml-auto flex items-center gap-2">
-          <button className="relative flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-            <Bell className="h-5 w-5" />
-            <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
-              3
-            </span>
-          </button>
-
           <Button
             variant="ghost"
             size="icon"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, QrCode, RefreshCw, CheckCircle, Timer, Search, AlertCircle } from 'lucide-react'
+import QRCode from 'qrcode'
 import type { FonepayQRData } from '@/lib/services/fonepay-service'
 import {
   generateFonepayQR,
@@ -46,7 +47,7 @@ export function FonepayQRDialog({ amount, orderId, onSuccess, onCancel, customer
   useEffect(() => {
     const initQR = async () => {
       if (!isFonepayConfigured()) {
-        setErrorMessage('Fonepay is not configured. Please set VITE_FONEPAY_MERCHANT_CODE, VITE_FONEPAY_API_BASE_URL, and VITE_FONEPAY_SECRET_KEY in your environment.')
+        setErrorMessage('Fonepay is not configured. Please set VITE_FONEPAY_MERCHANT_CODE and VITE_FONEPAY_API_BASE_URL in your .env file.')
         setStatus('error')
         return
       }
@@ -58,8 +59,14 @@ export function FonepayQRDialog({ amount, orderId, onSuccess, onCancel, customer
           remarks1: customerName || 'POS Payment',
         })
         if (!cancelledRef.current) {
+          // Convert Fonepay QR payload string into a rendered QR code image
+          const qrImage = await QRCode.toDataURL(data.qrMessage, {
+            width: 320,
+            margin: 2,
+            color: { dark: '#000000', light: '#ffffff' },
+          })
           setQrData({
-            qrImage: data.qrMessage,
+            qrImage,
             paymentRefId: orderId || generatePRN(),
           })
           setStatus('displaying')
@@ -150,13 +157,19 @@ export function FonepayQRDialog({ amount, orderId, onSuccess, onCancel, customer
     }
 
     try {
-  const data = await generateFonepayQR({
+      const data = await generateFonepayQR({
         amount,
         prn: orderId || generatePRN(),
         remarks1: customerName || 'POS Payment',
       })
+      // Convert Fonepay QR payload string into a rendered QR code image
+      const qrImage = await QRCode.toDataURL(data.qrMessage, {
+        width: 320,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' },
+      })
       setQrData({
-        qrImage: data.qrMessage,
+        qrImage,
         paymentRefId: orderId || generatePRN(),
       })
     } catch (err) {

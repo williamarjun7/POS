@@ -372,19 +372,6 @@ export interface MaintenanceRequestRow {
   updated_at: string
 }
 
-// ─── Notifications ─────────────────────────────────────────
-
-export interface NotificationRow {
-  id: string
-  type: 'payment' | 'inventory' | 'reservation' | 'system' | 'order' | 'maintenance'
-  title: string
-  message: string
-  read: boolean
-  user_id: string | null
-  action_url: string | null
-  created_at: string
-}
-
 // ─── Activity Logs ─────────────────────────────────────────
 
 export interface ActivityLogRow {

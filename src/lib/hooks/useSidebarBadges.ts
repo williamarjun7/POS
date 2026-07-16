@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react'
 import { db } from '@/lib/db/insforge'
-import type { OrderBatchRow, MaintenanceRequestRow, InventoryItemRow, NotificationRow } from '@/lib/db/types'
+import type { OrderBatchRow, MaintenanceRequestRow, InventoryItemRow } from '@/lib/db/types'
 
 export interface SidebarBadges {
   orders: number
   operations: number
   inventory: number
-  notifications: number
 }
 
 export function useSidebarBadges() {
@@ -14,18 +13,16 @@ export function useSidebarBadges() {
     orders: 0,
     operations: 0,
     inventory: 0,
-    notifications: 0,
   })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchBadges = async () => {
       try {
-        const [ordersRes, maintRes, inventoryRes, notifsRes] = await Promise.all([
+        const [ordersRes, maintRes, inventoryRes] = await Promise.all([
           db.findMany<OrderBatchRow>('order_batches'),
           db.findMany<MaintenanceRequestRow>('maintenance_requests'),
           db.findMany<InventoryItemRow>('inventory_items'),
-          db.findMany<NotificationRow>('notifications'),
         ])
 
         setBadges({
@@ -41,8 +38,6 @@ export function useSidebarBadges() {
             inventoryRes.data?.filter(
               (i) => i.current_stock < i.min_stock
             ).length ?? 0,
-          notifications:
-            notifsRes.data?.filter((n) => !n.read).length ?? 0,
         })
       } catch {
         // Fail silently — badges stay at 0

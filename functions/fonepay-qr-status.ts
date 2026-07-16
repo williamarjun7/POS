@@ -29,11 +29,17 @@ export default async function (req: Request): Promise<Response> {
   try {
     const { prn } = await req.json();
 
-    const merchantCode = Deno.env.get('FONEPAY_MERCHANT_CODE')!;
-    const username = Deno.env.get('FONEPAY_USERNAME')!;
-    const password = Deno.env.get('FONEPAY_PASSWORD')!;
-    const secretKey = Deno.env.get('FONEPAY_SECRET_KEY')!;
-    const apiBase = Deno.env.get('FONEPAY_API_BASE_URL')!;
+    const merchantCode = Deno.env.get('FONEPAY_MERCHANT_CODE');
+    const username = Deno.env.get('FONEPAY_USERNAME');
+    const password = Deno.env.get('FONEPAY_PASSWORD');
+    const secretKey = Deno.env.get('FONEPAY_SECRET_KEY');
+    const apiBase = Deno.env.get('FONEPAY_API_BASE_URL');
+
+    if (!merchantCode) return json({ error: 'Missing Fonepay configuration: FONEPAY_MERCHANT_CODE' }, 500);
+    if (!username) return json({ error: 'Missing Fonepay configuration: FONEPAY_USERNAME' }, 500);
+    if (!password) return json({ error: 'Missing Fonepay configuration: FONEPAY_PASSWORD' }, 500);
+    if (!secretKey) return json({ error: 'Missing Fonepay configuration: FONEPAY_SECRET_KEY' }, 500);
+    if (!apiBase) return json({ error: 'Missing Fonepay configuration: FONEPAY_API_BASE_URL' }, 500);
 
     const dataValidation = await hmacSHA512(secretKey, `${prn},${merchantCode}`);
 

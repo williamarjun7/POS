@@ -35,7 +35,6 @@ export {
   tabIndicator,
   // toasts
   toastEnter,
-  notificationItem,
   // content
   contentReveal,
   emptyStateEnter,

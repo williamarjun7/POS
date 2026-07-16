@@ -47,7 +47,6 @@ export type {
   SupplierPaymentRow,
   HousekeepingTaskRow,
   MaintenanceRequestRow,
-  NotificationRow,
   ActivityLogRow,
   PrintSettingsRow,
   BusinessSettingsRow,
