@@ -266,7 +266,10 @@ export function Finance() {
       }
       return <PaymentMethodBadge method={r.paymentMethod} size="sm" />
     } },
-    { key: "createdAt", header: "Date" },
+    { key: "createdAt", header: "Date", render: (r) => {
+      const d = new Date(r.createdAt)
+      return <span className="text-sm text-muted-foreground whitespace-nowrap">{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+    } },
     { key: "actions", header: "", render: () => <button className="rounded-lg p-1.5 hover:bg-muted"><MoreHorizontal className="h-4 w-4 text-muted-foreground" /></button> },
   ]
 
@@ -491,7 +494,7 @@ export function Finance() {
 
             <motion.div variants={pageTransitionFast}>
               <SectionCard title="Recent Transactions" icon="Receipt" iconColor="text-info" index={3}>
-                <DataTable columns={invoiceColumns.slice(0, 9)} data={invoices.slice(0, 10)} searchable searchKey="customer" />
+                <DataTable columns={invoiceColumns.slice(0, 10)} data={invoices.slice(0, 10)} searchable searchKey="customer" />
               </SectionCard>
             </motion.div>
           </motion.div>
