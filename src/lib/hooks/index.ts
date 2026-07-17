@@ -89,6 +89,10 @@ const batchKeys = {
 /**
  * Fetch all order batches and their items for a specific table.
  * Used to restore previous orders when selecting an occupied table.
+ *
+ * NOTE: This now filters out cancelled batches on the server side to match
+ * the behavior of fetchDashboardTables() — cancelled batches must not
+ * contribute to running totals or be displayed as active Previous Batches.
  */
 export function useTableBatches(tableId: string | null) {
   return useQuery<FrontendOrderBatch[]>({
@@ -96,6 +100,7 @@ export function useTableBatches(tableId: string | null) {
     queryFn: async () => {
       if (!tableId) return []
 
+      // Only fetch non-paid, non-cancelled batches — matches Dashboard logic
       const { data: batchRows, error: batchError } = await db.findMany<OrderBatchRow>(
         'order_batches',
         { table_id: tableId },
@@ -105,8 +110,12 @@ export function useTableBatches(tableId: string | null) {
       if (batchError) throw batchError
       if (!batchRows || batchRows.length === 0) return []
 
+      // Filter out cancelled batches server-side to match Dashboard behavior
+      const activeBatches = batchRows.filter(b => b.status !== 'cancelled' && b.status !== 'paid')
+      if (activeBatches.length === 0) return []
+
       // Fetch all items for these batches, filtered server-side via .in()
-      const batchIds = batchRows.map(b => b.id)
+      const batchIds = activeBatches.map(b => b.id)
 
       const { data: allItems, error: itemsError } = await insforge.database
         .from('order_batch_items')
@@ -123,7 +132,7 @@ export function useTableBatches(tableId: string | null) {
         itemsByBatch.set(item.batch_id, existing)
       }
 
-      return batchRows.map(batch =>
+      return activeBatches.map(batch =>
         rowToFrontendBatch(batch, itemsByBatch.get(batch.id) ?? []),
       )
     },

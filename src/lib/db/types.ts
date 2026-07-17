@@ -163,7 +163,9 @@ export interface OrderBatchItemRow {
   quantity: number
   unit_price: number
   notes: string
-  status: 'pending' | 'paid' | 'credit' | 'cancelled'
+  status: 'pending' | 'paid' | 'credit' | 'cancelled' | 'voided'
+  voided_at: string | null
+  voided_by: string | null
   created_at: string
 }
 

@@ -113,7 +113,7 @@ export async function fetchActiveTableSessions(): Promise<ActiveTableSession[]> 
     }>
 
     for (const item of items) {
-      if (item.status !== 'paid' && item.status !== 'credit' && item.status !== 'cancelled') {
+      if (item.status !== 'paid' && item.status !== 'credit' && item.status !== 'cancelled' && item.status !== 'voided') {
         const tableId = batchToTable.get(item.batch_id)
         if (tableId) {
           unpaidTotalByTable[tableId] = (unpaidTotalByTable[tableId] ?? 0) +

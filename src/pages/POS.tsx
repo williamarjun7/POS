@@ -5,10 +5,12 @@ import {
   Coffee, Egg, UtensilsCrossed, Wine, Search, X, Plus, Minus,
   User as UserIcon, Table2, ChevronLeft, ChevronRight, ShoppingCart,
   Grid3X3, ArrowLeft, Receipt, Trash2, Keyboard, Zap, Lock, ChevronDown, BedDouble,
+  MoreVertical, Ban,
 } from 'lucide-react';
 import { PageTransition } from '@/components/ui/PageTransition';
 import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
 import { showSuccess, showError } from '@/components/ui/toast';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RequirePermission } from '@/lib/core/PermissionGuards';
 import { recordCreditCharge } from '@/lib/services/customer-ledger';
 import { getNextInvoiceNumber } from '@/lib/services/sequence-service';
@@ -18,6 +20,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRateLimit } from '@/lib/hooks/useRateLimit'
 import { recordPaymentSafe } from '@/lib/services/payment-service';
 import { toPaymentMethodKey } from '@/lib/payment-methods';
+import { useAuth } from '@/lib/core/auth-context';
 import { logActivitySafe } from '@/lib/services/activity-log-service';
 import { insforge } from '@/lib/services/auth-service';
 import { insertInvoiceItems } from '@/lib/services/invoice-items-service';
@@ -26,6 +29,17 @@ import { deductStockForSoldItems } from '@/lib/services/inventory-service';
 import { db } from '@/lib/db/insforge';
 // TABLE_STATUS_LABELS/COLORS removed — inlined below
 import { formatCurrency } from '@/lib/utils';
+import {
+  calculateRunningTotal,
+  calculateTotalWithCart,
+  collectBillableItems,
+  hasBillableItems,
+  getBillableBatches,
+  isBatchBillable,
+  isItemBillable,
+  billableItemsTotal,
+  getVoidedSummary,
+} from '@/lib/services/order-calculation-service';
 
 import type { OrderBatch, OrderBatchItem, CartItemStatus, PaymentMethod } from '@/types';
 import type { MenuItem } from '@/types';
@@ -38,7 +52,7 @@ interface CartLine {
   quantity: number;
   unit_price: number;
   notes: string;
-  status: 'pending';
+  status: 'pending' | 'voided';
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -142,6 +156,8 @@ export function POS() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [lastAdded, setLastAdded] = useState<string | null>(null);
+  const [contextMenuItem, setContextMenuItem] = useState<string | null>(null);
+  const [voidConfirm, setVoidConfirm] = useState<{ type: 'batch'; batchId: string; itemId: string; itemName: string } | { type: 'cart'; menuItemId: string; itemName: string } | null>(null);
   const [orderBatches, setOrderBatches] = useState<Record<string, OrderBatch[]>>({});
 
   const [posMode, setPosMode] = useState<'tables' | 'rooms'>('tables');
@@ -149,6 +165,9 @@ export function POS() {
   const [entitySearchQuery, setEntitySearchQuery] = useState('');
   const entityDropdownRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // ─── Auth ─────────────────────────────────────────
+  const { user } = useAuth();
 
   // ─── Live data from database ──────────────────────
   const { data: categories, isLoading: categoriesLoading } = useMenuCategories();
@@ -253,7 +272,7 @@ export function POS() {
   // ─── Cart computations ─────────────────────────────
   const cartItemIds = useMemo(() => new Set(newCartItems.map(c => c.menu_item_id)), [newCartItems]);
   const cartCountByItem = useMemo(() => 
-    newCartItems.reduce((acc, c) => { acc[c.menu_item_id] = (acc[c.menu_item_id] ?? 0) + c.quantity; return acc; }, {} as Record<string, number>),
+    newCartItems.reduce((acc, c) => { if (c.status !== 'voided') acc[c.menu_item_id] = (acc[c.menu_item_id] ?? 0) + c.quantity; return acc; }, {} as Record<string, number>),
     [newCartItems]
   );
   const cartCountByCategory = useMemo(() =>
@@ -264,8 +283,8 @@ export function POS() {
     }, {} as Record<string, number>),
     [cartCountByItem, categoriesList, menuItemsList]
   );
-  const totalNewCartItems = useMemo(() => newCartItems.reduce((s, l) => s + l.quantity, 0), [newCartItems]);
-  const newSubtotal = useMemo(() => newCartItems.reduce((s, l) => s + l.unit_price * l.quantity, 0), [newCartItems]);
+  const totalNewCartItems = useMemo(() => newCartItems.reduce((s, l) => l.status === 'voided' ? s : s + l.quantity, 0), [newCartItems]);
+  const newSubtotal = useMemo(() => newCartItems.reduce((s, l) => l.status === 'voided' ? s : s + l.unit_price * l.quantity, 0), [newCartItems]);
 
   const selectedEntity = posMode === 'tables' ? tables : rooms;
   const selectedTableInfo = selectedEntity.find((t: any) => t.id === selectedTableId);
@@ -282,6 +301,92 @@ export function POS() {
       return number.toLowerCase().includes(q) || status.toLowerCase().includes(q);
     });
   }, [selectedEntity, entitySearchQuery, posMode]);
+
+  // ─── Context menu click-outside ────────────────
+  useEffect(() => {
+    if (!contextMenuItem) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if the click is inside any visible context menu (data attribute on the dropdown wrapper)
+      if (!target.closest('[data-context-menu="true"]')) {
+        setContextMenuItem(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [contextMenuItem]);
+
+  // ─── Void item from batch (already submitted to DB) ───
+  async function voidBatchItem(batchId: string, itemId: string) {
+    try {
+      await insforge.database
+        .from('order_batch_items')
+        .update({
+          status: 'voided',
+          voided_at: new Date().toISOString(),
+          voided_by: user?.id ?? null,
+        })
+        .eq('id', itemId);
+
+      // Update local state — mark item as voided AND recalculate batch subtotal
+      // Uses centralized billableItemsTotal for single source of truth
+      setOrderBatches(prev => {
+        const batches = prev[selectedTableId];
+        if (!batches) return prev;
+        const updatedBatches = batches.map(batch => {
+          if (batch.id !== batchId) return batch
+          const updatedItems = batch.items.map(item =>
+            item.id === itemId
+              ? { ...item, status: 'voided' as CartItemStatus }
+              : item
+          )
+          // Use centralized calculation service
+          const newSubtotal = billableItemsTotal(updatedItems)
+          return { ...batch, items: updatedItems, subtotal: newSubtotal }
+        });
+        return { ...prev, [selectedTableId]: updatedBatches };
+      });
+
+      logActivitySafe({
+        activityType: 'order_created',
+        entityId: batchId,
+        entityLabel: `Item voided`,
+        status: 'completed',
+        details: `Voided item ${itemId.slice(0, 8)} in batch ${batchId.slice(0, 8)}`,
+      });
+
+      // Invalidate ALL related caches so every page stays in sync
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['batches'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'rooms'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'pendingInvoices'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['analytics'] }),
+        queryClient.invalidateQueries({ queryKey: ['finance'] }),
+      ]);
+
+      showSuccess('Item voided successfully');
+    } catch (err) {
+      showError('Failed to void item');
+    }
+  }
+
+  // ─── Void item from cart (not yet submitted to DB) ───
+  function voidCartItem(menuItemId: string) {
+    setNewCartItems(prev => prev.map(l =>
+      l.menu_item_id === menuItemId ? { ...l, status: 'voided' as const } : l
+    ));
+    logActivitySafe({
+      activityType: 'order_created',
+      entityId: menuItemId,
+      entityLabel: `Cart item voided`,
+      status: 'completed',
+      details: `Voided cart item ${menuItemId.slice(0, 8)}`,
+    });
+    showSuccess('Item voided');
+  }
 
   // ─── Cart functions ────────────────────────────────
   function addToCart(item: MenuItem) {
@@ -393,27 +498,27 @@ export function POS() {
 
   // ─── Previous batches for selected table ─────────
   const tableBatches = selectedTableId ? (orderBatches[selectedTableId] || []) : [];
-  // ─── Filter for display: only show batches with unpaid items ───
+  // ─── Filter for display: only show billable batches ───
   // This ensures that after full payment, the Previous Batches section
   // disappears and the table looks like a fresh start.
-  // tableBatches is still used for payment logic (needs all batches).
   const activePreviousBatches = useMemo(
-    () => tableBatches.filter(b =>
-      b.items.some(i => i.status !== 'paid' && i.status !== 'credit' && i.status !== 'cancelled')
-    ),
+    () => getBillableBatches(tableBatches).filter(b => hasBillableItems([b])),
     [tableBatches]
   );
 
-  // ─── Running total across ALL batches (previous + current cart) ─
+  // ─── Running total across ALL billable batches (previous + current cart) ─
+  // Uses shared calculation service — single source of truth.
   const unpaidPreviousTotal = useMemo(
-    () => tableBatches.reduce((sum, batch) =>
-      sum + batch.items
-        .filter(bi => bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled')
-        .reduce((s, bi) => s + bi.unit_price * bi.quantity, 0),
-    0),
+    () => calculateRunningTotal(tableBatches),
     [tableBatches],
   );
-  const totalRunning = unpaidPreviousTotal + newSubtotal;
+  const totalRunning = calculateTotalWithCart(tableBatches, newSubtotal);
+
+  // ─── Voided items summary for reporting ───
+  const voidedSummary = useMemo(
+    () => getVoidedSummary(tableBatches),
+    [tableBatches],
+  );
 
   // ─── Compute all unpaid items across batches + cart ─
   const allUnpaidItemsForPayment = useMemo(() => {
@@ -426,9 +531,10 @@ export function POS() {
       batch_id?: string;
     }> = [];
 
-    for (const batch of tableBatches) {
+    const billableBatches = getBillableBatches(tableBatches);
+    for (const batch of billableBatches) {
       for (const bi of batch.items) {
-        if (bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled') {
+        if (isItemBillable(bi)) {
           items.push({
             id: bi.id,
             item_name: bi.name,
@@ -442,6 +548,7 @@ export function POS() {
     }
 
     for (const ci of newCartItems) {
+      if (ci.status === 'voided') continue;
       const key = `cart-${ci.menu_item_id}`;
       items.push({
         id: key,
@@ -517,14 +624,14 @@ export function POS() {
 
     // 1. Build invoice items from cart and previous batches
     const invoiceItemsList = [
-      ...(newCartItems.map(item => ({
+      ...(newCartItems.filter(item => item.status !== 'voided').map(item => ({
         name: item.name,
         quantity: item.quantity,
         unitPrice: item.unit_price,
       }))),
-      ...(tableBatches.flatMap(b =>
+      ...(getBillableBatches(tableBatches).flatMap(b =>
         b.items
-          .filter(bi => bi.status !== 'paid' && bi.status !== 'credit' && bi.status !== 'cancelled')
+          .filter(isItemBillable)
           .map(bi => ({
             name: bi.name,
             quantity: bi.quantity,
@@ -678,10 +785,11 @@ export function POS() {
             const hasPaidItemInThisBatch = batch.items.some(bi => paidItemIds.has(bi.id));
             if (!hasPaidItemInThisBatch) continue;
 
+            const settledStatuses = ['paid' as const, 'credit' as const, 'cancelled' as const, 'voided' as const];
             const allSettled = batch.items.every(bi =>
               paidItemIds.has(bi.id)
                 ? true  // being paid now
-                : bi.status === 'paid' || bi.status === 'credit' || bi.status === 'cancelled'
+                : (settledStatuses as string[]).includes(bi.status)
             );
             const somePaid = batch.items.some(bi =>
               paidItemIds.has(bi.id) || bi.status === 'paid' || bi.status === 'credit'
@@ -742,7 +850,7 @@ export function POS() {
           }
           return bi;
         });
-        const settledStatuses: CartItemStatus[] = ['paid', 'credit', 'cancelled'];
+        const settledStatuses: CartItemStatus[] = ['paid', 'credit', 'cancelled', 'voided'];
         const allSettled = updatedItems.every(i => settledStatuses.includes(i.status));
         const somePaid = updatedItems.some(i => i.status === 'paid' || i.status === 'credit');
         const paidAmount = updatedItems.filter(i => i.status === 'paid' || i.status === 'credit').reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
@@ -827,14 +935,16 @@ export function POS() {
 
   async function handlePlaceOrder() {
     if (newCartItems.length === 0 || !selectedTableId) return;
+    const activeCartItems = newCartItems.filter(l => l.status !== 'voided');
+    if (activeCartItems.length === 0) { showError('No active items to place - all items have been voided.'); return; }
     // Rate limit — prevent rapid duplicate order submissions
     if (!checkOrderLimit()) return;
 
     const batchId = crypto.randomUUID();
-    const batchItems: OrderBatchItem[] = newCartItems.map((item) => ({
+    const batchItems: OrderBatchItem[] = activeCartItems.map((item) => ({
       id: crypto.randomUUID(), menu_item_id: item.menu_item_id, name: item.name, quantity: item.quantity, unit_price: item.unit_price, notes: item.notes, status: 'pending' as CartItemStatus, batch_id: batchId,
     }));
-    const newSubtotalForThisBatch = newCartItems.reduce((s, l) => s + l.unit_price * l.quantity, 0);
+    const newSubtotalForThisBatch = activeCartItems.reduce((s, l) => s + l.unit_price * l.quantity, 0);
     const batch: OrderBatch = { id: batchId, table_id: selectedTableId, customer_name: customerName || undefined, items: batchItems, status: 'pending', created_at: new Date().toISOString(), is_locked: true, subtotal: newSubtotalForThisBatch, paid_amount: 0 };
 
     try {
@@ -1501,11 +1611,26 @@ export function POS() {
                         {/* Items for this batch */}
                         <div className="space-y-0.5 mb-1.5">
                           {batch.items.map(item => {
-                            const isSettled = item.status === 'paid' || item.status === 'credit' || item.status === 'cancelled';
+                            const isSettled = item.status === 'paid' || item.status === 'credit' || item.status === 'cancelled' || item.status === 'voided';
                             return (
-                              <div key={item.id} className={`flex items-center justify-between text-xs transition-all duration-200 ${isSettled ? 'line-through text-muted-foreground/40' : 'text-muted-foreground'}`}>
-                                <span className={`truncate ${isSettled ? 'line-through' : ''}`}>{item.name} × {item.quantity}</span>
-                                <span className={`tabular-nums ml-2 ${isSettled ? 'line-through' : ''}`}>{npr(item.unit_price * item.quantity)}</span>
+                              <div key={item.id} className={`flex items-center justify-between text-xs transition-all duration-200 ${isSettled ? 'text-muted-foreground/30' : 'text-muted-foreground'}`}>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  {item.status === 'voided' && (
+                                    <span className="shrink-0 inline-flex items-center rounded bg-red-100 dark:bg-red-950/30 px-1 py-0.5 text-[9px] font-bold text-red-600 dark:text-red-400 uppercase leading-none">VOIDED</span>
+                                  )}
+                                  <span className={`truncate ${isSettled ? 'line-through text-muted-foreground/30' : ''}`}>{item.name} × {item.quantity}</span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className={`tabular-nums ${isSettled ? 'line-through text-muted-foreground/30' : ''}`}>{npr(item.unit_price * item.quantity)}</span>
+                                  {!isSettled && (
+                                    <button
+                                      onClick={() => setVoidConfirm({ type: 'batch', batchId: batch.id, itemId: item.id, itemName: `${item.name} ×${item.quantity}` })}
+                                      className="text-[10px] font-semibold text-red-500/60 hover:text-red-600 dark:hover:text-red-400 px-1.5 py-0.5 rounded-full hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                                    >
+                                      Void
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             );
                           })}
@@ -1518,20 +1643,41 @@ export function POS() {
                     ))}
                   </div>
                 )}
-              <div className="mb-2">
-                    <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2">Current Order</p>
+              <div className="mb-2">                     <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2">Current Order</p>
                     {newCartItems.length > 0 ? (<motion.div layout className="space-y-2">{newCartItems.map(line => (
                       <motion.div key={line.menu_item_id} className="flex items-start gap-3 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 hover:bg-muted/30 transition-colors" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20, height: 0, marginBottom: 0, padding: 0 }}>
                         <motion.div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 dark:text-emerald-400 shrink-0" key={line.quantity} initial={{ scale: 1.3 }} animate={{ scale: 1 }}>{line.quantity}</motion.div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between"><span className="text-sm font-medium truncate">{line.name}</span><span className="text-sm font-medium tabular-nums ml-2">{npr(line.unit_price * line.quantity)}</span></div>
-                          <div className="flex items-center gap-1.5 mt-1.5">
-                            <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
-                            <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
-                            <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></motion.button>
-                            <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />
-                            <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></motion.button>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium truncate">{line.name}</span>
+                            <div className="flex items-center gap-2">
+                              {line.status === 'voided' && (
+                                <span className="inline-flex items-center gap-0.5 rounded-md bg-red-100 dark:bg-red-950/30 px-1.5 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase">VOID</span>
+                              )}
+                              <span className="text-sm font-medium tabular-nums">{npr(line.unit_price * line.quantity)}</span>
+                            </div>
                           </div>
+                          {line.status === 'voided' ? (
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              <span className="text-[11px] text-red-500/70 dark:text-red-400/70 italic">🚫 Voided</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 mt-1.5">
+                              <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
+                              <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
+                              <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></motion.button>
+                              <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => setVoidConfirm({ type: 'cart', menuItemId: line.menu_item_id, itemName: `${line.name} ×${line.quantity}` })}
+                                  className="shrink-0 text-[11px] font-semibold text-red-500/60 hover:text-red-600 dark:hover:text-red-400 px-2 py-1 rounded-full hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                                >
+                                  Void
+                                </button>
+                                <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></motion.button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </motion.div>
                     ))}</motion.div>
@@ -1557,6 +1703,12 @@ export function POS() {
                     <span className="text-sm text-muted-foreground">{unpaidPreviousTotal > 0 ? 'Current batch' : 'Subtotal'}</span>
                     <span className="text-sm font-semibold tabular-nums">{npr(newSubtotal)}</span>
                   </div>
+                  {voidedSummary.count > 0 && (
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[10px] font-medium text-red-500/60 dark:text-red-400/60">Voided Items: {voidedSummary.count}</span>
+                      <span className="text-[10px] font-medium tabular-nums text-red-500/60 dark:text-red-400/60 line-through">{npr(voidedSummary.amount)}</span>
+                    </div>
+                  )}
                   {totalRunning > 0 && (
                     <div className="flex items-center justify-between border-t border-border pt-1.5 mt-1">
                       <span className="text-xs font-bold uppercase text-foreground">Running Total</span>
@@ -1645,11 +1797,26 @@ export function POS() {
                       </div>
                       <div className="space-y-0.5 mb-1.5">
                         {batch.items.map(item => {
-                          const isSettled = item.status === 'paid' || item.status === 'credit' || item.status === 'cancelled';
+                          const isSettled = item.status === 'paid' || item.status === 'credit' || item.status === 'cancelled' || item.status === 'voided';
                           return (
-                            <div key={item.id} className={`flex items-center justify-between text-xs transition-all duration-200 ${isSettled ? 'line-through text-muted-foreground/40' : 'text-muted-foreground'}`}>
-                              <span className={`truncate ${isSettled ? 'line-through' : ''}`}>{item.name} × {item.quantity}</span>
-                              <span className={`tabular-nums ml-2 ${isSettled ? 'line-through' : ''}`}>{npr(item.unit_price * item.quantity)}</span>
+                            <div key={item.id} className={`flex items-center justify-between text-xs transition-all duration-200 ${isSettled ? 'text-muted-foreground/30' : 'text-muted-foreground'}`}>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                {item.status === 'voided' && (
+                                  <span className="shrink-0 inline-flex items-center rounded bg-red-100 dark:bg-red-950/30 px-1 py-0.5 text-[9px] font-bold text-red-600 dark:text-red-400 uppercase leading-none">VOIDED</span>
+                                )}
+                                <span className={`truncate ${isSettled ? 'line-through text-muted-foreground/30' : ''}`}>{item.name} × {item.quantity}</span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className={`tabular-nums ${isSettled ? 'line-through text-muted-foreground/30' : ''}`}>{npr(item.unit_price * item.quantity)}</span>
+                                {!isSettled && (
+                                  <button
+                                    onClick={() => setVoidConfirm({ type: 'batch', batchId: batch.id, itemId: item.id, itemName: `${item.name} ×${item.quantity}` })}
+                                    className="text-[10px] font-semibold text-red-500/60 hover:text-red-600 dark:hover:text-red-400 px-1.5 py-0.5 rounded-full hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                                  >
+                                    Void
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -1667,14 +1834,35 @@ export function POS() {
                   {newCartItems.map(line => (<motion.div key={line.menu_item_id} className="flex items-start gap-3 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 hover:bg-muted/30 transition-colors" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
                     <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 shrink-0">{line.quantity}</div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between"><span className="text-sm font-medium truncate">{line.name}</span><span className="text-sm font-medium tabular-nums ml-2">{npr(line.unit_price * line.quantity)}</span></div>
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <button onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></button>
-                        <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
-                        <button onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></button>
-                        <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />
-                        <button onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></button>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium truncate">{line.name}</span>
+                        <div className="flex items-center gap-2">
+                          {line.status === 'voided' && (
+                            <span className="inline-flex items-center gap-0.5 rounded-md bg-red-100 dark:bg-red-950/30 px-1.5 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase">VOID</span>
+                          )}
+                          <span className="text-sm font-medium tabular-nums">{npr(line.unit_price * line.quantity)}</span>
+                        </div>
                       </div>
+                      {line.status === 'voided' ? (
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <span className="text-[11px] text-red-500/70 dark:text-red-400/70 italic">🚫 Voided</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <button onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></button>
+                          <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
+                          <button onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></button>
+                          <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />                           <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => setVoidConfirm({ type: 'cart', menuItemId: line.menu_item_id, itemName: `${line.name} ×${line.quantity}` })}
+                                className="shrink-0 text-[11px] font-semibold text-red-500/60 hover:text-red-600 dark:hover:text-red-400 px-2 py-1 rounded-full hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                              >
+                                Void
+                              </button>
+                              <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></motion.button>
+                            </div>
+                        </div>
+                      )}
                     </div>
                   </motion.div>))}
                 </motion.div>
@@ -1737,6 +1925,66 @@ export function POS() {
           </motion.div>
         </motion.div>
       )}</AnimatePresence>
-    </PageTransition>
+    
+      {/* ─── Void confirmation dialog ─── */}
+      <AnimatePresence>
+        {voidConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/50"
+              onClick={() => setVoidConfirm(null)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              className="relative bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full"
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 p-2.5 rounded-full bg-red-100 dark:bg-red-950/30">
+                  <Ban className="h-5 w-5 text-red-600 dark:text-red-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold">Void Item</h3>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Are you sure you want to void &ldquo;{voidConfirm.itemName}&rdquo;?
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => setVoidConfirm(null)}
+                  className="px-5 py-2.5 text-sm font-medium text-muted-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (voidConfirm.type === 'batch') {
+                      voidBatchItem(voidConfirm.batchId, voidConfirm.itemId);
+                    } else {
+                      voidCartItem(voidConfirm.menuItemId);
+                    }
+                    setVoidConfirm(null);
+                  }}
+                  className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+                >
+                  Void Item
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+</PageTransition>
   );
 }

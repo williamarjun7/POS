@@ -93,7 +93,7 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
     }>
 
     for (const item of items) {
-      if (item.status !== 'paid' && item.status !== 'credit' && item.status !== 'cancelled') {
+      if (item.status !== 'paid' && item.status !== 'credit' && item.status !== 'cancelled' && item.status !== 'voided') {
         const tableId = batchToTable.get(item.batch_id)
         if (tableId) {
           unpaidItemTotalByTable[tableId] = (unpaidItemTotalByTable[tableId] ?? 0) +
@@ -403,10 +403,31 @@ export async function updateRoomStatus(params: {
 }
 
 /**
- * Release all tables: cancel all active order batches and reset every
- * restaurant table back to 'available'.
+ * Release all tables: cancel all active order batches, mark all items as cancelled,
+ * and reset every restaurant table back to 'available'.
  */
 export async function releaseAllTables(): Promise<{ success: boolean }> {
+  // First, find all batch IDs that will be cancelled so we can update their items
+  const { data: cancelBatches } = await insforge.database
+    .from('order_batches')
+    .select('id')
+    .in('status', ['pending', 'partial'])
+    .is('room_id', null)
+
+  const batchIds = (cancelBatches ?? []).map(b => (b as { id: string }).id)
+
+  if (batchIds.length > 0) {
+    // Mark all pending items in these batches as cancelled
+    const { error: itemError } = await insforge.database
+      .from('order_batch_items')
+      .update({ status: 'cancelled' })
+      .in('batch_id', batchIds)
+      .in('status', ['pending'])
+
+    if (itemError) throw itemError
+  }
+
+  // Cancel the batches themselves
   const { error: batchError } = await insforge.database
     .from('order_batches')
     .update({ status: 'cancelled' })
@@ -415,6 +436,7 @@ export async function releaseAllTables(): Promise<{ success: boolean }> {
 
   if (batchError) throw batchError
 
+  // Reset tables to available
   const { error: tableError } = await insforge.database
     .from('restaurant_tables')
     .update({ status: 'available' })

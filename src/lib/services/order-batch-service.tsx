@@ -113,6 +113,19 @@ async function updateOrderBatchStatusInDb(id: string, status: OrderBatchStatus):
     .eq('id', safe.id);
 
   if (error) throw error;
+
+  // When cancelling a batch, also mark all its items as 'cancelled' for data integrity.
+  // This ensures that even if cached data still references the cancelled batch,
+  // item-level calculations won't include these items.
+  if (safe.status === 'cancelled') {
+    const { error: itemError } = await insforge.database
+      .from('order_batch_items')
+      .update({ status: 'cancelled' })
+      .eq('batch_id', safe.id)
+      .in('status', ['pending']);  // Only update items that haven't been paid yet
+
+    if (itemError) throw itemError;
+  }
 }
 
 /* ─── React Hook ────────────────────────────────────────────── */

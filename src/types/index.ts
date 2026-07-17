@@ -425,11 +425,11 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
-  status: 'pending' | 'paid' | 'cancelled';
+  status: 'pending' | 'paid' | 'cancelled' | 'voided';
 }
 
 // ─── Order Batch System ─────────────────────────────────────
-export type CartItemStatus = 'pending' | 'paid' | 'credit' | 'cancelled'
+export type CartItemStatus = 'pending' | 'paid' | 'credit' | 'cancelled' | 'voided'
 
 export interface OrderBatchItem {
   id: string;

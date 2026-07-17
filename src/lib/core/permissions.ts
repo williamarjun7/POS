@@ -73,6 +73,7 @@ export type Permission =
   | 'orders.view'        // View order history
   | 'payments.receive'   // Receive payments
   | 'payments.refund'    // Process refunds
+  | 'payments.void'      // Void items before payment
   | 'payments.view'      // View payment history
 
   // ── Inventory ──
@@ -133,7 +134,7 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'finance.manage', 'finance.view', 'finance.export',
     'expenses.manage', 'expenses.create', 'reconciliation.create',
     'orders.create', 'orders.manage', 'orders.view',
-    'payments.receive', 'payments.refund', 'payments.view',
+    'payments.receive', 'payments.refund', 'payments.void', 'payments.view',
     'inventory.manage', 'inventory.view', 'inventory.adjust',
     'menu.manage', 'menu.view',
     'customers.manage', 'customers.view', 'customers.credit',
@@ -151,7 +152,7 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'finance.manage', 'finance.view', 'finance.export',
     'expenses.manage', 'expenses.create', 'reconciliation.create',
     'orders.create', 'orders.manage', 'orders.view',
-    'payments.receive', 'payments.refund', 'payments.view',
+    'payments.receive', 'payments.refund', 'payments.void', 'payments.view',
     'inventory.manage', 'inventory.view', 'inventory.adjust',
     'menu.manage', 'menu.view',
     'customers.manage', 'customers.view', 'customers.credit',

@@ -19,7 +19,7 @@ import type { Order, OrderItem, OrderStatus, SalesChannel } from "@/types"
 import {
   MoreHorizontal, Trash2, XCircle, RefreshCw, Download,
   Clock, Filter, Eye, Package, User,
-  MapPin, CreditCard, Receipt, ArrowUpDown, Banknote
+  MapPin, CreditCard, Receipt, ArrowUpDown, Banknote, Ban
 } from "lucide-react"
 import { pageTransitionFast, staggerContainerFast } from "@/lib/animations/presets"
 
@@ -416,6 +416,22 @@ export function Orders() {
         <span className="text-muted-foreground">{row.items.length} item{row.items.length !== 1 ? "s" : ""}</span>
       </div>
     )},
+    {
+      key: "voided", header: "Voided",
+      render: (row) => {
+        const voidedItems = (row.items as Array<any>).filter(
+          i => typeof i !== 'string' && i.status === 'voided'
+        )
+        const voidedCount = voidedItems.reduce((s: number, i: any) => s + (i.quantity || 1), 0)
+        if (voidedCount === 0) return <span className="text-muted-foreground/40">—</span>
+        return (
+          <div className="flex items-center gap-1.5">
+            <Ban className="h-3.5 w-3.5 text-red-500/60" />
+            <span className="font-medium text-red-600 dark:text-red-400">{voidedCount} voided</span>
+          </div>
+        )
+      },
+    },
     { key: "channel", header: "Channel", render: (row) => (
       <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium", channelColors[row.channel ?? 'dine_in'])}>
         {channelLabels[row.channel ?? 'dine_in']}

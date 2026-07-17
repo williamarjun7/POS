@@ -171,6 +171,26 @@ export default function DashboardPage() {
     staleTime: 30000,
   });
 
+  // ─── Voided items query — count and amount for today ───
+  const { data: voidedData } = useQuery({
+    queryKey: [...dashboardKeys.all, 'voided', todayRange().startDate],
+    queryFn: async () => {
+      const today = todayRange()
+      const { data, error } = await insforge.database
+        .from('order_batch_items')
+        .select('quantity, unit_price')
+        .eq('status', 'voided')
+        .gte('created_at', today.startDate)
+        .lte('created_at', today.endDate)
+      if (error) throw error
+      const items = (data ?? []) as Array<{ quantity: number; unit_price: number }>
+      const count = items.reduce((s, i) => s + i.quantity, 0)
+      const amount = items.reduce((s, i) => s + i.quantity * i.unit_price, 0)
+      return { count, amount }
+    },
+    staleTime: 30000,
+  })
+
   const expensesToday = report?.summary.expenses_today ?? 0;
   const paymentMethods = report?.payment_summary.payment_methods ?? [];
 
@@ -714,6 +734,9 @@ export default function DashboardPage() {
         </div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-2">
           <StatCard icon="Receipt" label="PARTIALLY PAID" value={`${report?.summary.partially_paid_count ?? 0}`} sublabel="Invoices awaiting balance" color="text-violet-600 dark:text-violet-400" iconBg="bg-violet-100 dark:bg-violet-900/30" className="border-l-4 border-l-violet-500" index={4} />
+        </div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-2">
+          <StatCard icon="Ban" label="VOIDED ITEMS" value={voidedData?.count != null ? `${voidedData.count} items` : '—'} sublabel={voidedData?.amount != null ? `Rs. ${voidedData.amount.toFixed(0)}` : 'Loading...'} color="text-red-600 dark:text-red-400" iconBg="bg-red-100 dark:bg-red-900/30" className="border-l-4 border-l-red-500" index={5} />
         </div>
       </div>
 

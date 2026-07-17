@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useState, useCallback } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { ThemeProvider } from '@/lib/core/theme-context'
-import { AuthProvider } from '@/lib/core/auth-context'
+import { AuthProvider, useAuth } from '@/lib/core/auth-context'
 import { PrintSettingsProvider } from '@/lib/services/print-settings'
 import { ToastProvider } from '@/components/ui/toast'
 import { DashboardLayout } from '@/layouts/DashboardLayout'
@@ -14,6 +14,9 @@ import { SessionTimeoutModal } from '@/components/SessionTimeoutModal'
 import { ScrollToTop } from '@/components/ScrollToTop'
 import { RouteTransition } from '@/components/RouteTransition'
 import { useSessionTimeout } from '@/lib/hooks/useSessionTimeout'
+import { useScreenLock } from '@/lib/hooks/useScreenLock'
+import { ScreenLock } from '@/components/ScreenLock'
+import { hasPin as hasStoredPin } from '@/lib/services/session-store'
 import { startRealtimePolling, subscribeToPostgresChanges } from '@/lib/services/realtime'
 import type { SuccessType } from '@/pages/auth/types'
 
@@ -96,17 +99,44 @@ function LazyRoute({ children }: { children: React.ReactNode }) {
 
 /**
  * Inner component that lives inside AuthProvider so it can consume auth context.
- * Renders the session timeout modal for authenticated users.
+ * Renders the screen lock overlay for authenticated users when idle,
+ * and the session timeout modal when the session is about to expire.
  */
 function AuthAwareSessionTimeout() {
   const { showWarning, timeLeft, dismissWarning, logout } = useSessionTimeout()
+  const { user } = useAuth()
+  const { isLocked, unlockWithPin } = useScreenLock()
+  const [loggingOut, setLoggingOut] = useState(false)
+
+  const handleLogout = useCallback(async () => {
+    setLoggingOut(true)
+    try {
+      await logout()
+    } catch {
+      window.location.href = '/login'
+    }
+  }, [logout])
+
   return (
-    <SessionTimeoutModal
-      show={showWarning}
-      timeLeft={timeLeft}
-      onDismiss={dismissWarning}
-      onLogout={logout}
-    />
+    <>
+      {/* Screen lock overlay (takes priority over session timeout) */}
+      {isLocked && user && hasStoredPin() && (
+        <ScreenLock
+          onUnlock={unlockWithPin}
+          onLogout={handleLogout}
+          userName={user.name}
+        />
+      )}
+      {/* Session timeout warning (only when screen is not locked) */}
+      {!isLocked && (
+        <SessionTimeoutModal
+          show={showWarning}
+          timeLeft={timeLeft}
+          onDismiss={dismissWarning}
+          onLogout={handleLogout}
+        />
+      )}
+    </>
   )
 }
 

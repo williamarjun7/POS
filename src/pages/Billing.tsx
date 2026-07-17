@@ -8,6 +8,11 @@ import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
 import { AnimatedContainer } from "@/components/AnimatedComponents"
 import { formatCurrency } from "@/lib/utils"
+import {
+  countVoidedItems,
+  voidedItemsTotal,
+} from '@/lib/services/order-calculation-service'
+import type { OrderBatchItemRow } from '@/lib/db/types'
 import { showSuccess, showError } from "@/components/ui/toast"
 import { useInvoice } from '@/lib/services/invoice-service'
 import { useInvoicePayments, recordPaymentSafe } from '@/lib/services/payment-service'
@@ -60,6 +65,9 @@ export function Billing() {
   // Invoice items are fetched separately (no Query hook yet)
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItemDisplay[]>([])
 
+  // ─── Voided items tracking from linked order batches ───
+  const [voidedState, setVoidedState] = useState<{ count: number; amount: number }>({ count: 0, amount: 0 })
+
   // Fetch invoice items when invoice loads
   useEffect(() => {
     if (!id) return
@@ -85,6 +93,28 @@ export function Billing() {
       })
       .catch(() => {})
   }, [id, invoice?.invoice_number, invoice?.total])
+
+  // Fetch order batch items for this invoice to calculate voided items
+  useEffect(() => {
+    if (!invoice?.order_batch_ids || invoice.order_batch_ids.length === 0) {
+      setVoidedState({ count: 0, amount: 0 })
+      return
+    }
+
+    insforge.database
+      .from('order_batch_items')
+      .select('*')
+      .in('batch_id', invoice.order_batch_ids)
+      .then(({ data, error }: { data: unknown; error: unknown }) => {
+        if (error) return
+        const items = (data as OrderBatchItemRow[]) ?? []
+        setVoidedState({
+          count: countVoidedItems(items),
+          amount: voidedItemsTotal(items),
+        })
+      })
+      .catch(() => {/* non-critical */})
+  }, [invoice?.order_batch_ids])
 
   // Payment records mapped for display
   const payments = useMemo<PaymentRecord[]>(
@@ -535,6 +565,12 @@ export function Billing() {
                       <tr className="text-muted-foreground">
                         <td colSpan={3} className="px-3 py-2.5 text-right text-sm">Already Paid</td>
                         <td className="px-3 py-2.5 text-right text-success">{formatCurrency(totalPaid)}</td>
+                      </tr>
+                    )}
+                    {voidedState.count > 0 && (
+                      <tr className="text-muted-foreground/60">
+                        <td colSpan={3} className="px-3 py-2.5 text-right text-sm text-red-500/60 dark:text-red-400/60">Voided Items: {voidedState.count}</td>
+                        <td className="px-3 py-2.5 text-right line-through text-red-500/60 dark:text-red-400/60">{formatCurrency(voidedState.amount)}</td>
                       </tr>
                     )}
                     {splitMode && !isFullyPaid && (

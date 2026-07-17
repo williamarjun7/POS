@@ -9,6 +9,12 @@ import {
 } from '@/lib/services/auth-service'
 import { db } from '@/lib/db/insforge'
 import type { UserProfileRow } from '@/lib/db/types'
+import {
+  recordLogin,
+  clearSession,
+  isSessionValid,
+  getSessionUserId,
+} from '@/lib/services/session-store'
 
 export interface User {
   id: string
@@ -29,6 +35,8 @@ interface AuthContextType {
   logout: () => Promise<void>
   sendResetEmail: (email: string) => Promise<void>
   refreshUser: () => Promise<void>
+  /** Whether the app is ready to render (auth resolved + session checked) */
+  isReady: boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -128,7 +136,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     ;(async () => {
-      await refreshUser()
+      // Check if we have a valid 24-hour session stored
+      const hasValidSession = isSessionValid()
+      const storedUserId = getSessionUserId()
+
+      if (hasValidSession && storedUserId) {
+        // Try to restore the session from the backend
+        await refreshUser()
+      } else {
+        // No valid session — user will need to log in
+        setUser(null)
+      }
       setIsLoading(false)
     })()
   }, [refreshUser])
@@ -158,7 +176,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Fetch or create the user_profiles record for this user
       const profile = await ensureUserProfile(data.user)
-      setUser({ ...baseUser, name: profile.name, role: profile.role })
+      const fullUser = { ...baseUser, name: profile.name, role: profile.role }
+      setUser(fullUser)
+
+      // Record the login time for 24-hour session tracking
+      recordLogin(fullUser.id)
+
       return { emailVerified: true }
     }
     return { emailVerified: false }
@@ -198,7 +221,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const logout = useCallback(async () => {
-    await signOut()
+    try {
+      await signOut()
+    } catch {
+      // Ignore signOut errors — clear local state anyway
+    }
+    clearSession()
     setUser(null)
   }, [])
 
@@ -213,6 +241,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         isAuthenticated: !!user,
         isLoading,
+        isReady: !isLoading,
         login,
         signup,
         loginWithOAuth,
