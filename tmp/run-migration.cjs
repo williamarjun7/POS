@@ -6,7 +6,13 @@ const { Client } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
-const CONN_STRING = 'postgresql://postgres:REVOKED_PASSWORD@659pq3pb.us-east.database.insforge.app:5432/insforge?sslmode=require';
+// ⚠️ SECURITY: Never hardcode connection strings. Read from environment.
+const CONN_STRING = process.env.DATABASE_URL || process.env.INSFORGE_DB_URL;
+
+if (!CONN_STRING) {
+  console.error('FATAL: No database connection string found. Set DATABASE_URL or INSFORGE_DB_URL environment variable.');
+  process.exit(1);
+}
 
 const sql = fs.readFileSync(
   path.join(__dirname, '..', 'migrations', '20260727000100_deduplicate-invoices.sql'),

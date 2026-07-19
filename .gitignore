@@ -40,6 +40,13 @@ dist-ssr
 
 # Environment variables
 .env
+.env.*
+!.env.example
+secrets.*
+!secrets.example.*
+
+# Local config files
+*.local
 
 # Windows artifacts
 nul
