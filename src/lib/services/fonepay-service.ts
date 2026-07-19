@@ -169,9 +169,24 @@ export function connectFonepayWebSocket(
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let disposed = false
+  /**
+   * Track whether the QR has been scanned by the customer.
+   * Fonepay sends `paymentSuccess: false` as the INITIAL state
+   * when no payment has been attempted yet. If we treat that as
+   * a failure immediately, the dialog shows an error before the
+   * customer even has a chance to scan the QR.
+   * Only treat `paymentSuccess: false` as a real failure if we
+   * already got a `qrVerified` event (meaning the customer scanned
+   * but the payment then failed).
+   */
+  let qrVerifiedReceived = false
 
   function connect() {
     if (disposed) return
+    // Reset on each connection attempt so reconnects start fresh.
+    // Otherwise, after a disconnect mid-payment, the stale
+    // qrVerifiedReceived flag could cause an incorrect failure.
+    qrVerifiedReceived = false
     listener.onStatusChange('connecting')
 
     try {
@@ -193,12 +208,18 @@ export function connectFonepayWebSocket(
         const status: ParsedTransactionStatus = JSON.parse(data.transactionStatus)
 
         if (status.qrVerified) {
+          qrVerifiedReceived = true
           listener.onQRVerified(status)
         } else if (status.paymentSuccess === true) {
           listener.onPaymentSuccess(status)
-        } else if (status.paymentSuccess === false) {
+        } else if (status.paymentSuccess === false && qrVerifiedReceived) {
+          // Only a genuine failure if the customer already scanned the QR
+          // and payment explicitly failed. The initial `paymentSuccess: false`
+          // is the expected starting state for an unpaid QR.
           listener.onPaymentFailed(status)
         }
+        // Otherwise: initial state `paymentSuccess: false` without prior
+        // QR verification — keep waiting, the polling loop handles timeouts.
       } catch {
         // Ignore malformed messages
       }

@@ -1,6 +1,30 @@
-import { useState, useMemo, useEffect } from 'react';import { ArrowLeft, Banknote, QrCode, CreditCard, Percent, DollarSign,
+import { useState, useMemo, useEffect, useRef } from 'react';import { ArrowLeft, Banknote, QrCode, CreditCard, Percent, DollarSign,
   Users, Smartphone, Check, AlertCircle, Loader2, Printer,
 } from 'lucide-react';
+
+// ─── Dev logging ────────────────────────────────────────────
+function log(prefix: string, ...args: unknown[]) {
+  if (import.meta.env.DEV) {
+    console.log(`[POS:${prefix}]`, ...args)
+  }
+}
+
+// ─── Print helper (shared across Fonepay handlers) ─────────
+function buildPrintData(inv: InvoiceData): PrintInvoiceData {
+  return {
+    invoiceNumber: inv.invoiceNumber,
+    date: new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }),
+    time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+    items: (inv.items ?? []).map(i => ({
+      name: i.name ?? 'Item',
+      quantity: i.quantity,
+      unitPrice: i.unitPrice ?? 0,
+    })),
+    subtotal: inv.subtotal,
+    discount: inv.discount || undefined,
+    total: inv.grandTotal,
+  }
+}
 import { showSuccess, showError } from '@/components/ui/toast';
 import { printService } from '@/lib/services/print-service';
 import { getPaymentMethodLabel } from '@/lib/payment-methods';
@@ -122,6 +146,7 @@ export function PosPaymentDialog({
   const [customersList, setCustomersList] = useState<Array<{id:string;name:string;phone:string|null}>>([]);
   const [customersLoading, setCustomersLoading] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
+  const fonepayInvoiceNumberRef = useRef<string | null>(null);
 
   // ─── Fetch real customers for credit assignment ───
   useEffect(() => {
@@ -224,8 +249,12 @@ export function PosPaymentDialog({
       ? Math.max(0, splitSubtotal - discountAmount * (splitSubtotal / subtotal || 0))
       : grandTotal;
     const invoiceItems = selectedItems.map(i => ({ name: i.item_name, quantity: i.quantity, unitPrice: Number(i.unit_price) }));
+    // Use the pre-generated Fonepay invoice number if available so the
+    // remark on the QR matches the actual invoice number.
+    const fonepayInvoice = fonepayInvoiceNumberRef.current;
+    fonepayInvoiceNumberRef.current = null; // consume
     const inv: InvoiceData = {
-      invoiceNumber: `INV-${year}-${String(Date.now()).slice(-6)}`,
+      invoiceNumber: fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`,
       tableNumber: selectedTableId,
       items: invoiceItems,
       subtotal: splitSubtotal,
@@ -247,7 +276,40 @@ export function PosPaymentDialog({
   const handleCashPay = () => { if (!submittingPayment) simulatePayment('cash'); };
   const handleReceptionQRPay = () => { if (!submittingPayment) simulatePayment('reception_qr'); };
   const handleCreditPay = (_: string, name: string) => { if (!submittingPayment) simulatePayment(`Credit (${name})`); };
-  const handleFonepaySuccess = () => { if (!submittingPayment) simulatePayment('fonepay'); };
+  const handleFonepaySuccess = () => {
+    if (!checkLimit()) return;
+    log('FONEPAY_SUCCESS', 'Auto-finalizing payment');
+
+    const year = new Date().getFullYear();
+    const fonepayInvoice = fonepayInvoiceNumberRef.current;
+    fonepayInvoiceNumberRef.current = null;
+    const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`;
+
+    const inv: InvoiceData = {
+      invoiceNumber: invNum,
+      tableNumber: selectedTableId,
+      items: items.map(i => ({
+        name: i.item_name,
+        quantity: i.quantity,
+        unitPrice: Number(i.unit_price),
+      })),
+      subtotal,
+      discount: discountAmount,
+      grandTotal,
+      paidAmount: grandTotal,
+      paymentMethod: 'fonepay',
+      paidItemIds: items.map(i => i.id),
+    };
+
+    const result = getPaymentResult(inv);
+
+    // Print + close in sequence (print before onComplete to ensure
+    // the dialog stays mounted for the iframe-based print)
+    printService.printInvoice(buildPrintData(inv))
+    showSuccess('Invoice sent to printer')
+    onComplete?.(inv.invoiceNumber, result)
+    onClose?.()
+  };
 
   const handlePartialPay = (amount: number, method: string) => {
     if (amount <= 0) return;
@@ -266,18 +328,61 @@ export function PosPaymentDialog({
   };
 
   const handlePartialFonepaySuccess = () => {
+    if (!checkLimit()) return;
     const amt = pendingPartialFonepay ?? 0;
     const remaining = grandTotal - amt;
     setPendingPartialFonepay(null);
+
+    const year = new Date().getFullYear();
+    const fonepayInvoice = fonepayInvoiceNumberRef.current;
+    fonepayInvoiceNumberRef.current = null;
+    const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`;
+
+    // Calculate which items to mark paid based on the partial amount
+    const paidItems: Array<{ id: string; name: string; quantity: number; unitPrice: number }> = []
+    let remainingToAssign = amt
+    for (const item of items) {
+      if (remainingToAssign <= 0) break
+      const itemTotal = Number(item.unit_price) * item.quantity
+      paidItems.push({
+        id: item.id,
+        name: item.item_name,
+        quantity: item.quantity,
+        unitPrice: Number(item.unit_price),
+      })
+      remainingToAssign -= itemTotal
+    }
+
+    const inv: InvoiceData = {
+      invoiceNumber: invNum,
+      tableNumber: selectedTableId,
+      items: paidItems.map(i => ({ name: i.name, quantity: i.quantity, unitPrice: i.unitPrice })),
+      subtotal: amt,
+      discount: discountAmount * (amt / grandTotal || 0),
+      grandTotal: amt,
+      paidAmount: amt,
+      paymentMethod: 'fonepay',
+      paidItemIds: paidItems.map(i => i.id),
+    };
+
+    // Build result and credit info first (before any side-effects)
+    let result: PaymentResult
     if (remaining > 0 && initialCustomerName && initialCustomerName.trim()) {
       const creditInfo = { amount: remaining, customerName: initialCustomerName };
-      simulatePayment('fonepay', amt, creditInfo);
+      result = getPaymentResult(inv, creditInfo);
     } else if (remaining > 0) {
-      simulatePayment('fonepay', amt);
+      result = getPaymentResult(inv);
       setPendingPartialCredit({ amount: remaining, method: 'fonepay', shouldPrint: false });
     } else {
-      simulatePayment('fonepay', amt);
+      result = getPaymentResult(inv);
     }
+
+    // Print before onComplete (ensures dialog stays mounted for iframe print),
+    // then complete + close
+    printService.printInvoice(buildPrintData(inv))
+    showSuccess('Invoice sent to printer')
+    onComplete?.(inv.invoiceNumber, result)
+    onClose?.()
   };
 
   const handleSplitPay = (params: { item_ids: string[]; amount: number; method: string }) => {
@@ -288,10 +393,39 @@ export function PosPaymentDialog({
   };
 
   const handleSplitFonepaySuccess = () => {
+    if (!checkLimit()) return;
     const ids = pendingSplitFonepay?.item_ids ?? [];
     const amt = pendingSplitFonepay?.amount ?? 0;
     setPendingSplitFonepay(null);
-    simulatePayment('fonepay', amt, undefined, ids);
+
+    const year = new Date().getFullYear();
+    const fonepayInvoice = fonepayInvoiceNumberRef.current;
+    fonepayInvoiceNumberRef.current = null;
+    const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`;
+
+    const selectedItems = items.filter(i => ids.includes(i.id));
+    const splitSubtotal = selectedItems.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0);
+
+    const inv: InvoiceData = {
+      invoiceNumber: invNum,
+      tableNumber: selectedTableId,
+      items: selectedItems.map(i => ({ name: i.item_name, quantity: i.quantity, unitPrice: Number(i.unit_price) })),
+      subtotal: splitSubtotal,
+      discount: Math.round(discountAmount * (splitSubtotal / subtotal || 0)),
+      grandTotal: amt,
+      paidAmount: amt,
+      paymentMethod: 'fonepay',
+      paidItemIds: ids,
+    };
+
+    const result = getPaymentResult(inv);
+
+    // Print before onComplete (ensures dialog stays mounted for iframe print),
+    // then complete + close
+    printService.printInvoice(buildPrintData(inv))
+    showSuccess('Invoice sent to printer')
+    onComplete?.(inv.invoiceNumber, result)
+    onClose?.()
   };
 
   const handleSplitCreditPay = (_: string, name: string) => {
@@ -946,11 +1080,17 @@ export function PosPaymentDialog({
 
   // ─── View: Fonepay ───
   if (view === 'fonepay') {
-    return <FonepayQRDialog orderId={orderId} amount={grandTotal} onSuccess={handleFonepaySuccess} onCancel={() => setView('review')} customerName={initialCustomerName} />;
+    const year = new Date().getFullYear();
+    const invNum = `INV-${year}-${String(Date.now()).slice(-6)}`;
+    if (!fonepayInvoiceNumberRef.current) fonepayInvoiceNumberRef.current = invNum;
+    return <FonepayQRDialog orderId={orderId} amount={grandTotal} onSuccess={handleFonepaySuccess} onCancel={() => setView('review')} customerName={initialCustomerName} invoiceNumber={invNum} />;
   }
 
   if (view === 'partial_fonepay' && pendingPartialFonepay !== null) {
-    return <FonepayQRDialog orderId={orderId} amount={pendingPartialFonepay} onSuccess={handlePartialFonepaySuccess} onCancel={() => { setPendingPartialFonepay(null); setView('partial'); }} customerName={initialCustomerName} />;
+    const year = new Date().getFullYear();
+    const invNum = `INV-${year}-${String(Date.now()).slice(-6)}`;
+    if (!fonepayInvoiceNumberRef.current) fonepayInvoiceNumberRef.current = invNum;
+    return <FonepayQRDialog orderId={orderId} amount={pendingPartialFonepay} onSuccess={handlePartialFonepaySuccess} onCancel={() => { setPendingPartialFonepay(null); setView('partial'); }} customerName={initialCustomerName} invoiceNumber={invNum} />;
   }
 
   // ─── View: Split ───
@@ -965,7 +1105,10 @@ export function PosPaymentDialog({
   }
 
   if (view === 'split_fonepay' && pendingSplitFonepay) {
-    return <FonepayQRDialog orderId={orderId} amount={pendingSplitFonepay.amount} onSuccess={handleSplitFonepaySuccess} onCancel={() => { setPendingSplitFonepay(null); setView('split'); }} customerName={initialCustomerName} />;
+    const year = new Date().getFullYear();
+    const invNum = `INV-${year}-${String(Date.now()).slice(-6)}`;
+    if (!fonepayInvoiceNumberRef.current) fonepayInvoiceNumberRef.current = invNum;
+    return <FonepayQRDialog orderId={orderId} amount={pendingSplitFonepay.amount} onSuccess={handleSplitFonepaySuccess} onCancel={() => { setPendingSplitFonepay(null); setView('split'); }} customerName={initialCustomerName} invoiceNumber={invNum} />;
   }
 
   if (view === 'split_credit' && pendingSplitCredit) {

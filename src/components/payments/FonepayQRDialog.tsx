@@ -1,154 +1,406 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, QrCode, RefreshCw, CheckCircle, Timer, Search, AlertCircle } from 'lucide-react'
+import { QrCode, RefreshCw, CheckCircle, Timer, AlertCircle, Wifi, WifiOff, X, Loader2 } from 'lucide-react'
 import QRCode from 'qrcode'
 import type { FonepayQRData } from '@/lib/services/fonepay-service'
 import {
   generateFonepayQR,
-  pollFonepayPayment,
+  checkQRStatus,
+  connectFonepayWebSocket,
   isFonepayConfigured,
   generatePRN,
   FonepayError,
   FONEPAY_CONFIG,
+  type FonepayWSStatus,
 } from '@/lib/services/fonepay-service'
 
 const npr = (amount: number) =>
   `Rs. ${new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)}`
 
+/**
+ * Generate a QR code data URL using the pure QR matrix API
+ * (QRCode.create) and manual SVG rendering.
+ *
+ * This completely avoids qrcode's browser.js entry point which
+ * goes through renderCanvas — a function that checks canvas.getContext
+ * on a string argument and crashes on first mount in some environments.
+ */
+function generateQRDataURL(
+  text: string,
+  options: { width: number; margin: number; color: { dark: string; light: string } },
+): string {
+  const qrData = QRCode.create(text, { margin: options.margin })
+  const size = qrData.modules.size
+  const data = qrData.modules.data
+  const margin = options.margin
+  const qrSize = size + margin * 2
+
+  // Build SVG path for dark modules (same algorithm as qrcode/svg-tag.js)
+  let path = ''
+  let moveBy = 0
+  let newRow = false
+  let lineLength = 0
+
+  for (let i = 0; i < data.length; i++) {
+    const col = i % size
+    const row = Math.floor(i / size)
+
+    if (!col && !newRow) newRow = true
+
+    if (data[i]) {
+      lineLength++
+
+      if (!(i > 0 && col > 0 && data[i - 1])) {
+        path += newRow
+          ? `M${col + margin} ${0.5 + row + margin}`
+          : `m${moveBy} 0`
+        moveBy = 0
+        newRow = false
+      }
+
+      if (!(col + 1 < size && data[i + 1])) {
+        path += `h${lineLength}`
+        lineLength = 0
+      }
+    } else {
+      moveBy++
+    }
+  }
+
+  const bg = `<path fill="${options.color.light}" d="M0 0h${qrSize}v${qrSize}H0z"/>`
+  const dots = `<path stroke="${options.color.dark}" d="${path}"/>`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${options.width}" height="${options.width}" viewBox="0 0 ${qrSize} ${qrSize}" shape-rendering="crispEdges">${bg}${dots}</svg>`
+
+  // Convert SVG to base64 data URL
+  const base64 =
+    typeof window !== 'undefined'
+      ? window.btoa(unescape(encodeURIComponent(svg)))
+      : Buffer.from(svg).toString('base64')
+  return `data:image/svg+xml;base64,${base64}`
+}
+
+// ─── Structured Logging ─────────────────────────────────────
+
+function log(prefix: string, ...args: unknown[]) {
+  if (import.meta.env.DEV) {
+    console.log(`[FonePay:${prefix}]`, ...args)
+  }
+}
+
+// ─── Types ──────────────────────────────────────────────────
+
+type QRStatus = 'generating' | 'displaying' | 'success' | 'expired' | 'error'
+
+interface StatusText {
+  icon: React.ElementType
+  text: string
+  color: string
+  spin?: boolean
+}
+
 interface FonepayQRDialogProps {
   amount: number
   orderId?: string
+  /**
+   * Called ONCE when payment is confirmed (successfully processed).
+   * The caller should process payment persistence, printing, and close.
+   * The dialog handles its own brief success animation before calling this.
+   */
   onSuccess: () => void
   onCancel: () => void
   customerName?: string
+  invoiceNumber?: string
 }
 
-type QRStatus = 'generating' | 'displaying' | 'verifying' | 'success' | 'expired' | 'error'
+// ─── Component ──────────────────────────────────────────────
 
-export function FonepayQRDialog({ amount, orderId, onSuccess, onCancel, customerName }: FonepayQRDialogProps) {
+export function FonepayQRDialog({
+  amount,
+  orderId,
+  onSuccess,
+  onCancel,
+  customerName,
+  invoiceNumber,
+}: FonepayQRDialogProps) {
   const [status, setStatus] = useState<QRStatus>('generating')
   const [qrData, setQrData] = useState<FonepayQRData | null>(null)
   const [timeLeft, setTimeLeft] = useState(FONEPAY_CONFIG.qrTimeoutSeconds)
   const [errorMessage, setErrorMessage] = useState('')
-  const [pollStatus, setPollStatus] = useState('')
+  const [wsStatus, setWsStatus] = useState<FonepayWSStatus>('disconnected')
+  const [qrVerified, setQrVerified] = useState(false)
+
+  // ─── Refs for side-effect management (no re-renders) ────
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollAbortRef = useRef<AbortController | null>(null)
+  const wsCleanupRef = useRef<(() => void) | null>(null)
   const cancelledRef = useRef(false)
+  /** Idempotency guard — onSuccess fires exactly once */
+  const successHandledRef = useRef(false)
+  /** Already expired — don't start new polling if component re-renders */
+  const expiredRef = useRef(false)
+  const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
     const s = seconds % 60
     return `${m}:${s.toString().padStart(2, '0')}`
   }
-
   const timerPercent = (timeLeft / FONEPAY_CONFIG.qrTimeoutSeconds) * 100
 
-  // ─── Generate QR on mount ──────────────────────────────────
+  // ─── QR Generation (mount only) ──────────────────────────
   useEffect(() => {
+    let mounted = true
+
     const initQR = async () => {
+      log('INIT', 'Starting QR generation')
+
       if (!isFonepayConfigured()) {
-        setErrorMessage('Fonepay is not configured. Please set VITE_FONEPAY_MERCHANT_CODE and VITE_FONEPAY_API_BASE_URL in your .env file.')
+        setErrorMessage(
+          'Fonepay is not configured. Please set VITE_FONEPAY_MERCHANT_CODE and VITE_FONEPAY_API_BASE_URL in your .env file.',
+        )
         setStatus('error')
         return
       }
 
+      const prn = orderId || generatePRN()
       try {
         const data = await generateFonepayQR({
           amount,
-          prn: orderId || generatePRN(),
-          remarks1: customerName || 'POS Payment',
+          prn,
+          remarks1: `Highlands Cafe POS\n${invoiceNumber || customerName || 'POS Payment'}`,
         })
-        if (!cancelledRef.current) {
-          // Convert Fonepay QR payload string into a rendered QR code image
-          const qrImage = await QRCode.toDataURL(data.qrMessage, {
-            width: 320,
-            margin: 2,
-            color: { dark: '#000000', light: '#ffffff' },
-          })
-          setQrData({
-            qrImage,
-            paymentRefId: orderId || generatePRN(),
-          })
-          setStatus('displaying')
-        }
+        if (!mounted || cancelledRef.current) return
+
+        log('QR_GENERATED', { prn: prn.slice(0, 8) })
+
+        const qrImage = generateQRDataURL(data.qrMessage, {
+          width: 320,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' },
+        })
+
+        setQrData({
+          qrImage,
+          paymentRefId: prn,
+          wsUrl: data.thirdpartyQrWebSocketUrl,
+        })
+        setStatus('displaying')
       } catch (err) {
-        if (!cancelledRef.current) {
-          setErrorMessage(err instanceof FonepayError ? err.message : 'Failed to generate QR code')
-          setStatus('error')
-        }
+        if (!mounted) return
+        log('QR_GENERATION_ERROR', err)
+        setErrorMessage(
+          err instanceof FonepayError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Failed to generate QR code',
+        )
+        setStatus('error')
       }
     }
+
     initQR()
+    return () => {
+      mounted = false
+    }
+    // Only regenerate on explicit props that change the QR content.
+    // invoiceNumber is excluded because it is baked into the remark at
+    // generation time; regenerating would create a duplicate PRN error.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amount, orderId, customerName])
 
-  // ─── Start polling when QR is displayed ────────────────────
+  // ─── Polling + WebSocket (started when QR displays) ─────
   useEffect(() => {
     if (status !== 'displaying' || !qrData) return
 
+    // Don't start fresh polling if we already succeeded or expired
+    if (successHandledRef.current || expiredRef.current) return
+
+    log('POLL_START', 'Background polling + WebSocket starting')
+
     pollAbortRef.current = new AbortController()
 
-    const startPolling = async () => {
-      try {
-        const result = await pollFonepayPayment(
-          qrData.paymentRefId,
-          amount,
-          (s) => { if (!cancelledRef.current) setPollStatus(s) },
-          pollAbortRef.current?.signal,
-        )
+    // ── WebSocket (real-time) ──────────────────────────────
+    if (qrData.wsUrl) {
+      wsCleanupRef.current = connectFonepayWebSocket(qrData.wsUrl, {
+        onQRVerified: () => {
+          if (cancelledRef.current || successHandledRef.current) return
+          log('QR_VERIFIED', 'Customer scanned')
+          setQrVerified(true)
+        },
+        onPaymentSuccess: () => {
+          if (cancelledRef.current || successHandledRef.current) return
+          log('WS_PAYMENT_SUCCESS', 'WebSocket confirmed')
+          handlePaymentSuccess()
+        },
+        onPaymentFailed: () => {
+          // The initial paymentSuccess:false state is NOT a failure.
+          // Only genuine failures after QR verification are caught
+          // by the WebSocket handler in fonepay-service.ts.
+          // For the initial state, we simply keep waiting.
+        },
+        onStatusChange: (s) => {
+          if (!cancelledRef.current) setWsStatus(s)
+        },
+      })
+    }
 
-        if (!cancelledRef.current) {
-          if (result.success) {
-            setStatus('success')
-            setTimeout(() => {
-              if (!cancelledRef.current) onSuccess()
-            }, 1200)
-          } else {
-            setErrorMessage(result.message || 'Payment verification failed')
-            setStatus('error')
+    // ── Polling fallback (polling interval, independent) ───
+    let activePolling = true
+    let pollAttempt = 0
+
+    const poll = async () => {
+      // Capture the success callback once at start to avoid stale-closure issues
+      // if the effect re-runs before the polling loop completes.
+      const onPaymentSuccess = () => handlePaymentSuccess()
+
+      while (activePolling && pollAttempt < FONEPAY_CONFIG.maxPollingAttempts) {
+        if (
+          cancelledRef.current ||
+          successHandledRef.current ||
+          !activePolling
+        )
+          return
+
+        pollAttempt++
+
+        try {
+          const result = await checkQRStatus(qrData.paymentRefId)
+          if (
+            cancelledRef.current ||
+            successHandledRef.current ||
+            !activePolling
+          )
+            return
+
+          if (result.paymentStatus === 'success') {
+            log('POLL_PAYMENT_SUCCESS', { attempt: pollAttempt })
+            onPaymentSuccess()
+            return
           }
+        } catch {
+          // Network error — keep polling
         }
-      } catch (err) {
-        if (!cancelledRef.current) {
-          setErrorMessage(err instanceof Error ? err.message : 'Payment polling failed')
-          setStatus('error')
-        }
+
+        await new Promise((r) => setTimeout(r, FONEPAY_CONFIG.pollingIntervalMs))
+      }
+
+      if (
+        !cancelledRef.current &&
+        !successHandledRef.current &&
+        activePolling &&
+        pollAttempt >= FONEPAY_CONFIG.maxPollingAttempts
+      ) {
+        log('POLL_TIMEOUT', 'Max attempts reached')
+        setErrorMessage('Payment polling timed out — the QR may have expired.')
+        expiredRef.current = true
+        setStatus('expired')
       }
     }
 
-    startPolling()
+    poll()
 
     return () => {
+      activePolling = false
       pollAbortRef.current?.abort()
+      // Cancel any pending success timeout
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current)
+        successTimeoutRef.current = null
+      }
+      wsCleanupRef.current?.()
+      wsCleanupRef.current = null
     }
-  }, [status, qrData, amount, onSuccess])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, qrData, handlePaymentSuccess])
 
-  // ─── Countdown timer for QR expiry ─────────────────────────
+  // ─── Handle payment success (idempotent) ─────────────────
+  const handlePaymentSuccess = useCallback(() => {
+    if (successHandledRef.current) return
+    successHandledRef.current = true
+
+    // Clean up all side-effects immediately
+    pollAbortRef.current?.abort()
+    wsCleanupRef.current?.()
+    wsCleanupRef.current = null
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current)
+      countdownRef.current = null
+    }
+
+    setStatus('success')
+
+    // Brief success animation, then hand off to parent
+    successTimeoutRef.current = setTimeout(() => {
+      successTimeoutRef.current = null
+      if (!cancelledRef.current) {
+        log('ON_SUCCESS_CALLED', 'Handing off to parent')
+        onSuccess()
+      }
+    }, 600)
+  }, [onSuccess])
+
+  // ─── Countdown timer for QR expiry ───────────────────────
   useEffect(() => {
+    if (status === 'success') return // stop countdown on success
+
     countdownRef.current = setInterval(() => {
-      setTimeLeft(prev => {
+      setTimeLeft((prev) => {
         if (prev <= 1) {
           if (countdownRef.current) clearInterval(countdownRef.current)
-          pollAbortRef.current?.abort()
-          setStatus('expired')
+          // Only expire if not already succeeded
+          if (!successHandledRef.current) {
+            pollAbortRef.current?.abort()
+            wsCleanupRef.current?.()
+            wsCleanupRef.current = null
+            expiredRef.current = true
+            log('QR_EXPIRED', 'Countdown reached zero')
+            setStatus('expired')
+          }
           return 0
         }
         return prev - 1
       })
     }, 1000)
-    return () => { if (countdownRef.current) clearInterval(countdownRef.current) }
-  }, [])
 
+    return () => {
+      if (countdownRef.current) clearInterval(countdownRef.current)
+    }
+  }, [status === 'success']) // only re-create when exiting success state
+
+  // ─── Callbacks ───────────────────────────────────────────
   const handleCancel = useCallback(() => {
+    log('CANCEL', 'User closed payment dialog')
     cancelledRef.current = true
     if (countdownRef.current) clearInterval(countdownRef.current)
+    if (successTimeoutRef.current) {
+      clearTimeout(successTimeoutRef.current)
+      successTimeoutRef.current = null
+    }
     pollAbortRef.current?.abort()
+    wsCleanupRef.current?.()
+    wsCleanupRef.current = null
     onCancel()
   }, [onCancel])
 
-  const handleRegenerate = async () => {
+  const handleRegenerate = useCallback(async () => {
+    log('REGENERATE', 'User requested new QR')
+
+    // Clean up old state
+    pollAbortRef.current?.abort()
+    wsCleanupRef.current?.()
+    wsCleanupRef.current = null
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    if (successTimeoutRef.current) {
+      clearTimeout(successTimeoutRef.current)
+      successTimeoutRef.current = null
+    }
+
     cancelledRef.current = false
+    successHandledRef.current = false
+    expiredRef.current = false
+    setQrVerified(false)
     setErrorMessage('')
-    setPollStatus('')
 
     if (!isFonepayConfigured()) {
       setErrorMessage('Fonepay is not configured.')
@@ -156,71 +408,154 @@ export function FonepayQRDialog({ amount, orderId, onSuccess, onCancel, customer
       return
     }
 
+    const prn = orderId || generatePRN()
     try {
       const data = await generateFonepayQR({
         amount,
-        prn: orderId || generatePRN(),
-        remarks1: customerName || 'POS Payment',
+        prn,
+        remarks1: `Highlands Cafe POS\n${invoiceNumber || customerName || 'POS Payment'}`,
       })
-      // Convert Fonepay QR payload string into a rendered QR code image
-      const qrImage = await QRCode.toDataURL(data.qrMessage, {
+      log('REGENERATE_QR_GENERATED', { prn: prn.slice(0, 8) })
+
+      const qrImage = generateQRDataURL(data.qrMessage, {
         width: 320,
         margin: 2,
         color: { dark: '#000000', light: '#ffffff' },
       })
       setQrData({
         qrImage,
-        paymentRefId: orderId || generatePRN(),
+        paymentRefId: prn,
+        wsUrl: data.thirdpartyQrWebSocketUrl,
       })
     } catch (err) {
-      setErrorMessage(err instanceof FonepayError ? err.message : 'Failed to generate QR code')
+      log('REGENERATE_ERROR', err)
+      setErrorMessage(
+        err instanceof FonepayError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to generate QR code',
+      )
       setStatus('error')
       return
     }
 
     setTimeLeft(FONEPAY_CONFIG.qrTimeoutSeconds)
     setStatus('displaying')
-  }
+  }, [amount, orderId, customerName, invoiceNumber])
 
+  // ─── Status indicator text ───────────────────────────────
+  const statusText: StatusText = (() => {
+    if (status === 'success') return { icon: CheckCircle, text: 'Payment Successful!', color: 'text-emerald-600', spin: false }
+    if (status === 'expired') return { icon: Timer, text: 'QR Expired', color: 'text-amber-600', spin: false }
+    if (status === 'error') return { icon: AlertCircle, text: errorMessage || 'Error', color: 'text-red-600', spin: false }
+    if (qrVerified) return { icon: Loader2, text: 'Processing payment...', color: 'text-blue-600', spin: true }
+    if (wsStatus === 'connected') return { icon: Wifi, text: 'Waiting for customer to scan...', color: 'text-blue-600', spin: false }
+    if (wsStatus === 'connecting') return { icon: Loader2, text: 'Connecting to payment gateway...', color: 'text-muted-foreground', spin: true }
+    // disconnected or error
+    return { icon: WifiOff, text: 'Connection lost. Retrying...', color: 'text-amber-600', spin: false }
+  })()
+
+  const StatusIcon = statusText.icon
+  const shouldSpin = statusText.spin ?? false
+
+  // ─── Render ──────────────────────────────────────────────
   return (
     <AnimatePresence>
-      <motion.div key="backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal="true">
-        <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.9, y: 20 }} transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-          className="w-full max-w-sm rounded-xl border bg-background p-6 shadow-lg">
+      <motion.div
+        key="fonepay-backdrop"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+        role="dialog"
+        aria-modal="true"
+      >
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.9, y: 20 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+          className="relative w-full max-w-sm rounded-xl border bg-background p-6 shadow-lg overflow-hidden"
+        >
+          {/* ─── Header ─────────────────────────────────── */}
           <div className="mb-4 flex items-center justify-between">
-            <motion.h2 className="text-lg font-semibold flex items-center gap-2" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
+            <motion.h2
+              className="text-lg font-semibold flex items-center gap-2"
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.1 }}
+            >
               <QrCode className="h-5 w-5" /> FonePay QR
             </motion.h2>
             {status !== 'success' && (
-              <motion.button type="button" onClick={handleCancel} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} className="min-h-[44px] min-w-[44px] rounded-sm opacity-70 hover:opacity-100">
+              <motion.button
+                type="button"
+                onClick={handleCancel}
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                className="min-h-[44px] min-w-[44px] rounded-sm opacity-70 hover:opacity-100 flex items-center justify-center"
+              >
                 <X className="h-4 w-4" />
               </motion.button>
             )}
           </div>
 
-          <motion.div className="mb-4 rounded-lg border bg-muted p-3 text-sm space-y-1" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.12 }}>
-            <div className="flex justify-between"><span className="text-muted-foreground">Order</span><span className="font-medium font-mono">{orderId?.slice(0, 8) || 'N/A'}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span className="font-bold text-lg">{npr(amount)}</span></div>
+          {/* ─── Order summary ──────────────────────────── */}
+          <motion.div
+            className="mb-4 rounded-lg border bg-muted p-3 text-sm space-y-1"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.12 }}
+          >
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Invoice</span>
+              <span className="font-medium font-mono">
+                {invoiceNumber || orderId?.slice(0, 8) || 'N/A'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount</span>
+              <span className="font-bold text-lg">{npr(amount)}</span>
+            </div>
           </motion.div>
 
-          <AnimatePresence mode="wait">
-            {status === 'generating' && (
-              <motion.div key="generating" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="flex flex-col items-center py-10 gap-3">
-                <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}>
+          {/* ─── QR Display Area (always visible when generated) ── */}
+          <div className="flex flex-col items-center gap-3">
+            {status === 'generating' ? (
+              <motion.div
+                key="generating"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex flex-col items-center py-10 gap-3"
+              >
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+                >
                   <QrCode className="h-12 w-12 text-primary/40" />
                 </motion.div>
-                <p className="text-sm text-muted-foreground">Generating payment QR...</p>
+                <p className="text-sm text-muted-foreground">
+                  Generating payment QR...
+                </p>
               </motion.div>
-            )}
-
-            {status === 'displaying' && (
-              <motion.div key="displaying" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.25 }} className="flex flex-col items-center gap-3">
+            ) : (
+              /* QR stays visible in ALL states: displaying, success, expired, error */
+              <motion.div
+                key="qr-container"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="relative"
+              >
+                {/* QR image */}
                 <div className="rounded-xl border-2 border-border bg-white p-2 sm:p-3">
                   {qrData?.qrImage ? (
-                    <img src={qrData.qrImage} alt="FonePay QR" className="w-72 h-72 sm:w-80 sm:h-80 object-contain" />
+                    <img
+                      src={qrData.qrImage}
+                      alt="FonePay QR"
+                      className="w-72 h-72 sm:w-80 sm:h-80 object-contain"
+                    />
                   ) : (
                     <div className="w-72 h-72 sm:w-80 sm:h-80 flex items-center justify-center bg-muted rounded-lg">
                       <div className="text-center">
@@ -230,74 +565,151 @@ export function FonepayQRDialog({ amount, orderId, onSuccess, onCancel, customer
                     </div>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground text-center">Open your <strong>mobile banking app</strong> &rarr; <strong>Scan QR</strong> &rarr; <strong>Confirm</strong></p>
-                <div className="flex items-center gap-1 text-sm font-medium">
-                  <Timer className={`h-4 w-4 ${timeLeft < 60 ? 'text-destructive' : 'text-amber-600'}`} />
-                  <span className={timeLeft < 60 ? 'text-destructive' : 'text-amber-600'}>Expires in {formatTime(timeLeft)}</span>
-                </div>
-                <div className="w-full bg-muted rounded-full h-2">
-                  <div className={`h-2 rounded-full transition-all duration-1000 ${timeLeft < 60 ? 'bg-destructive' : timeLeft < 120 ? 'bg-amber-500' : 'bg-primary'}`} style={{ width: `${timerPercent}%` }} />
-                </div>
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/20 text-xs text-blue-700 dark:text-blue-300">
-                  <Search className="h-3.5 w-3.5" /><span>Waiting for payment confirmation{pollStatus ? ` (${pollStatus})` : '...'}</span>
-                </div>
+
+                {/* ─── Success overlay ──────────────────── */}
+                {status === 'success' && (
+                  <motion.div
+                    key="success-overlay"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                    className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 rounded-xl backdrop-blur-sm"
+                  >
+                    <motion.div
+                      className="w-20 h-20 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/30"
+                      initial={{ scale: 0, rotate: -180 }}
+                      animate={{ scale: 1, rotate: 0 }}
+                      transition={{ type: 'spring', stiffness: 300, damping: 15 }}
+                    >
+                      <CheckCircle className="h-12 w-12 text-white" />
+                    </motion.div>
+                    <motion.p
+                      className="mt-3 text-lg font-bold text-white drop-shadow-sm"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.15 }}
+                    >
+                      Payment Successful!
+                    </motion.p>
+                  </motion.div>
+                )}
               </motion.div>
             )}
+          </div>
 
-            {status === 'verifying' && (
-              <motion.div key="verifying" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="flex flex-col items-center py-6 gap-2">
-                <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
-                  <RefreshCw className="h-8 w-8 text-primary" />
-                </motion.div>
-                <p className="text-sm font-medium">Verifying payment...</p>
-              </motion.div>
-            )}
+          {/* ─── Status indicator (below QR) ────────────── */}
+          {status !== 'generating' && (
+            <motion.div
+              className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg ${
+                status === 'success'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/20'
+                  : status === 'expired'
+                    ? 'bg-amber-50 dark:bg-amber-950/20'
+                    : status === 'error'
+                      ? 'bg-red-50 dark:bg-red-950/20'
+                      : qrVerified
+                        ? 'bg-blue-50 dark:bg-blue-950/20'
+                        : wsStatus === 'connected'
+                          ? 'bg-blue-50 dark:bg-blue-950/20'
+                          : 'bg-amber-50 dark:bg-amber-950/20'
+              }`}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+            >
+              <StatusIcon
+                className={`h-4 w-4 shrink-0 ${statusText.color} ${shouldSpin ? 'animate-spin' : ''}`}
+              />
+              <span className={`text-xs font-medium ${statusText.color}`}>
+                {statusText.text}
+              </span>
+            </motion.div>
+          )}
 
-            {status === 'success' && (
-              <motion.div key="success" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }} className="flex flex-col items-center py-6 gap-2">
-                <motion.div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center" initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 300, damping: 15, delay: 0.1 }}>
-                  <CheckCircle className="h-10 w-10 text-green-500" />
-                </motion.div>
-                <motion.p className="text-base font-semibold text-green-600" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>Payment Successful!</motion.p>
-                <motion.p className="text-xs text-muted-foreground" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}>Redirecting to invoice...</motion.p>
-              </motion.div>
-            )}
+          {/* ─── Countdown bar (only when displaying) ──── */}
+          {status === 'displaying' && (
+            <motion.div
+              className="mt-3 space-y-1"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.2 }}
+            >
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>QR expires in</span>
+                <span
+                  className={`font-mono font-medium ${
+                    timeLeft < 60
+                      ? 'text-destructive'
+                      : timeLeft < 120
+                        ? 'text-amber-600'
+                        : 'text-muted-foreground'
+                  }`}
+                >
+                  {formatTime(timeLeft)}
+                </span>
+              </div>
+              <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                <motion.div
+                  className={`h-full rounded-full transition-all duration-1000 ${
+                    timeLeft < 60
+                      ? 'bg-destructive'
+                      : timeLeft < 120
+                        ? 'bg-amber-500'
+                        : 'bg-primary'
+                  }`}
+                  style={{ width: `${timerPercent}%` }}
+                />
+              </div>
+            </motion.div>
+          )}
 
-            {status === 'expired' && (
-              <motion.div key="expired" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} className="flex flex-col items-center py-6 gap-2">
-                <motion.div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-950/20 flex items-center justify-center" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 15 }}>
-                  <Timer className="h-10 w-10 text-amber-500" />
-                </motion.div>
-                <p className="text-sm font-medium text-amber-600">QR code expired</p>
-                <p className="text-xs text-muted-foreground text-center">Generate a new QR code to try again.</p>
-              </motion.div>
-            )}
-
-            {status === 'error' && (
-              <motion.div key="error" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} className="flex flex-col items-center py-6 gap-2">
-                <motion.div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 15 }}>
-                  <AlertCircle className="h-10 w-10 text-red-500" />
-                </motion.div>
-                <p className="text-sm font-medium text-red-600">Payment Error</p>
-                <p className="text-xs text-muted-foreground text-center max-w-xs">{errorMessage}</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <motion.div className="flex items-center justify-between gap-2 pt-4 border-t border-border" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+          {/* ─── Action buttons ─────────────────────────── */}
+          <motion.div
+            className="flex items-center justify-between gap-2 pt-4 mt-3 border-t border-border"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.2 }}
+          >
             <div className="flex gap-2">
-              {(status === 'expired' || status === 'error') && (
-                <button onClick={handleRegenerate} className="inline-flex items-center gap-1 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+              {status === 'expired' && (
+                <button
+                  onClick={handleRegenerate}
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors active:scale-[0.98]"
+                >
+                  <RefreshCw className="h-4 w-4" /> Generate New QR
+                </button>
+              )}
+              {status === 'error' && (
+                <button
+                  onClick={handleRegenerate}
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors active:scale-[0.98]"
+                >
                   <RefreshCw className="h-4 w-4" /> Try Again
                 </button>
               )}
               {status === 'displaying' && (
-                <button onClick={handleCancel} className="inline-flex items-center gap-1 px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors">
+                <button
+                  onClick={handleCancel}
+                  className="inline-flex items-center gap-1 px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
+                >
                   Cancel
                 </button>
               )}
             </div>
           </motion.div>
+
+          {/* ─── Help text for customer (always) ────────── */}
+          {status === 'displaying' && (
+            <motion.p
+              className="mt-3 text-[10px] text-muted-foreground/60 text-center leading-tight"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.25 }}
+            >
+              Open your <strong>mobile banking app</strong> → <strong>Scan QR</strong>{' '}
+              → <strong>Confirm payment</strong>
+            </motion.p>
+          )}
         </motion.div>
       </motion.div>
     </AnimatePresence>

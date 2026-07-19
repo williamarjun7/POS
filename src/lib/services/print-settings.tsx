@@ -123,7 +123,14 @@ async function loadFromDb(): Promise<PrintSettings | null> {
       .maybeSingle();
 
     if (error) {
-      console.warn('[PrintSettings] DB load failed:', error.message);
+      // Permission denied (42501) or table doesn't exist — use local defaults
+      // instead of flooding the console. The migration may not be applied yet
+      // or the user might not have the required role.
+      if (error.code !== '42501') {
+        console.warn('[PrintSettings] DB load failed:', error.message);
+      } else if (import.meta.env.DEV) {
+        console.info('[PrintSettings] Using local defaults (DB load not available)');
+      }
       return null;
     }
     if (!data) return null;
@@ -175,6 +182,9 @@ async function saveToDb(settings: PrintSettings): Promise<void> {
 
       if (error) throw error;
     } else {
+      // Insert the singleton row.
+      // Let errors propagate so callers (syncNow) can signal success/failure.
+      // Auto-sync debounce handles the error via .catch().
       const { data: inserted, error } = await insforge.database
         .from('print_settings')
         .insert([settingsToRow(settings)])
@@ -245,12 +255,17 @@ export function PrintSettingsProvider({ children }: { children: React.ReactNode 
     saveToStorage(settings);
     _cachedSettings = settings;
 
-    // Debounce DB write (300ms) — background failures are silently logged
+    // Debounce DB write (300ms) — background failures are non-fatal since
+    // localStorage is the live fallback. Log non-permission errors in DEV.
     if (dbTimerRef.current) clearTimeout(dbTimerRef.current);
     dbTimerRef.current = setTimeout(() => {
       saveToDb(settings)
         .then(() => setLastSyncedAt(new Date().toISOString()))
-        .catch((err) => console.warn('[PrintSettings] Auto-sync failed:', err));
+        .catch((err: { code?: string; message?: string }) => {
+          if (import.meta.env.DEV && err?.code !== '42501') {
+            console.info('[PrintSettings] Auto-sync skipped:', err?.message || 'unknown');
+          }
+        });
     }, 300);
 
     return () => {

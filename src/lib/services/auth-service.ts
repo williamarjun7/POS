@@ -19,6 +19,10 @@ if (!anonKey) {
 export const insforge = createClient({
   baseUrl,
   anonKey,
+  // Use the backend proxy path for edge functions instead of the derived
+  // subhosting URL (e.g. {appKey}.functions.insforge.app) which returns
+  // 404 with no CORS headers, causing "Network request failed" errors.
+  functionsUrl: `${baseUrl}/functions`,
 })
 
 export type InsForgeUser = Awaited<ReturnType<typeof insforge.auth.getCurrentUser>>['data']
