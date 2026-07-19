@@ -63,6 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_table_sessions_created
 
 -- ─── Trigger: updated_at ──────────────────────────────────────────────────
 
+DROP TRIGGER IF EXISTS trg_table_sessions_updated_at ON public.table_sessions;
+
 CREATE TRIGGER trg_table_sessions_updated_at
   BEFORE UPDATE ON public.table_sessions
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();

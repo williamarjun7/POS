@@ -7,7 +7,7 @@
 
 -- ─── 29. User Profiles ────────────────────────────────────────────────────
 
-CREATE TABLE public.user_profiles (
+CREATE TABLE IF NOT EXISTS public.user_profiles (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email       TEXT NOT NULL,
   name        TEXT NOT NULL DEFAULT '',
@@ -20,7 +20,9 @@ CREATE TABLE public.user_profiles (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX idx_user_profiles_email ON public.user_profiles(email);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profiles_email ON public.user_profiles(email);
+
+DROP TRIGGER IF EXISTS trg_user_profiles_updated_at ON public.user_profiles;
 
 CREATE TRIGGER trg_user_profiles_updated_at
   BEFORE UPDATE ON public.user_profiles

@@ -36,6 +36,7 @@ $$;
 -- This prevents "permission denied for table print_settings" on dashboard load.
 
 DROP POLICY IF EXISTS "cashier_select" ON public.print_settings;
+DROP POLICY IF EXISTS "authenticated_select" ON public.print_settings;
 
 CREATE POLICY "authenticated_select" ON public.print_settings
   FOR SELECT TO authenticated

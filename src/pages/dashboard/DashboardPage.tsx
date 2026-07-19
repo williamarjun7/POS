@@ -40,6 +40,7 @@ import {
   useUpdateRoomStatus,
 } from '../../lib/hooks';
 import { insforge } from '../../lib/services/auth-service';
+import { TABLE_STATUS_LABELS, TABLE_STATUS_COLORS } from '@/lib/constants';
 
 interface PendingPaymentItem {
   id: string
@@ -62,17 +63,8 @@ interface PendingPaymentItem {
 
 
 
-// Inline table status mappings (previously imported from types)
-const TABLE_STATUS_LABELS: Record<string, string> = {
-  available: 'Available', free: 'Available', occupied: 'Occupied', reserved: 'Reserved',
-  cleaning: 'Cleaning', maintenance: 'Maintenance', dirty: 'Needs Cleaning',
-  disabled: 'Disabled', out_of_order: 'Out of Order',
-}
-const TABLE_STATUS_COLORS: Record<string, string> = {
-  available: 'bg-emerald-500', free: 'bg-emerald-500', occupied: 'bg-orange-500',
-  reserved: 'bg-blue-500', cleaning: 'bg-cyan-500', maintenance: 'bg-red-500',
-  dirty: 'bg-amber-500', needs_checkout: 'bg-orange-500', needs_payment: 'bg-red-500',
-}
+// Table status mappings — imported from shared constants
+// (see src/lib/constants/index.ts)
 
 export default function DashboardPage() {
   const navigate = useNavigate();

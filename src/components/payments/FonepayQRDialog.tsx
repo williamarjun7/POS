@@ -209,6 +209,35 @@ export function FonepayQRDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amount, orderId, customerName])
 
+  // ─── Handle payment success (idempotent) ─────────────────
+  // ⚠️ MUST be declared BEFORE the polling+WebSocket effect that depends on it.
+  //     JavaScript `const` has a temporal dead zone — referencing it in a
+  //     useEffect dependency array before its declaration causes a ReferenceError.
+  const handlePaymentSuccess = useCallback(() => {
+    if (successHandledRef.current) return
+    successHandledRef.current = true
+
+    // Clean up all side-effects immediately
+    pollAbortRef.current?.abort()
+    wsCleanupRef.current?.()
+    wsCleanupRef.current = null
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current)
+      countdownRef.current = null
+    }
+
+    setStatus('success')
+
+    // Brief success animation, then hand off to parent
+    successTimeoutRef.current = setTimeout(() => {
+      successTimeoutRef.current = null
+      if (!cancelledRef.current) {
+        log('ON_SUCCESS_CALLED', 'Handing off to parent')
+        onSuccess()
+      }
+    }, 600)
+  }, [onSuccess])
+
   // ─── Polling + WebSocket (started when QR displays) ─────
   useEffect(() => {
     if (status !== 'displaying' || !qrData) return
@@ -313,32 +342,6 @@ export function FonepayQRDialog({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, qrData, handlePaymentSuccess])
-
-  // ─── Handle payment success (idempotent) ─────────────────
-  const handlePaymentSuccess = useCallback(() => {
-    if (successHandledRef.current) return
-    successHandledRef.current = true
-
-    // Clean up all side-effects immediately
-    pollAbortRef.current?.abort()
-    wsCleanupRef.current?.()
-    wsCleanupRef.current = null
-    if (countdownRef.current) {
-      clearInterval(countdownRef.current)
-      countdownRef.current = null
-    }
-
-    setStatus('success')
-
-    // Brief success animation, then hand off to parent
-    successTimeoutRef.current = setTimeout(() => {
-      successTimeoutRef.current = null
-      if (!cancelledRef.current) {
-        log('ON_SUCCESS_CALLED', 'Handing off to parent')
-        onSuccess()
-      }
-    }, 600)
-  }, [onSuccess])
 
   // ─── Countdown timer for QR expiry ───────────────────────
   useEffect(() => {

@@ -8,8 +8,6 @@
 -- Issue 13:  Overly permissive RLS on activity_logs.staff_insert
 -- ═══════════════════════════════════════════════════════════════
 
-BEGIN;
-
 -- ═══════════════════════════════════════════════════════════════
 -- Issues 1-9: Revoke EXECUTE FROM public, grant TO authenticated
 -- ═══════════════════════════════════════════════════════════════
@@ -56,16 +54,9 @@ CREATE INDEX IF NOT EXISTS idx_table_sessions_closed_by
 -- ═══════════════════════════════════════════════════════════════
 -- Issue 11: Tighten notifications.staff_insert RLS policy
 -- ═══════════════════════════════════════════════════════════════
-
-DROP POLICY IF EXISTS "staff_insert" ON public.notifications;
-
-CREATE POLICY "staff_insert" ON public.notifications
-  FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    user_id IS NULL
-    OR user_id = (select auth.uid())
-  );
+-- SKIPPED: Notifications table was dropped in migration
+-- 20260719000100, so no policies can be created on it.
+-- ═══════════════════════════════════════════════════════════════
 
 -- ═══════════════════════════════════════════════════════════════
 -- Issue 12: Tighten user_profiles.staff_select RLS policy
@@ -90,4 +81,3 @@ CREATE POLICY "staff_insert" ON public.activity_logs
     user_id = (select auth.uid())
   );
 
-COMMIT;

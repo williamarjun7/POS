@@ -27,8 +27,8 @@ import { insertInvoiceItems } from '@/lib/services/invoice-items-service';
 import { idempotencyGuard } from '@/lib/services/idempotency-guard';
 import { deductStockForSoldItems } from '@/lib/services/inventory-service';
 import { db } from '@/lib/db/insforge';
-// TABLE_STATUS_LABELS/COLORS removed — inlined below
 import { formatCurrency } from '@/lib/utils';
+import { TABLE_STATUS_LABELS, TABLE_STATUS_COLORS } from '@/lib/constants';
 import {
   calculateRunningTotal,
   calculateTotalWithCart,
@@ -78,17 +78,8 @@ function getIconForCategory(name: string): React.ElementType {
   return key ? categoryIcons[key] : UtensilsCrossed;
 }
 
-// Inline table status mappings
-const TABLE_STATUS_LABELS: Record<string, string> = {
-  available: 'Available', free: 'Available', occupied: 'Occupied', reserved: 'Reserved',
-  cleaning: 'Cleaning', maintenance: 'Maintenance', dirty: 'Needs Cleaning',
-  disabled: 'Disabled', out_of_order: 'Out of Order',
-}
-const TABLE_STATUS_COLORS: Record<string, string> = {
-  available: 'bg-emerald-500', free: 'bg-emerald-500', occupied: 'bg-orange-500',
-  reserved: 'bg-blue-500', cleaning: 'bg-cyan-500', maintenance: 'bg-red-500',
-  dirty: 'bg-amber-500', needs_checkout: 'bg-orange-500', needs_payment: 'bg-red-500',
-}
+// Table status mappings — imported from shared constants
+// (see src/lib/constants/index.ts)
 
 // ─── Animation Variants ─────────────────────────────────────
 // Apple-inspired smooth easing: natural deceleration curve
@@ -355,17 +346,12 @@ export function POS() {
         details: `Voided item ${itemId.slice(0, 8)} in batch ${batchId.slice(0, 8)}`,
       });
 
-      // Invalidate ALL related caches so every page stays in sync
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['batches'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'rooms'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'pendingInvoices'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'orders'] }),
-        queryClient.invalidateQueries({ queryKey: ['analytics'] }),
-        queryClient.invalidateQueries({ queryKey: ['finance'] }),
-      ]);
+      // Invalidate related caches — use wildcard prefix to invalidate
+      // all dashboard-* and finance-related keys in one call each
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['batches'] });
+      queryClient.invalidateQueries({ queryKey: ['finance'] });
+      queryClient.invalidateQueries({ queryKey: ['analytics'] });
 
       showSuccess('Item voided successfully');
     } catch (err) {
@@ -449,15 +435,23 @@ export function POS() {
     } catch { /* ignore corrupt sessionStorage */ }
   }, []);
 
-  // Save cart to sessionStorage on changes
+  // Save cart to sessionStorage on changes (debounced 500ms to avoid
+  // blocking the main thread during rapid POS item entry)
+  const cartSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    try {
-      sessionStorage.setItem(CART_STORAGE_KEY, JSON.stringify({
-        cartItems: newCartItems,
-        selectedTableId,
-        customerName,
-      }));
-    } catch { /* sessionStorage full or unavailable */ }
+    if (cartSaveTimerRef.current) clearTimeout(cartSaveTimerRef.current);
+    cartSaveTimerRef.current = setTimeout(() => {
+      try {
+        sessionStorage.setItem(CART_STORAGE_KEY, JSON.stringify({
+          cartItems: newCartItems,
+          selectedTableId,
+          customerName,
+        }));
+      } catch { /* sessionStorage full or unavailable */ }
+    }, 500);
+    return () => {
+      if (cartSaveTimerRef.current) clearTimeout(cartSaveTimerRef.current);
+    };
   }, [newCartItems, selectedTableId, customerName]);
 
   // ─── Load batches from DB when table is selected ─
@@ -913,14 +907,9 @@ export function POS() {
       });
     }
 
-    // ponytail: only invalidate dashboard-facing keys, batch to avoid serial awaits
-    Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] }),
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'rooms'] }),
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] }),
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'pendingInvoices'] }),
-      queryClient.invalidateQueries({ queryKey: ['batches'] }),
-    ]);
+    // Invalidations are fire-and-forget — single wildcard covers all dashboard-* keys
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['batches'] });
 
     // Don't navigate to dashboard for partial payments — the cashier may continue
     // paying the remaining balance from the same POS session.
@@ -1007,14 +996,9 @@ export function POS() {
       setCustomerName('');
       try { sessionStorage.removeItem(CART_STORAGE_KEY); } catch { /* ignore */ }
 
-      // ponytail: only dashboard-facing keys, batched
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'pendingInvoices'] }),
-        queryClient.invalidateQueries({ queryKey: ['batches'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'orders'] }),
-      ]);
+      // Fire-and-forget — single wildcard covers all dashboard-* keys
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['batches'] });
 
       // 5. Navigate back to Dashboard so the cashier sees the updated table status
       navigate('/dashboard');

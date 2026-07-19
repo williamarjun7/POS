@@ -16,17 +16,32 @@
 -- ─── Cashiers can INSERT new customers ─────────────────────────────────────
 -- Needed for: ensureCustomer() in customer-ledger.ts creates new customer
 -- records when a credit payment references a name not yet in the DB.
-CREATE POLICY IF NOT EXISTS "cashier_insert" ON public.customers
-  FOR INSERT TO authenticated
-  WITH CHECK (public.is_cashier_or_above());
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'cashier_insert'
+  ) THEN
+    CREATE POLICY "cashier_insert" ON public.customers
+      FOR INSERT TO authenticated
+      WITH CHECK (public.is_cashier_or_above());
+  END IF;
+END;
+$$;
 
--- ─── Cashiers can UPDATE existing customers ────────────────────────────────
--- Needed for: recordCreditCharge() in customer-ledger.ts updates
--- credit_balance, total_orders, total_spent, and last_visit after a charge.
-CREATE POLICY IF NOT EXISTS "cashier_update" ON public.customers
-  FOR UPDATE TO authenticated
-  USING (public.is_cashier_or_above())
-  WITH CHECK (public.is_cashier_or_above());
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'customers' AND policyname = 'cashier_update'
+  ) THEN
+    CREATE POLICY "cashier_update" ON public.customers
+      FOR UPDATE TO authenticated
+      USING (public.is_cashier_or_above())
+      WITH CHECK (public.is_cashier_or_above());
+  END IF;
+END;
+$$;
 
 -- ============================================================================
 -- VERIFICATION

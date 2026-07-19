@@ -173,14 +173,8 @@ export function PosPaymentDialog({
     );
   }, [customersList, customerSearch]);
 
-  // ─── Items — bail out early if nothing to pay ─────────
+  // ─── Items — computed unconditionally (before early return) ────
   const items = useMemo(() => unpaidItems ?? [], [unpaidItems]);
-  // Guard: close dialog immediately if there are no unpaid items
-  if (items.length === 0) {
-    // Prevents opening an empty payment dialog (Issue #3)
-    setTimeout(() => { onClose?.(); }, 50);
-    return null;
-  }
 
   const subtotal = useMemo(() => items.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0), [items]);
   const discountAmount = useMemo(() => {
@@ -201,6 +195,14 @@ export function PosPaymentDialog({
   const partialAmountNum = Number(partialAmount) || 0;
   const isPartialValid = partialAmountNum > 0 && partialAmountNum <= grandTotal;
   const partialRemaining = grandTotal - partialAmountNum;
+
+  // ─── Guard: close dialog immediately if there are no unpaid items ───
+  // NOTE: This is intentionally AFTER all useMemo/useEffect/useCallback
+  // calls so React's Rules of Hooks are never violated.
+  if (items.length === 0) {
+    setTimeout(() => { onClose?.(); }, 50);
+    return null;
+  }
 
   const getPaymentResult = (inv: InvoiceData, extraCredit?: { amount: number; customerName: string }): PaymentResult => {
     // For split payments (when paidItemIds is narrowed), the invoice should

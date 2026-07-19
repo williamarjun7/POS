@@ -62,6 +62,8 @@ CREATE INDEX IF NOT EXISTS idx_table_sessions_created
 
 -- ─── Trigger: updated_at ──────────────────────────────────────────────────
 
+DROP TRIGGER IF EXISTS trg_table_sessions_updated_at ON public.table_sessions;
+
 CREATE TRIGGER trg_table_sessions_updated_at
   BEFORE UPDATE ON public.table_sessions
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -364,31 +366,37 @@ $$;
 ALTER TABLE public.table_sessions ENABLE ROW LEVEL SECURITY;
 
 -- Admin/manager: full CRUD
+DROP POLICY IF EXISTS "admin_manager_all" ON public.table_sessions;
 CREATE POLICY "admin_manager_all" ON public.table_sessions
   FOR ALL TO authenticated
   USING (public.is_manager_or_above())
   WITH CHECK (public.is_manager_or_above());
 
 -- Cashier/waiter: can INSERT and SELECT (triggers may create sessions)
+DROP POLICY IF EXISTS "cashier_insert" ON public.table_sessions;
 CREATE POLICY "cashier_insert" ON public.table_sessions
   FOR INSERT TO authenticated
   WITH CHECK (public.is_cashier_or_above());
 
+DROP POLICY IF EXISTS "cashier_select" ON public.table_sessions;
 CREATE POLICY "cashier_select" ON public.table_sessions
   FOR SELECT TO authenticated
   USING (public.is_cashier_or_above());
 
+DROP POLICY IF EXISTS "cashier_update" ON public.table_sessions;
 CREATE POLICY "cashier_update" ON public.table_sessions
   FOR UPDATE TO authenticated
   USING (public.is_cashier_or_above())
   WITH CHECK (public.is_cashier_or_above());
 
 -- Cashier/waiter: DELETE for cleanup operations (e.g., voiding a batch with accidental session creation)
+DROP POLICY IF EXISTS "cashier_delete" ON public.table_sessions;
 CREATE POLICY "cashier_delete" ON public.table_sessions
   FOR DELETE TO authenticated
   USING (public.is_cashier_or_above());
 
 -- Receptionist/housekeeper: SELECT only (needed for dashboard display)
+DROP POLICY IF EXISTS "receptionist_select" ON public.table_sessions;
 CREATE POLICY "receptionist_select" ON public.table_sessions
   FOR SELECT TO authenticated
   USING (public.is_receptionist_or_above() OR public.is_housekeeper_or_above());
