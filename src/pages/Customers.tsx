@@ -43,6 +43,7 @@ interface Invoice {
   tax: number
   discount: number
   total: number
+  paid: number
   status: "paid" | "pending" | "overdue" | "partial"
   paymentMethod: PaymentMethod
   createdAt: string
@@ -54,7 +55,7 @@ interface PaymentSplit {
   amount: number
 }
 
-const paymentMethodOptions = (["cash", "fonepay", "credit", "reception_qr"] as PaymentMethod[]).map(m => ({
+const paymentMethodOptions = (["cash", "fonepay", "reception_qr"] as PaymentMethod[]).map(m => ({
   value: m,
   label: getPaymentMethodLabel(m),
 }))
@@ -244,21 +245,44 @@ function ReceivePaymentModal({
           .eq('customer_name', selected.name)
           .order('created_at', { ascending: false })
         if (error) throw error
-        const fetchedInvoices = (data ?? []).map(row => ({
-          id: row.id,
-          invoiceNumber: row.invoice_number,
-          customerId: row.customer_id ?? row.id,
-          customerName: row.customer_name,
-          items: [],
-          subtotal: row.subtotal,
-          tax: row.tax,
-          discount: row.discount,
-          total: row.total,
-          status: row.status as Invoice['status'],
-          paymentMethod: (row.payment_method as Invoice['paymentMethod']) ?? 'cash',
-          createdAt: row.created_at,
-          dueDate: row.due_date ?? undefined,
-        }))
+        const invoiceRows = data ?? []
+        const invoiceIds = invoiceRows.map((r: any) => r.id)
+
+        // ═══ Fetch already-paid amounts per invoice (real money only) ═══
+        // Credit is NOT payment — filter it out so outstanding is correct.
+        const paidByInvoice = new Map<string, number>()
+        if (invoiceIds.length > 0) {
+          const { data: paymentsData } = await insforge.database
+            .from('payments')
+            .select('invoice_id, amount, payment_method')
+            .in('invoice_id', invoiceIds)
+          const payments = (paymentsData ?? []) as Array<{ invoice_id: string; amount: number; payment_method: string }>
+          for (const p of payments) {
+            if (p.payment_method !== 'credit' && p.invoice_id) {
+              paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + p.amount)
+            }
+          }
+        }
+
+        const fetchedInvoices = invoiceRows.map((row: any) => {
+          const paid = paidByInvoice.get(row.id) ?? 0
+          return {
+            id: row.id,
+            invoiceNumber: row.invoice_number,
+            customerId: row.customer_id ?? row.id,
+            customerName: row.customer_name,
+            items: [],
+            subtotal: row.subtotal,
+            tax: row.tax,
+            discount: row.discount,
+            total: row.total,
+            paid,  // Add paid amount for outstanding calculation
+            status: row.status as Invoice['status'],
+            paymentMethod: (row.payment_method as Invoice['paymentMethod']) ?? 'cash',
+            createdAt: row.created_at,
+            dueDate: row.due_date ?? undefined,
+          }
+        })
         setCustomerInvoices(fetchedInvoices)
 
         // Auto-select all unpaid invoices when opened from profile
@@ -296,11 +320,18 @@ function ReceivePaymentModal({
     )
   }, [selectedCustomerId, customerInvoices])
 
+  const outstandingInvoicesWithBalance = useMemo(() => {
+    return outstandingInvoices.map(inv => ({
+      ...inv,
+      outstanding: Math.max(0, inv.total - inv.paid),
+    }))
+  }, [outstandingInvoices])
+
   const selectedTotal = useMemo(() => {
-    return outstandingInvoices
+    return outstandingInvoicesWithBalance
       .filter((inv) => selectedInvoiceIds.includes(inv.id))
-      .reduce((sum, inv) => sum + inv.total, 0)
-  }, [outstandingInvoices, selectedInvoiceIds])
+      .reduce((sum, inv) => sum + inv.outstanding, 0)
+  }, [outstandingInvoicesWithBalance, selectedInvoiceIds])
 
   const totalPaid = paymentSplits.reduce((sum, s) => sum + s.amount, 0)
   const remaining = selectedTotal - totalPaid
@@ -480,7 +511,7 @@ function ReceivePaymentModal({
               )}
             </div>
             <div className="space-y-1 max-h-36 overflow-y-auto">
-              {outstandingInvoices.map((inv) => (
+              {outstandingInvoicesWithBalance.map((inv) => (
                 <label
                   key={inv.id}
                   className={cn(
@@ -500,10 +531,18 @@ function ReceivePaymentModal({
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{inv.invoiceNumber}</p>
                       <p className="text-[11px] text-muted-foreground">{formatDateTime(inv.createdAt)}</p>
+                      {inv.paid > 0 && (
+                        <p className="text-[10px] text-success">{formatCurrency(inv.paid)} already paid</p>
+                      )}
                     </div>
-                    <span className="text-sm font-semibold text-foreground shrink-0">
-                      {formatCurrency(inv.total)}
-                    </span>
+                    <div className="text-right shrink-0">
+                      <span className="text-sm font-semibold text-foreground">
+                        {formatCurrency(inv.outstanding)}
+                      </span>
+                      {inv.paid > 0 && (
+                        <p className="text-[10px] text-muted-foreground">of {formatCurrency(inv.total)}</p>
+                      )}
+                    </div>
                   </div>
                 </label>
               ))}
@@ -784,12 +823,23 @@ export function Customers() {
       // Create payment records via direct DB insert (customer-level, not invoice-level)
       // Using raw insert because createPaymentInDb requires a single invoiceId (UUID)
       // which doesn't fit the customer-payment pattern against multiple invoices.
+      // ═══ invoice_id is ALWAYS set for non-credit payments ═══
+      // This links the payment to an invoice so the ReceivePaymentModal can
+      // find it later when computing already-paid amounts. Without this, payments
+      // recorded through this modal are invisible to the outstanding calculation.
+      // A DB CHECK constraint enforces this at the database level:
+      //   payment_method != 'credit' → invoice_id IS NOT NULL
+      // When multiple invoices are selected, all splits get attributed to the
+      // first invoice (approximate but prevents FK violations). The per-invoice
+      // status-update loop below independently handles each invoice's outstanding.
+      const firstInvoiceId = invoiceIds && invoiceIds.length > 0 ? invoiceIds[0] : null
       for (const split of splits) {
         if (split.amount <= 0) continue
         const { error: payError } = await insforge.database
           .from('payments')
           .insert([{
             customer_id: customerId,
+            invoice_id: split.method === 'credit' ? null : firstInvoiceId,
             amount: split.amount,
             payment_method: split.method,
             reference: idempotencyKey,
@@ -811,9 +861,23 @@ export function Customers() {
           .from('invoices')
           .select('id, total')
           .in('id', invoiceIds)
+        // Fetch already-paid amounts (real money only) to compute outstanding
+        const invoiceIdSet = new Set(invoiceIds)
+        const { data: payData } = await insforge.database
+          .from('payments')
+          .select('invoice_id, amount, payment_method')
+          .in('invoice_id', invoiceIds)
+        const paidByInvoice = new Map<string, number>()
+        for (const p of (payData ?? []) as Array<{ invoice_id: string; amount: number; payment_method: string }>) {
+          if (p.payment_method !== 'credit' && p.invoice_id) {
+            paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + p.amount)
+          }
+        }
         if (invData) {
           for (const row of invData as Array<{ id: string; total: number }>) {
-            const isFullyCovered = amount >= (Number(row.total) - 0.01)
+            const paidSoFar = paidByInvoice.get(row.id) ?? 0
+            const outstanding = Math.max(0, Number(row.total) - paidSoFar)
+            const isFullyCovered = (amount - 0.01) >= outstanding
             const newStatus = isFullyCovered ? 'paid' : 'partial'
             await insforge.database
               .from('invoices')

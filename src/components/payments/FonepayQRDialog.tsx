@@ -29,6 +29,12 @@ function generateQRDataURL(
   text: string,
   options: { width: number; margin: number; color: { dark: string; light: string } },
 ): string {
+  if (!text || text.trim().length === 0) {
+    throw new Error(
+      'Cannot generate QR code: Fonepay returned an empty QR message. ' +
+        'This may indicate a configuration issue with the payment gateway.',
+    )
+  }
   const qrData = QRCode.create(text, { margin: options.margin })
   const size = qrData.modules.size
   const data = qrData.modules.data
@@ -172,6 +178,15 @@ export function FonepayQRDialog({
         if (!mounted || cancelledRef.current) return
 
         log('QR_GENERATED', { prn: prn.slice(0, 8) })
+
+        // Validate the API response has a non-empty QR message
+        if (!data.qrMessage || data.qrMessage.trim().length === 0) {
+          throw new FonepayError(
+            'Payment gateway returned an empty QR code. ' +
+              'Please check the gateway configuration and try again.',
+            'EMPTY_QR_MESSAGE',
+          )
+        }
 
         const qrImage = generateQRDataURL(data.qrMessage, {
           width: 320,
@@ -419,6 +434,15 @@ export function FonepayQRDialog({
         remarks1: `Highlands Cafe POS\n${invoiceNumber || customerName || 'POS Payment'}`,
       })
       log('REGENERATE_QR_GENERATED', { prn: prn.slice(0, 8) })
+
+      // Validate the API response has a non-empty QR message
+      if (!data.qrMessage || data.qrMessage.trim().length === 0) {
+        throw new FonepayError(
+          'Payment gateway returned an empty QR code. ' +
+            'Please check the gateway configuration and try again.',
+          'EMPTY_QR_MESSAGE',
+        )
+      }
 
       const qrImage = generateQRDataURL(data.qrMessage, {
         width: 320,

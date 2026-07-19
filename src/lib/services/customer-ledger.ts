@@ -73,6 +73,58 @@ async function ensureCustomer(name: string): Promise<CustomerRow> {
 }
 
 /**
+ * Update customer spending after an invoice is created.
+ *
+ * Called from POS checkout flow AFTER the invoice is successfully created.
+ * Increments total_spent (by invoice total), total_orders, and last_visit.
+ * Backfills customer_id on the invoice so the FK relationship is intact.
+ *
+ * @returns The customer's database ID, or null if no real customer name.
+ */
+export async function updateCustomerAfterInvoice(
+  customerName: string,
+  invoiceTotal: number,
+  invoiceId?: string,
+): Promise<string | null> {
+  // Skip anonymous/Walk-in — no customer record to update
+  if (!customerName || customerName === 'Walk-in' || customerName.trim().length === 0) {
+    return null
+  }
+
+  const customer = await ensureCustomer(customerName.trim())
+
+  // Update the customer's totals
+  const { error: updateError } = await db.update(
+    'customers',
+    {
+      total_spent: (customer.total_spent ?? 0) + invoiceTotal,
+      total_orders: (customer.total_orders ?? 0) + 1,
+      last_visit: new Date().toISOString(),
+    },
+    { id: customer.id },
+  )
+
+  if (updateError) {
+    console.error('Failed to update customer spending:', updateError)
+    // Non-fatal — the invoice and payments are already committed
+  }
+
+  // Backfill the invoice's customer_id so the FK relationship is intact
+  if (invoiceId) {
+    const { error: backfillError } = await db.update(
+      'invoices',
+      { customer_id: customer.id },
+      { id: invoiceId },
+    )
+    if (backfillError) {
+      console.error('Failed to backfill invoice customer_id:', backfillError)
+    }
+  }
+
+  return customer.id
+}
+
+/**
  * Record a credit charge (customer buys on credit).
  * Inserts a payment record and increases the customer's credit_balance.
  */
@@ -124,13 +176,14 @@ export async function recordCreditCharge(
   }
 
   // Update the customer's credit balance
+  // IMPORTANT: credit_balance increases (customer now owes more)
+  //            total_spent and total_orders are handled by updateCustomerAfterInvoice
+  //            (called from POS.tsx after invoice creation)
   const newBalance = (customer.credit_balance ?? 0) + safe.amount
   const { error: updateError } = await db.update(
     'customers',
     {
       credit_balance: newBalance,
-      total_orders: customer.total_orders + 1,
-      total_spent: (customer.total_spent ?? 0) + safe.amount,
       last_visit: new Date().toISOString(),
     },
     { id: customer.id },
@@ -220,10 +273,20 @@ export async function getCustomerLedger(
     .map((p) => ({
       id: p.id,
       date: p.created_at,
-      type: (p.payment_method === 'credit' ? 'payment' : 'charge') as LedgerEntryType,
+      // NOTE: All credit entries in the payments table with method='credit'
+      // are CHARGES (customer owes money). Payments (customer pays down)
+      // are also stored with method='credit' and can be differentiated by
+      // amount sign or notes — for now, the credit_balance tells the real story.
+      type: 'charge' as LedgerEntryType,
       amount: p.amount,
       invoiceNumber: p.reference ?? undefined,
-      description: p.notes ?? `Credit transaction on ${p.created_at}`,
+      description: p.notes?.startsWith('Credit payment')
+        ? p.notes  // Customer paying down balance
+        : p.notes?.startsWith('Credit charge')
+          ? p.notes
+          : p.notes?.startsWith('Auto-credit')
+            ? p.notes
+            : `Credit created — ${p.reference ? `Invoice ${p.reference}` : 'Outstanding charge'}`,
     }))
     .sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),

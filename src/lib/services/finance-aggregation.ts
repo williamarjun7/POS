@@ -106,17 +106,15 @@ const PAYMENT_COLORS: Record<string, string> = {
 
 function getMethodColor(method: string): string {
   return PAYMENT_COLORS[method] ?? '#94a3b8'
-}
-
-function getMethodLabel(method: string): string {
-  const labels: Record<string, string> = {
-    cash: 'Cash with Change',
-    reception_qr: 'Reception QR',
-    fonepay: 'FonePay QR',
-    credit: 'Credit Payment',
-    split: 'Split Payment',
-    partial: 'Partial Payment',
-  }
+}  function getMethodLabel(method: string): string {
+    const labels: Record<string, string> = {
+      cash: 'Cash with Change',
+      reception_qr: 'Reception QR',
+      fonepay: 'FonePay QR',
+      credit: 'Credit Created',
+      split: 'Split Payment',
+      partial: 'Partial Payment',
+    }
   return labels[method] ?? method.charAt(0).toUpperCase() + method.slice(1).replace(/_/g, ' ')
 }
 
@@ -220,13 +218,14 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
   const creditOutstanding = ((customersData ?? []) as Array<{ credit_balance: number }>)
     .reduce((sum, c) => sum + Number(c.credit_balance), 0)
 
-  // 5. Today's collected (payments today)
+  // 5. Today's collected (REAL MONEY only — credit is NOT payment)
   const { data: todayPayments } = await insforge.database
     .from('payments')
-    .select('amount')
+    .select('amount, payment_method')
     .gte('created_at', `${today}T00:00:00Z`)
 
-  const collectedToday = ((todayPayments ?? []) as Array<{ amount: number }>)
+  const collectedToday = ((todayPayments ?? []) as Array<{ amount: number; payment_method: string | null }>)
+    .filter(p => p.payment_method !== 'credit')
     .reduce((sum, p) => sum + Number(p.amount), 0)
 
   // 6. Today's sales (invoices today)
@@ -354,12 +353,13 @@ async function fetchFinancialSummaryForRange(
   const creditOutstanding = ((custData ?? []) as Array<{ credit_balance: number }>)
     .reduce((s, c) => s + Number(c.credit_balance), 0)
 
-  // Today's payments collected
+  // Today's REAL payments collected (credit is NOT payment)
   const { data: todayPays } = await insforge.database
     .from('payments')
-    .select('amount')
+    .select('amount, payment_method')
     .gte('created_at', toISOStart(today))
-  const collectedToday = ((todayPays ?? []) as Array<{ amount: number }>)
+  const collectedToday = ((todayPays ?? []) as Array<{ amount: number; payment_method: string | null }>)
+    .filter(p => p.payment_method !== 'credit')
     .reduce((s, p) => s + Number(p.amount), 0)
 
   // Today's invoices
@@ -504,7 +504,8 @@ async function fetchPaymentMethodBreakdown(
     buckets[method].total += Number(p.amount)
   }
 
-  const methodKeys = ['cash', 'reception_qr', 'fonepay', 'credit']
+  // REAL MONEY methods only — credit is NOT payment
+  const methodKeys = ['cash', 'reception_qr', 'fonepay']
 
   const entries: PaymentMethodBreakdownEntry[] = []
   let grandTotal = 0

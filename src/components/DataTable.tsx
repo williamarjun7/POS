@@ -109,7 +109,7 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
-            <AnimatePresence mode="wait">
+            <AnimatePresence>
               {paged.length === 0 ? (
                 <motion.tr
                   key="empty"

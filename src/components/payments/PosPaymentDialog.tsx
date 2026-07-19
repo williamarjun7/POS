@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';import { ArrowLeft, Banknote, QrCode, CreditCard, Percent, DollarSign,
-  Users, Smartphone, Check, AlertCircle, Loader2, Printer,
+  Users, Smartphone, Check, AlertCircle, Loader2, Printer, User,
 } from 'lucide-react';
 
 // ─── Dev logging ────────────────────────────────────────────
@@ -35,12 +35,13 @@ import { FonepayQRDialog } from './FonepayQRDialog';
 import { SplitPaymentDialog } from './SplitPaymentDialog';
 import { CreditAccountPayment } from './CreditAccountPayment';
 import { ReceptionQRDialog } from './ReceptionQRDialog';
+import { PartialPaymentDialog } from './PartialPaymentDialog';
 import { insforge } from '@/lib/services/auth-service';
 
 // ─── Types ───────────────────────────────────────────────────
 
 type PaymentView = 'review' | 'cash' | 'credit' | 'partial' | 'split'
-  | 'fonepay' | 'partial_fonepay' | 'split_fonepay' | 'split_credit'
+  | 'fonepay'
   | 'reception_qr' | 'success' | 'partial_customer';
 
 interface OrderItem {
@@ -72,6 +73,10 @@ export interface PaymentResult {
   paidAmount: number;
   creditAmount?: number;
   creditCustomerName?: string;
+  /** The full invoice total (NOT the partial amount).
+   *  For partial payments, this is the TOTAL bill amount.
+   *  For full payments, same as grandTotal. */
+  invoiceTotal?: number;
 }
 
 interface PosPaymentDialogProps {
@@ -107,11 +112,7 @@ const COLOR_STYLES: Record<string, {
   orange: { border: 'border-orange-400', hover: 'hover:border-orange-400 hover:bg-orange-50/50 dark:hover:bg-orange-950/10', bg: 'bg-orange-50 dark:bg-orange-950/10', text: 'text-orange-700 dark:text-orange-300', iconBg: 'bg-orange-100 dark:bg-orange-900/30', iconText: 'text-orange-600', ring: 'focus:ring-orange-500/30 focus:border-orange-500' },
 };
 
-const PARTIAL_METHODS = [
-  { value: 'cash' as const, label: getPaymentMethodLabel('cash'), icon: Banknote, color: 'emerald' },
-  { value: 'reception_qr' as const, label: getPaymentMethodLabel('reception_qr'), icon: Smartphone, color: 'sky' },
-  { value: 'fonepay' as const, label: getPaymentMethodLabel('fonepay'), icon: QrCode, color: 'blue' },
-];
+
 
 const CASH_QUICK_AMOUNTS = [100, 200, 500, 1000, 2000, 5000];
 
@@ -132,21 +133,93 @@ export function PosPaymentDialog({
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed'>('percentage');
   const [discountValue, setDiscountValue] = useState(0);
   const [cashReceived, setCashReceived] = useState('');
-  const [partialAmount, setPartialAmount] = useState('');
-  const [partialMethod, setPartialMethod] = useState<'cash' | 'fonepay' | 'reception_qr'>('cash');
+
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string } | null>(null);
-  const [pendingPartialFonepay, setPendingPartialFonepay] = useState<number | null>(null);
-  const [pendingSplitFonepay, setPendingSplitFonepay] = useState<{ item_ids: string[]; amount: number } | null>(null);
-  const [pendingSplitCredit, setPendingSplitCredit] = useState<{ item_ids: string[]; amount: number } | null>(null);
+
+  const [splitContext, setSplitContext] = useState<{
+    selectedItemIds: string[]
+    splitSubtotal: number
+  } | null>(null);
   const [completedInvoice, setCompletedInvoice] = useState<InvoiceData | null>(null);
   const [showSuccessView, setShowSuccess] = useState(false);
   const [pendingCreditInfo, setPendingCreditInfo] = useState<{ amount: number; customerName: string } | undefined>(undefined);
-  const [pendingPartialCredit, setPendingPartialCredit] = useState<{ amount: number; method: string; shouldPrint: boolean } | null>(null);
+
   const [customersList, setCustomersList] = useState<Array<{id:string;name:string;phone:string|null}>>([]);
   const [customersLoading, setCustomersLoading] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
+  const [partialContext, setPartialContext] = useState<{
+    partialAmount: number
+    remainingAmount: number
+    method: string
+  } | null>(null);
+  const [pendingPartialCredit, setPendingPartialCredit] = useState<{ amount: number; method: string; shouldPrint: boolean } | null>(null);
   const fonepayInvoiceNumberRef = useRef<string | null>(null);
+
+  // ─── Items — computed unconditionally (before early return) ────
+  // NOTE: MUST be declared before any hook/derivation that references it.
+  const items = useMemo(() => unpaidItems ?? [], [unpaidItems]);
+
+  const subtotal = useMemo(() => items.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0), [items]);
+  const discountAmount = useMemo(() => {
+    if (discountType === 'percentage') return subtotal * (Math.min(discountValue, 100) / 100);
+    return Math.min(discountValue, subtotal);
+  }, [subtotal, discountType, discountValue]);
+  const grandTotal = Math.max(0, subtotal - discountAmount);
+
+  // ─── Split context: effective items / amounts ────────────
+  // NOTE: Declared before cash/effective derivations so they can reference them.
+  const effectiveItems = useMemo(
+    () => splitContext
+      ? items.filter(i => splitContext.selectedItemIds.includes(i.id))
+      : items,
+    [items, splitContext],
+  )
+  const effectiveSubtotal = useMemo(
+    () => effectiveItems.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0),
+    [effectiveItems],
+  )
+  const effectiveGrandTotal = useMemo(
+    () => splitContext
+      ? Math.max(0, effectiveSubtotal - discountAmount * (effectiveSubtotal / (subtotal || 1)))
+      : grandTotal,
+    [effectiveSubtotal, discountAmount, subtotal, grandTotal, splitContext],
+  )
+  const isSplitMode = !!splitContext
+
+  const cashReceivedNum = Number(cashReceived) || 0;
+  const effectiveCashTotal = partialContext?.partialAmount ?? (isSplitMode ? effectiveGrandTotal : grandTotal);
+  const isCashSufficient = cashReceivedNum >= effectiveCashTotal;
+  const changeDue = Math.max(0, cashReceivedNum - effectiveCashTotal);
+  const availablePaymentMethods = useMemo(() => {
+    let methods = PAYMENT_METHOD_BUTTONS;
+    if (isRoomPayment) {
+      methods = methods.filter(m => ['cash', 'reception_qr', 'fonepay'].includes(m.key));
+    }
+    if (!!splitContext) {
+      // In split mode, hide 'split' (you're already splitting) and 'partial' (doesn't apply)
+      methods = methods.filter(m => m.key !== 'split' && m.key !== 'partial');
+    }
+    return methods;
+  }, [isRoomPayment, splitContext]);
+
+  // ─── Payment completion guard — prevents onComplete from being
+  //     called more than once, regardless of code path.
+  //     This is the single most important guard against duplicate
+  //     invoice creation in the POS system.
+  const paymentCompletedRef = useRef(false)
+
+  // Helper: safe onComplete that respects the paymentCompletedRef guard.
+  // Every code path in this dialog that completes a payment MUST use this
+  // helper instead of calling onComplete directly.
+  const safeComplete = (invoiceNumber?: string, result?: PaymentResult) => {
+    if (paymentCompletedRef.current) {
+      log('DUPLICATE_BLOCKED', { invoiceNumber })
+      return
+    }
+    paymentCompletedRef.current = true
+    onComplete?.(invoiceNumber, result)
+  }
 
   // ─── Fetch real customers for credit assignment ───
   useEffect(() => {
@@ -173,28 +246,6 @@ export function PosPaymentDialog({
     );
   }, [customersList, customerSearch]);
 
-  // ─── Items — computed unconditionally (before early return) ────
-  const items = useMemo(() => unpaidItems ?? [], [unpaidItems]);
-
-  const subtotal = useMemo(() => items.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0), [items]);
-  const discountAmount = useMemo(() => {
-    if (discountType === 'percentage') return subtotal * (Math.min(discountValue, 100) / 100);
-    return Math.min(discountValue, subtotal);
-  }, [subtotal, discountType, discountValue]);
-  const grandTotal = Math.max(0, subtotal - discountAmount);
-  const cashReceivedNum = Number(cashReceived) || 0;
-  const isCashSufficient = cashReceivedNum >= grandTotal;
-  const changeDue = Math.max(0, cashReceivedNum - grandTotal);
-  const availablePaymentMethods = useMemo(() => {
-    if (isRoomPayment) {
-      return PAYMENT_METHOD_BUTTONS.filter(m => ['cash', 'reception_qr', 'fonepay'].includes(m.key));
-    }
-    return PAYMENT_METHOD_BUTTONS;
-  }, [isRoomPayment]);
-
-  const partialAmountNum = Number(partialAmount) || 0;
-  const isPartialValid = partialAmountNum > 0 && partialAmountNum <= grandTotal;
-  const partialRemaining = grandTotal - partialAmountNum;
 
   // ─── Guard: close dialog immediately if there are no unpaid items ───
   // NOTE: This is intentionally AFTER all useMemo/useEffect/useCallback
@@ -224,6 +275,7 @@ export function PosPaymentDialog({
         const match = inv.paymentMethod.match(/Credit\s*\(([^)]+)\)/);
         return match ? match[1] : undefined;
       })(),
+      invoiceTotal: grandTotal,
     };
   };
 
@@ -271,15 +323,128 @@ export function PosPaymentDialog({
     };
     setCompletedInvoice(inv);
     setPendingCreditInfo(creditInfo);
+    setPendingPartialCredit(null); // safety net: clear any stale partial state
     setSubmittingPayment(false);
     setShowSuccess(true);
   };
 
-  const handleCashPay = () => { if (!submittingPayment) simulatePayment('cash'); };
-  const handleReceptionQRPay = () => { if (!submittingPayment) simulatePayment('reception_qr'); };
-  const handleCreditPay = (_: string, name: string) => { if (!submittingPayment) simulatePayment(`Credit (${name})`); };
+  const handleCashPay = () => {
+    if (submittingPayment) return
+    if (partialContext) {
+      // Partial payment — create invoice for partial amount, auto-credit remaining
+      const inv = buildPartialInvoice(partialContext.partialAmount, 'cash')
+      setCompletedInvoice(inv)
+
+      if (partialContext.remainingAmount > 0 && initialCustomerName && initialCustomerName.trim()) {
+        setPendingCreditInfo({ amount: partialContext.remainingAmount, customerName: initialCustomerName })
+      } else {
+        setPendingCreditInfo(undefined)
+      }
+
+      setPartialContext(null)
+      setSubmittingPayment(false)
+      setShowSuccess(true)
+      return
+    }
+    if (splitContext) {
+      simulatePayment('cash', undefined, undefined, splitContext.selectedItemIds)
+      setSplitContext(null)
+      return
+    }
+    simulatePayment('cash')
+  }
+  const handleReceptionQRPay = () => {
+    if (submittingPayment) return
+    if (partialContext) {
+      // Partial payment — create invoice for partial amount, auto-credit remaining
+      const inv = buildPartialInvoice(partialContext.partialAmount, 'reception_qr')
+      setCompletedInvoice(inv)
+
+      if (partialContext.remainingAmount > 0 && initialCustomerName && initialCustomerName.trim()) {
+        setPendingCreditInfo({ amount: partialContext.remainingAmount, customerName: initialCustomerName })
+      } else {
+        setPendingCreditInfo(undefined)
+      }
+
+      setPartialContext(null)
+      setSubmittingPayment(false)
+      setShowSuccess(true)
+      return
+    }
+    if (splitContext) {
+      simulatePayment('reception_qr', undefined, undefined, splitContext.selectedItemIds)
+      setSplitContext(null)
+      return
+    }
+    simulatePayment('reception_qr')
+  };
+  const handleCreditPay = (_: string, name: string) => {
+    if (submittingPayment) return
+    if (splitContext) {
+      simulatePayment(`Credit (${name})`, undefined, undefined, splitContext.selectedItemIds)
+      setSplitContext(null)
+      return
+    }
+    simulatePayment(`Credit (${name})`)
+  };
   const handleFonepaySuccess = () => {
     if (!checkLimit()) return;
+
+    if (splitContext) {
+      // Split payment via Fonepay — pay only selected items
+      log('FONEPAY_SPLIT_SUCCESS', 'Split Fonepay payment confirmed');
+      const ids = splitContext.selectedItemIds
+      const amt = splitContext.splitSubtotal
+      setSplitContext(null)
+
+      const year = new Date().getFullYear();
+      const fonepayInvoice = fonepayInvoiceNumberRef.current;
+      fonepayInvoiceNumberRef.current = null;
+      const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`;
+
+      const selectedItems = items.filter(i => ids.includes(i.id));
+      const splitSubtotal = selectedItems.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0);
+      const splitDiscount = Math.round(discountAmount * (splitSubtotal / (subtotal || 1)))
+      const splitGrandTotalAmount = Math.max(0, splitSubtotal - splitDiscount)
+
+      const inv: InvoiceData = {
+        invoiceNumber: invNum,
+        tableNumber: selectedTableId,
+        items: selectedItems.map(i => ({ name: i.item_name, quantity: i.quantity, unitPrice: Number(i.unit_price) })),
+        subtotal: splitSubtotal,
+        discount: splitDiscount,
+        grandTotal: splitGrandTotalAmount,
+        paidAmount: splitGrandTotalAmount,
+        paymentMethod: 'fonepay',
+        paidItemIds: ids,
+      }
+
+      const result = getPaymentResult(inv)
+      printService.printInvoice(buildPrintData(inv))
+      showSuccess('Invoice sent to printer')
+      safeComplete(inv.invoiceNumber, result)
+      onClose?.()
+      return
+    }
+
+    if (partialContext) {
+      // Partial payment via Fonepay — create partial invoice, auto-credit remaining
+      log('FONEPAY_PARTIAL_SUCCESS', 'Partial Fonepay payment confirmed');
+      const inv = buildPartialInvoice(partialContext.partialAmount, 'fonepay')
+      setCompletedInvoice(inv)
+
+      if (partialContext.remainingAmount > 0 && initialCustomerName && initialCustomerName.trim()) {
+        setPendingCreditInfo({ amount: partialContext.remainingAmount, customerName: initialCustomerName })
+      } else {
+        setPendingCreditInfo(undefined)
+      }
+
+      setPartialContext(null)
+      setSubmittingPayment(false)
+      setShowSuccess(true)
+      return
+    }
+
     log('FONEPAY_SUCCESS', 'Auto-finalizing payment');
 
     const year = new Date().getFullYear();
@@ -309,38 +474,61 @@ export function PosPaymentDialog({
     // the dialog stays mounted for the iframe-based print)
     printService.printInvoice(buildPrintData(inv))
     showSuccess('Invoice sent to printer')
-    onComplete?.(inv.invoiceNumber, result)
+    safeComplete(inv.invoiceNumber, result)
     onClose?.()
   };
 
-  const handlePartialPay = (amount: number, method: string) => {
-    if (amount <= 0) return;
-    if (method === 'fonepay') { setPendingPartialFonepay(amount); setView('partial_fonepay'); return; }
-    const remaining = grandTotal - amount;
-    if (remaining > 0 && initialCustomerName && initialCustomerName.trim()) {
-      // Auto-transfer remaining to customer's credit account
-      const creditInfo = { amount: remaining, customerName: initialCustomerName };
-      simulatePayment(method, amount, creditInfo);
-    } else if (remaining > 0) {
-      // Process payment without credit — prompt for customer after success
-      simulatePayment(method, amount);
-    } else {
-      simulatePayment(method, amount);
+  /**
+   * Partial payment handler.
+   * PartialPaymentDialog only asks amount + method. This handler
+   * stores the partial context and navigates to the EXISTING payment
+   * modal for the chosen method. After the modal reports success,
+   * the remaining amount auto-converts to customer credit.
+   *
+   * Customer assignment is DEFERRED to after payment succeeds
+   * (handled in handleSuccessComplete / partial_customer view).
+   */
+  const handleNewPartialPay = (params: {
+    amount: number
+    method: 'cash' | 'fonepay' | 'reception_qr'
+    remainingAmount: number
+  }) => {
+    if (params.amount <= 0) return
+
+    // Store partial context for the existing payment modals
+    setPartialContext({
+      partialAmount: params.amount,
+      remainingAmount: params.remainingAmount,
+      method: params.method,
+    })
+
+    // Store remaining amount for customer assignment after payment
+    setPendingPartialCredit({
+      amount: params.remainingAmount,
+      method: params.method,
+      shouldPrint: false,
+    })
+
+    // Navigate to the EXISTING global payment modal for the chosen method.
+    // The modal handles its own payment flow — we just pass the partial amount.
+    if (params.method === 'cash') {
+      setCashReceived(String(params.amount))
+      setView('cash')
+    } else if (params.method === 'reception_qr') {
+      setView('reception_qr')
+    } else if (params.method === 'fonepay') {
+      setView('fonepay')
     }
-  };
+  }
 
-  const handlePartialFonepaySuccess = () => {
-    if (!checkLimit()) return;
-    const amt = pendingPartialFonepay ?? 0;
-    const remaining = grandTotal - amt;
-    setPendingPartialFonepay(null);
-
-    const year = new Date().getFullYear();
+  // ─── Partial payment helper: build partial invoice from amount ───
+  const buildPartialInvoice = (amt: number, method: string): InvoiceData => {
+    const year = new Date().getFullYear()
+    // Consume the pre-generated Fonepay invoice number if available (for QR remark consistency)
     const fonepayInvoice = fonepayInvoiceNumberRef.current;
     fonepayInvoiceNumberRef.current = null;
-    const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`;
+    const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`
 
-    // Calculate which items to mark paid based on the partial amount
     const paidItems: Array<{ id: string; name: string; quantity: number; unitPrice: number }> = []
     let remainingToAssign = amt
     for (const item of items) {
@@ -355,7 +543,7 @@ export function PosPaymentDialog({
       remainingToAssign -= itemTotal
     }
 
-    const inv: InvoiceData = {
+    return {
       invoiceNumber: invNum,
       tableNumber: selectedTableId,
       items: paidItems.map(i => ({ name: i.name, quantity: i.quantity, unitPrice: i.unitPrice })),
@@ -363,78 +551,17 @@ export function PosPaymentDialog({
       discount: discountAmount * (amt / grandTotal || 0),
       grandTotal: amt,
       paidAmount: amt,
-      paymentMethod: 'fonepay',
+      paymentMethod: method,
       paidItemIds: paidItems.map(i => i.id),
-    };
-
-    // Build result and credit info first (before any side-effects)
-    let result: PaymentResult
-    if (remaining > 0 && initialCustomerName && initialCustomerName.trim()) {
-      const creditInfo = { amount: remaining, customerName: initialCustomerName };
-      result = getPaymentResult(inv, creditInfo);
-    } else if (remaining > 0) {
-      result = getPaymentResult(inv);
-      setPendingPartialCredit({ amount: remaining, method: 'fonepay', shouldPrint: false });
-    } else {
-      result = getPaymentResult(inv);
     }
+  }
 
-    // Print before onComplete (ensures dialog stays mounted for iframe print),
-    // then complete + close
-    printService.printInvoice(buildPrintData(inv))
-    showSuccess('Invoice sent to printer')
-    onComplete?.(inv.invoiceNumber, result)
-    onClose?.()
-  };
-
-  const handleSplitPay = (params: { item_ids: string[]; amount: number; method: string }) => {
-    if (params.method === 'fonepay') { setPendingSplitFonepay({ item_ids: params.item_ids, amount: params.amount }); setView('split_fonepay'); return; }
-    if (params.method === 'credit_account') { setPendingSplitCredit({ item_ids: params.item_ids, amount: params.amount }); setView('split_credit'); return; }
-    // Pass the selected item IDs so only those items are marked as paid
-    simulatePayment(params.method, params.amount, undefined, params.item_ids);
-  };
-
-  const handleSplitFonepaySuccess = () => {
-    if (!checkLimit()) return;
-    const ids = pendingSplitFonepay?.item_ids ?? [];
-    const amt = pendingSplitFonepay?.amount ?? 0;
-    setPendingSplitFonepay(null);
-
-    const year = new Date().getFullYear();
-    const fonepayInvoice = fonepayInvoiceNumberRef.current;
-    fonepayInvoiceNumberRef.current = null;
-    const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`;
-
-    const selectedItems = items.filter(i => ids.includes(i.id));
-    const splitSubtotal = selectedItems.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0);
-
-    const inv: InvoiceData = {
-      invoiceNumber: invNum,
-      tableNumber: selectedTableId,
-      items: selectedItems.map(i => ({ name: i.item_name, quantity: i.quantity, unitPrice: Number(i.unit_price) })),
-      subtotal: splitSubtotal,
-      discount: Math.round(discountAmount * (splitSubtotal / subtotal || 0)),
-      grandTotal: amt,
-      paidAmount: amt,
-      paymentMethod: 'fonepay',
-      paidItemIds: ids,
-    };
-
-    const result = getPaymentResult(inv);
-
-    // Print before onComplete (ensures dialog stays mounted for iframe print),
-    // then complete + close
-    printService.printInvoice(buildPrintData(inv))
-    showSuccess('Invoice sent to printer')
-    onComplete?.(inv.invoiceNumber, result)
-    onClose?.()
-  };
-
-  const handleSplitCreditPay = (_: string, name: string) => {
-    const ids = pendingSplitCredit?.item_ids ?? [];
-    const amt = pendingSplitCredit?.amount ?? 0;
-    setPendingSplitCredit(null);
-    simulatePayment(`Credit (${name})`, amt, undefined, ids);
+  const handleSplitContinue = (params: { item_ids: string[]; amount: number }) => {
+    setSplitContext({
+      selectedItemIds: params.item_ids,
+      splitSubtotal: params.amount,
+    })
+    setView('review')
   };
 
   const handlePaymentMethodClick = (key: string) => {
@@ -446,50 +573,58 @@ export function PosPaymentDialog({
     setSelectedMethod(key);
     setTimeout(() => {
       setSelectedMethod(null);
-      if (key === 'cash') { setCashReceived(''); setView('cash'); }
-      else if (key === 'reception_qr') setView('reception_qr');
-      else if (key === 'fonepay') setView('fonepay');
+      if (key === 'cash') { setCashReceived(''); setPartialContext(null); setPendingPartialCredit(null); setView('cash'); }
+      else if (key === 'reception_qr') { setPartialContext(null); setPendingPartialCredit(null); setView('reception_qr'); }
+      else if (key === 'fonepay') { setPartialContext(null); setPendingPartialCredit(null); setView('fonepay'); }
       else if (key === 'credit') setView('credit');
       else if (key === 'split') setView('split');
-      else if (key === 'partial') { setPartialAmount(''); setPartialMethod('cash'); setView('partial'); }
+      else if (key === 'partial') { setView('partial'); }
     }, 200);
   };
 
   const handleSuccessComplete = (shouldPrint: boolean) => {
     setShowSuccess(false);
 
-    // If this was a partial payment without a customer, show customer prompt
-    if (completedInvoice && !pendingCreditInfo && pendingPartialCredit) {
-      setPendingPartialCredit(prev => prev ? { ...prev, shouldPrint } : null);
-      setView('partial_customer');
-      return;
+    if (!completedInvoice) {
+      safeComplete();
+      onClose?.();
+      return
     }
 
-    if (completedInvoice) {
-      const result = getPaymentResult(completedInvoice, pendingCreditInfo);
-      onComplete?.(completedInvoice.invoiceNumber, result);
+    // If this was a partial payment with remaining credit but NO customer assigned yet,
+    // show the customer prompt for deferred assignment.
+    const remaining = pendingPartialCredit?.amount ?? 0
+    const hasCustomer = !!(pendingCreditInfo?.customerName || initialCustomerName)
 
-      if (shouldPrint) {
-        const printData: PrintInvoiceData = {
-          invoiceNumber: completedInvoice.invoiceNumber,
-          date: new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }),
-          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-          items: (completedInvoice.items ?? []).map(i => ({
-            name: i.name ?? 'Item',
-            quantity: i.quantity,
-            unitPrice: i.unitPrice ?? 0,
-          })),
-          subtotal: completedInvoice.subtotal,
-          discount: completedInvoice.discount || undefined,
-          total: completedInvoice.grandTotal,
-        };
-        printService.printInvoice(printData);
-        showSuccess('Invoice sent to printer');
+    if (remaining > 0 && !hasCustomer) {
+      // Deferred customer assignment — show customer selection
+      setView('partial_customer')
+      return
+    }
+
+    // Otherwise, complete normally with optional credit info
+    const result = getPaymentResult(completedInvoice, pendingCreditInfo)
+    safeComplete(completedInvoice.invoiceNumber, result)
+
+    if (shouldPrint) {
+      const printData: PrintInvoiceData = {
+        invoiceNumber: completedInvoice.invoiceNumber,
+        date: new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }),
+        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        items: (completedInvoice.items ?? []).map(i => ({
+          name: i.name ?? 'Item',
+          quantity: i.quantity,
+          unitPrice: i.unitPrice ?? 0,
+        })),
+        subtotal: completedInvoice.subtotal,
+        discount: completedInvoice.discount || undefined,
+        total: completedInvoice.grandTotal,
       }
-    } else {
-      onComplete?.();
+      printService.printInvoice(printData)
+      showSuccess('Invoice sent to printer')
     }
-    onClose?.();
+
+    onClose?.()
   };
 
   const renderDiscountSection = () => (
@@ -515,35 +650,64 @@ export function PosPaymentDialog({
     </div>
   );
 
-  const renderItemList = () => (
-    <div className="space-y-1.5">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Items</p>
-      {items.map(item => (
-        <div key={item.id} className="flex items-center justify-between text-sm py-1.5">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="text-muted-foreground shrink-0 w-6 text-right tabular-nums">{item.quantity}×</span>
-            <span className="truncate">{item.item_name}</span>
+  const renderItemList = () => {
+    const displayItems = isSplitMode ? effectiveItems : items
+    return (
+      <div className="space-y-1.5">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {isSplitMode ? `Selected Items (${displayItems.length})` : 'Items'}
+        </p>
+        {displayItems.map(item => (
+          <div key={item.id} className="flex items-center justify-between text-sm py-1.5">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <span className="text-muted-foreground shrink-0 w-6 text-right tabular-nums">{item.quantity}×</span>
+              <span className="truncate">{item.item_name}</span>
+            </div>
+            <span className="tabular-nums shrink-0 ml-2">{npr(Number(item.unit_price) * item.quantity)}</span>
           </div>
-          <span className="tabular-nums shrink-0 ml-2">{npr(Number(item.unit_price) * item.quantity)}</span>
-        </div>
-      ))}
-    </div>
-  );
-
-  const renderTotals = () => (
-    <div className="space-y-1.5 text-sm">
-      <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="tabular-nums">{npr(subtotal)}</span></div>
-      {discountAmount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="text-destructive tabular-nums">-{npr(discountAmount)}</span></div>}
-      <hr className="border-border" />
-      <div className="flex justify-between items-center">
-        <span className="text-base font-bold">Grand Total</span>
-        <span className="text-xl font-bold text-primary tabular-nums">{npr(grandTotal)}</span>
+        ))}
       </div>
-    </div>
-  );
+    )
+  };
+
+  const renderTotals = () => {
+    const displayTotal = isSplitMode ? effectiveGrandTotal : grandTotal
+    const displaySub = isSplitMode ? effectiveSubtotal : subtotal
+    return (
+      <div className="space-y-1.5 text-sm">
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">{isSplitMode ? 'Split Subtotal' : 'Subtotal'}</span>
+          <span className="tabular-nums">{npr(displaySub)}</span>
+        </div>
+        {discountAmount > 0 && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Discount{isSplitMode ? ' (proportional)' : ''}</span>
+            <span className="text-destructive tabular-nums">-{npr(discountAmount * (displaySub / (subtotal || 1)))}</span>
+          </div>
+        )}
+        <hr className="border-border" />
+        <div className="flex justify-between items-center">
+          <span className="text-base font-bold">Grand Total</span>
+          <span className="text-xl font-bold text-primary tabular-nums">{npr(displayTotal)}</span>
+        </div>
+        {isSplitMode && (
+          <div className="flex justify-between text-xs text-muted-foreground pt-1">
+            <span>Original bill total</span>
+            <span className="tabular-nums">{npr(grandTotal)}</span>
+          </div>
+        )}
+      </div>
+    )
+  };
 
   const renderPaymentMethods = () => (
     <div className="pt-2">
+      {isSplitMode && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg bg-teal-50 dark:bg-teal-950/20 px-3 py-2 text-xs text-teal-700 dark:text-teal-300">
+          <Users className="h-4 w-4 shrink-0" />
+          <span>Split Payment — {items.filter(i => splitContext?.selectedItemIds.includes(i.id)).length} items selected. Choose a method below.</span>
+        </div>
+      )}
       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Payment Method</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {availablePaymentMethods.map(method => {
@@ -588,8 +752,8 @@ export function PosPaymentDialog({
   if (showSuccessView) {
     const inv = completedInvoice;
     const isCashPayment = inv?.paymentMethod === 'cash';
-    const changeForCash = isCashPayment ? Math.max(0, cashReceivedNum - grandTotal) : 0;
-    const remaining = inv ? Math.max(0, grandTotal - inv.paidAmount) : 0;
+    const changeForCash = isCashPayment ? Math.max(0, cashReceivedNum - (inv?.grandTotal ?? grandTotal)) : 0;
+    const remaining = inv ? Math.max(0, (inv?.grandTotal ?? grandTotal) - inv.paidAmount) : 0;
     // A payment is "partial without credit" only if:
     //   1. There's a remaining balance after this payment (remaining > 0)
     //   2. No pending credit info was passed in (no auto-credit transfer)
@@ -630,12 +794,12 @@ export function PosPaymentDialog({
                   <>
                     <hr className="border-border" />
                     <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Remaining Balance</span>
+                      <span className="text-muted-foreground">Remaining</span>
                       <span className="font-semibold text-amber-600 tabular-nums">{npr(remaining)}</span>
                     </div>
                   </>
                 )}
-                {isCashPayment && cashReceivedNum > grandTotal && (
+                {isCashPayment && cashReceivedNum > (inv?.grandTotal ?? grandTotal) && (
                   <>
                     <hr className="border-border" />
                     <div className="flex justify-between text-sm">
@@ -657,9 +821,9 @@ export function PosPaymentDialog({
                   <>
                     <hr className="border-border" />
                     <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Credit Balance</span>
+                      <span className="text-muted-foreground">Outstanding Credit</span>
                       <span className="font-semibold text-purple-600 tabular-nums">
-                        {npr(pendingCreditInfo?.amount ?? grandTotal - inv.paidAmount)}
+                        {npr(pendingCreditInfo?.amount ?? (inv?.grandTotal ?? grandTotal) - inv.paidAmount)}
                       </span>
                     </div>
                   </>
@@ -679,7 +843,7 @@ export function PosPaymentDialog({
                     setShowSuccess(false);
                     if (completedInvoice) {
                       const result = getPaymentResult(completedInvoice, undefined);
-                      onComplete?.(completedInvoice.invoiceNumber, result);
+                      safeComplete(completedInvoice.invoiceNumber, result);
                     }
                     onClose?.();
                   }}
@@ -734,8 +898,16 @@ export function PosPaymentDialog({
         <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border bg-background shadow-2xl flex flex-col">
           <div className="flex items-center justify-between p-4 border-b shrink-0">
             <div className="flex items-center gap-2">
-              <button onClick={onClose} className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-muted transition-colors"><ArrowLeft className="h-5 w-5" /></button>
-              <h2 className="text-lg font-semibold">Bill Review</h2>
+              <button onClick={() => {
+                if (isSplitMode) { setSplitContext(null); return }
+                onClose()
+              }} className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-muted transition-colors"><ArrowLeft className="h-5 w-5" /></button>
+              <h2 className="text-lg font-semibold">{isSplitMode ? 'Split Payment' : 'Bill Review'}</h2>
+              {isSplitMode && (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-teal-100 dark:bg-teal-900/30 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300">
+                  Selected Items
+                </span>
+              )}
               {isRoomPayment && (
                 <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-blue-100 dark:bg-blue-900/30 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-700 dark:text-blue-300">
                   Room Payment
@@ -745,6 +917,12 @@ export function PosPaymentDialog({
           </div>
           <div className="flex-1 overflow-y-auto no-scrollbar p-4 space-y-4">
             {renderItemList()} <hr className="border-border" /> {renderDiscountSection()} <hr className="border-border" /> {renderTotals()} {renderPaymentMethods()}
+            {isSplitMode && (
+              <div className="flex items-center gap-2 rounded-lg border border-teal-200 dark:border-teal-800 bg-teal-50/80 dark:bg-teal-950/20 px-4 py-3 text-xs text-teal-700 dark:text-teal-300">
+                <Users className="h-4 w-4 shrink-0" />
+                <span>Only selected items will be marked as paid. Unselected items remain for future payment.</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -762,11 +940,10 @@ export function PosPaymentDialog({
               <h2 className="text-lg font-semibold">Cash Payment</h2>
             </div>
           </div>
-          <div className="p-4 space-y-4">
-            <div className="rounded-xl border bg-muted/30 p-4">
+          <div className="p-4 space-y-4">              <div className="rounded-xl border bg-muted/30 p-4">
               <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Bill Total</span>
-                <span className="text-2xl font-bold tabular-nums">{npr(grandTotal)}</span>
+                <span className="text-sm text-muted-foreground">Bill Total{isSplitMode ? ' (split)' : ''}</span>
+                <span className="text-2xl font-bold tabular-nums">{npr(effectiveGrandTotal)}</span>
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -788,27 +965,27 @@ export function PosPaymentDialog({
             </div>
             {cashReceivedNum > 0 && (
               <div className="rounded-xl border bg-card p-4 space-y-2">
-                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Amount Due</span><span className="font-semibold">{npr(grandTotal)}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Amount Due</span><span className="font-semibold">{npr(effectiveCashTotal)}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-muted-foreground">Cash Received</span><span className="font-semibold">{npr(cashReceivedNum)}</span></div>
                 <hr className="border-border" />
                 {isCashSufficient ? (
                   <div className="flex justify-between text-base font-bold text-emerald-600"><span>Change Due</span><span>{npr(changeDue)}</span></div>
                 ) : (
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/20 rounded-lg p-2">
-                    <AlertCircle className="h-4 w-4 shrink-0" /><span>Short by {npr(grandTotal - cashReceivedNum)}</span>
+                    <AlertCircle className="h-4 w-4 shrink-0" /><span>Short by {npr(effectiveCashTotal - cashReceivedNum)}</span>
                   </div>
                 )}
               </div>
             )}
           </div>
           <div className="p-4 border-t space-y-2 shrink-0">
-            <button onClick={() => setCashReceived(String(grandTotal))}
+            <button onClick={() => setCashReceived(String(effectiveCashTotal))}
               className="w-full h-12 rounded-xl border-2 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-semibold hover:bg-emerald-50 dark:hover:bg-emerald-950/20 transition-all">
-              Exact Amount &mdash; {npr(grandTotal)}
+              {partialContext ? `Pay ${npr(effectiveCashTotal)}` : `Exact Amount &mdash; ${npr(effectiveCashTotal)}`}
             </button>
             <button onClick={handleCashPay} disabled={submittingPayment || cashReceivedNum <= 0 || !isCashSufficient}
               className="w-full h-14 rounded-xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm">
-              {submittingPayment ? <><Loader2 className="h-5 w-5 animate-spin" /> Processing...</> : <><Check className="h-5 w-5" /> Receive Payment &mdash; {npr(cashReceivedNum || grandTotal)}</>}
+              {submittingPayment ? <><Loader2 className="h-5 w-5 animate-spin" /> Processing...</> : <><Check className="h-5 w-5" /> {partialContext ? `Receive ${npr(cashReceivedNum || effectiveCashTotal)}` : `Receive Payment &mdash; ${npr(cashReceivedNum || effectiveCashTotal)}`}</>}
             </button>
           </div>
         </div>
@@ -827,137 +1004,30 @@ export function PosPaymentDialog({
     );
   }
 
-  // ─── View: Partial ───
+  // ─── View: Partial (Redesigned) ───
   if (view === 'partial') {
-    const activeColor = PARTIAL_METHODS.find(m => m.value === partialMethod)?.color || 'emerald';
-    const cs = COLOR_STYLES[activeColor];
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between p-4 border-b shrink-0">
-            <div className="flex items-center gap-2">
-              <button onClick={() => setView('review')} className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-muted transition-colors"><ArrowLeft className="h-5 w-5" /></button>
-              <h2 className="text-lg font-semibold">Partial Payment</h2>
-            </div>
-          </div>
-          <div className="p-4 space-y-4">
-            <div className="rounded-xl border bg-muted/30 p-4">
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-sm text-muted-foreground">Bill Total</span>
-                <span className="text-2xl font-bold tabular-nums">{npr(grandTotal)}</span>
-              </div>
-              {partialAmountNum > 0 && (
-                <>
-                  <div className="flex justify-between py-1.5 text-sm"><span className="text-muted-foreground">Paying Now</span><span className="font-semibold text-emerald-600">{npr(partialAmountNum)}</span></div>
-                  <hr className="border-border my-1" />
-                  <div className="flex justify-between pt-1.5">
-                    <span className="text-sm font-medium">Remaining</span>
-                    <span className={`text-lg font-bold ${partialRemaining > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{npr(partialRemaining)}</span>
-                  </div>
-                  {partialRemaining > 0 && (
-                    <div className="flex items-center gap-2 mt-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                      <AlertCircle className="h-3.5 w-3.5 shrink-0" /><span>Customer still owes <strong>{npr(partialRemaining)}</strong></span>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-2 block">Payment Amount</label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-semibold text-muted-foreground">Rs.</span>
-                <input type="number" step="0.01" min="0.01" max={grandTotal} value={partialAmount} onChange={e => setPartialAmount(e.target.value)}
-                  onWheel={e => (e.target as HTMLInputElement).blur()}
-                  className={`w-full h-14 text-xl font-bold rounded-xl border border-border bg-transparent pl-12 pr-4 outline-none text-center ${cs.ring}`} placeholder="0.00" />
-              </div>
-              {partialAmountNum > grandTotal && <p className="text-xs text-destructive mt-1">Amount cannot exceed {npr(grandTotal)}</p>}
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-2 block">Quick Select</label>
-              <div className="flex flex-wrap gap-2">
-                {CASH_QUICK_AMOUNTS.filter(a => a <= grandTotal).map(amt => (
-                  <button key={amt} onClick={() => setPartialAmount(String(amt))}
-                    className={`px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all ${Number(partialAmount) === amt ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300' : 'border-border hover:border-emerald-300'}`}>
-                    {npr(amt)}
-                  </button>
-                ))}
-                <button onClick={() => setPartialAmount(String(Math.floor(grandTotal / 2)))}
-                  className={`px-4 py-2.5 rounded-xl border text-sm font-semibold transition-all ${Number(partialAmount) === Math.floor(grandTotal / 2) ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300' : 'border-border hover:border-emerald-300'}`}>
-                  Half &mdash; {npr(Math.floor(grandTotal / 2))}
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 block">Method</label>
-              <div className="grid grid-cols-2 gap-3">
-                {PARTIAL_METHODS.map(m => {
-                  const Icon = m.icon;
-                  const isActive = partialMethod === m.value;
-                  const c = COLOR_STYLES[m.color];
-                  return (
-                    <button key={m.value} onClick={() => setPartialMethod(m.value)}
-                      className={`group relative flex flex-col items-center gap-2 p-4 rounded-xl border transition-all text-center ${isActive ? `${c.border} ${c.bg} shadow-sm` : 'border-border hover:border-emerald-300 hover:bg-emerald-50/30 dark:hover:bg-emerald-950/10 hover:shadow-sm'}`}>
-                      <div className={`w-11 h-11 rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform ${isActive ? c.iconBg : 'bg-muted'}`}>
-                        <Icon className={`h-5 w-5 ${isActive ? c.iconText : 'text-muted-foreground'}`} />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <p className={`text-xs font-semibold ${isActive ? c.text : ''}`}>{m.label}</p>
-                        {isActive && <span className={`text-xs font-bold ${c.text}`}>&#10003;</span>}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-
-          </div>
-          <div className="p-4 border-t space-y-2">
-            <button onClick={() => setPartialAmount(String(grandTotal))}
-              className="w-full h-12 rounded-xl border-2 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-semibold hover:bg-emerald-50 dark:hover:bg-emerald-950/20 transition-all">
-              Full Amount &mdash; {npr(grandTotal)}
-            </button>
-            <button onClick={() => handlePartialPay(partialAmountNum, partialMethod)} disabled={!isPartialValid || submittingPayment}
-              className="w-full h-14 rounded-xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm">
-              {submittingPayment ? <><Loader2 className="h-5 w-5 animate-spin" /> Processing...</> : <><Check className="h-5 w-5" /> Receive {npr(partialAmountNum || 0)}</>}
-            </button>
-            {partialAmountNum > 0 && partialRemaining > 0 && initialCustomerName && initialCustomerName.trim() && (
-              <p className="text-center text-xs text-emerald-600">Remaining {npr(partialRemaining)} will be credited to {initialCustomerName}.</p>
-            )}
-            {partialAmountNum > 0 && partialRemaining > 0 && (!initialCustomerName || !initialCustomerName.trim()) && (
-              <p className="text-center text-xs text-amber-600">Remaining {npr(partialRemaining)} — customer selection required after payment.</p>
-            )}
-            {partialAmountNum > 0 && partialRemaining === 0 && <p className="text-center text-xs text-muted-foreground">Bill will be fully settled.</p>}
-          </div>
-        </div>
-      </div>
+      <PartialPaymentDialog
+        invoiceTotal={grandTotal}
+        invoiceNumber={undefined}
+        onConfirm={handleNewPartialPay}
+        onCancel={() => setView('review')}
+        submitting={submittingPayment}
+      />
     );
   }
 
-  // ─── View: Partial Customer Selection ───
-  // ─── View: Partial Customer Selection ───
+  // ─── View: Deferred Customer Assignment ───
+  // Shown after a partial payment succeeds when credit is needed but no customer was set.
   if (view === 'partial_customer') {
     const handleAssignCredit = () => {
       if (!selectedCustomer || !completedInvoice || !pendingPartialCredit) return;
       const creditInfo = { amount: pendingPartialCredit.amount, customerName: selectedCustomer.name };
       const result = getPaymentResult(completedInvoice, creditInfo);
-      onComplete?.(completedInvoice.invoiceNumber, result);
+      safeComplete(completedInvoice.invoiceNumber, result);
 
       if (pendingPartialCredit.shouldPrint) {
-        const printData: PrintInvoiceData = {
-          invoiceNumber: completedInvoice.invoiceNumber,
-          date: new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }),
-          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-          items: (completedInvoice.items ?? []).map(i => ({
-            name: i.name ?? 'Item',
-            quantity: i.quantity,
-            unitPrice: i.unitPrice ?? 0,
-          })),
-          subtotal: completedInvoice.subtotal,
-          discount: completedInvoice.discount || undefined,
-          total: completedInvoice.grandTotal,
-        };
-        printService.printInvoice(printData);
+        printService.printInvoice(buildPrintData(completedInvoice));
         showSuccess('Invoice sent to printer');
       }
       setPendingPartialCredit(null);
@@ -967,21 +1037,26 @@ export function PosPaymentDialog({
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
         <div className="w-full max-w-md rounded-xl border bg-background shadow-lg overflow-hidden">
-          <div className="bg-gradient-to-br from-amber-500 to-orange-600 px-6 py-6 text-center text-white">
+          <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 px-6 py-6 text-center text-white">
             <div className="mx-auto w-14 h-14 rounded-full bg-white/20 flex items-center justify-center mb-3">
-              <DollarSign className="h-7 w-7" />
+              <User className="h-7 w-7" />
             </div>
-            <h2 className="text-lg font-bold">Remaining Balance</h2>
-            <p className="text-3xl font-bold text-white mt-1">{npr(pendingPartialCredit?.amount ?? 0)}</p>
+            <h2 className="text-lg font-bold">Customer Required</h2>
+            <p className="text-sm text-emerald-100 mt-1">
+              Assign credit to a customer
+            </p>
+            <p className="text-3xl font-bold text-white mt-2">
+              {npr(pendingPartialCredit?.amount ?? 0)}
+            </p>
           </div>
           <div className="p-5 space-y-4">
             <div>
               <p className="text-sm text-muted-foreground mb-1">
-                The payment was successful. Assign the remaining balance to a customer's credit account.
+                Payment was successful. The remaining amount needs a customer to create the credit record.
               </p>
               <div className="flex items-center gap-2 mt-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
                 <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                <span>Rs. {pendingPartialCredit?.amount ?? 0} remaining will be billed to credit.</span>
+                <span>{npr(pendingPartialCredit?.amount ?? 0)} will be billed as credit.</span>
               </div>
             </div>
             <div>
@@ -993,7 +1068,7 @@ export function PosPaymentDialog({
                 value={customerSearch}
                 onChange={e => { setCustomerSearch(e.target.value); setSelectedCustomer(null); }}
                 placeholder="Type name or phone..."
-                className="w-full h-11 rounded-xl border border-border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500"
+                className="w-full h-11 rounded-xl border border-border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
                 autoFocus
               />
               {customersLoading && (
@@ -1016,11 +1091,11 @@ export function PosPaymentDialog({
                 </div>
               )}
               {!customersLoading && customerSearch && filteredCustomers.length === 0 && !selectedCustomer && (
-                <div>
-                  <p className="text-xs text-muted-foreground mt-1">No customers found.</p>
+                <div className="mt-1.5">
+                  <p className="text-xs text-muted-foreground mb-1">No customers found.</p>
                   <button
                     onClick={() => setSelectedCustomer({ id: customerSearch, name: customerSearch })}
-                    className="mt-1.5 w-full rounded-lg border-2 border-dashed border-amber-300 dark:border-amber-700 px-3 py-2 text-sm font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/20 transition-colors"
+                    className="w-full rounded-lg border-2 border-dashed border-emerald-300 dark:border-emerald-700 px-3 py-2 text-sm font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 transition-colors"
                   >
                     + Use &ldquo;{customerSearch}&rdquo; as new customer
                   </button>
@@ -1044,10 +1119,8 @@ export function PosPaymentDialog({
           </div>
           <div className="p-4 border-t space-y-2">
             <div className="rounded-xl bg-muted/30 p-3 space-y-1.5 text-sm">
-              <div className="flex justify-between"><span className="text-muted-foreground">Paid Amount</span><span className="font-semibold">{npr(completedInvoice?.paidAmount ?? 0)}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Remaining (Credit)</span><span className="font-semibold text-amber-600">{npr(pendingPartialCredit?.amount ?? 0)}</span></div>
-              <hr className="border-border" />
-              <div className="flex justify-between font-bold"><span>Total Settled</span><span>{npr((completedInvoice?.paidAmount ?? 0) + (pendingPartialCredit?.amount ?? 0))}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Paid Today</span><span className="font-semibold">{npr(completedInvoice?.paidAmount ?? 0)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Outstanding Credit</span><span className="font-semibold text-amber-600">{npr(pendingPartialCredit?.amount ?? 0)}</span></div>
             </div>
             <button
               onClick={handleAssignCredit}
@@ -1064,15 +1137,16 @@ export function PosPaymentDialog({
 
   // ─── View: Reception QR ───
   if (view === 'reception_qr') {
+    const effectiveAmount = partialContext?.partialAmount ?? (isSplitMode ? effectiveGrandTotal : grandTotal)
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
         <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
           <ReceptionQRDialog
-            amount={grandTotal}
+            amount={effectiveAmount}
             orderId={orderId}
             customerName={initialCustomerName}
             onConfirm={handleReceptionQRPay}
-            onCancel={() => setView('review')}
+            onCancel={() => { setPartialContext(null); setView('review'); }}
             submitting={submittingPayment}
           />
         </div>
@@ -1082,17 +1156,11 @@ export function PosPaymentDialog({
 
   // ─── View: Fonepay ───
   if (view === 'fonepay') {
+    const effectiveAmount = partialContext?.partialAmount ?? (isSplitMode ? effectiveGrandTotal : grandTotal)
     const year = new Date().getFullYear();
     const invNum = `INV-${year}-${String(Date.now()).slice(-6)}`;
     if (!fonepayInvoiceNumberRef.current) fonepayInvoiceNumberRef.current = invNum;
-    return <FonepayQRDialog orderId={orderId} amount={grandTotal} onSuccess={handleFonepaySuccess} onCancel={() => setView('review')} customerName={initialCustomerName} invoiceNumber={invNum} />;
-  }
-
-  if (view === 'partial_fonepay' && pendingPartialFonepay !== null) {
-    const year = new Date().getFullYear();
-    const invNum = `INV-${year}-${String(Date.now()).slice(-6)}`;
-    if (!fonepayInvoiceNumberRef.current) fonepayInvoiceNumberRef.current = invNum;
-    return <FonepayQRDialog orderId={orderId} amount={pendingPartialFonepay} onSuccess={handlePartialFonepaySuccess} onCancel={() => { setPendingPartialFonepay(null); setView('partial'); }} customerName={initialCustomerName} invoiceNumber={invNum} />;
+    return <FonepayQRDialog orderId={orderId} amount={effectiveAmount} onSuccess={handleFonepaySuccess} onCancel={() => { setPartialContext(null); setView('review'); }} customerName={initialCustomerName} invoiceNumber={invNum} />;
   }
 
   // ─── View: Split ───
@@ -1100,24 +1168,7 @@ export function PosPaymentDialog({
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
         <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
-          <SplitPaymentDialog orderId={orderId} items={items} customerName={initialCustomerName} onBack={() => setView('review')} onPay={handleSplitPay} submitting={submittingPayment} />
-        </div>
-      </div>
-    );
-  }
-
-  if (view === 'split_fonepay' && pendingSplitFonepay) {
-    const year = new Date().getFullYear();
-    const invNum = `INV-${year}-${String(Date.now()).slice(-6)}`;
-    if (!fonepayInvoiceNumberRef.current) fonepayInvoiceNumberRef.current = invNum;
-    return <FonepayQRDialog orderId={orderId} amount={pendingSplitFonepay.amount} onSuccess={handleSplitFonepaySuccess} onCancel={() => { setPendingSplitFonepay(null); setView('split'); }} customerName={initialCustomerName} invoiceNumber={invNum} />;
-  }
-
-  if (view === 'split_credit' && pendingSplitCredit) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
-          <CreditAccountPayment grandTotal={pendingSplitCredit.amount} onBack={() => { setPendingSplitCredit(null); setView('split'); }} onPay={handleSplitCreditPay} submitting={submittingPayment} />
+          <SplitPaymentDialog items={items} onBack={() => setView('review')} onContinue={handleSplitContinue} />
         </div>
       </div>
     );

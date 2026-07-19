@@ -928,12 +928,11 @@ export function Operations() {
 
       {/* Content */}
       <AnimatePresence mode="wait">
-        {activeTab === "rooms" && (
+        {activeTab === "rooms" ? (
           <motion.div key="rooms" variants={tabVariants} initial="exit" animate="enter" exit="exit">
             <RoomsView rooms={roomList} hkTasks={hkTasks} mtRequests={mtRequests} roomTypeOptions={roomTypeOptions} />
           </motion.div>
-        )}
-        {activeTab === "tables" && (
+        ) : (
           <motion.div key="tables" variants={tabVariants} initial="exit" animate="enter" exit="exit">
             <TablesView tables={tableList} />
           </motion.div>

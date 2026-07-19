@@ -44,19 +44,31 @@ import type { Expense } from "@/lib/services/expense-service"
 import { useExpenses } from "@/lib/services/expense-service"
 import { useCashReconciliations } from "@/lib/services/cash-reconciliation-service"
 import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
+import { PaymentBreakdown } from "@/components/payments/PaymentBreakdown"
 import {
   useFinancialSummaryForRange,
   useCashFlow,
 } from '@/lib/services/finance-aggregation'
 
-
-
+// ─── Status badge variant mapping (raw DB status → color) ──
 const statusVariant: Record<string, "default" | "success" | "warning" | "destructive" | "info" | "secondary"> = {
   paid: "success",
   pending: "warning",
   overdue: "destructive",
   partial: "info",
   credit_invoice: "info",
+}
+
+// ─── Derived display status from financial state ──────────
+// Per the spec:
+//   Outstanding = 0 → "Paid" (green)
+//   Paid > 0 AND Outstanding > 0 → "Partially Paid" (amber)
+//   Paid = 0 → "Credit" (blue)
+function getDisplayStatus(paid: number, total: number): { label: string; variant: 'success' | 'warning' | 'info' } {
+  const outstanding = total - paid
+  if (outstanding <= 0) return { label: 'Paid', variant: 'success' }
+  if (paid > 0) return { label: 'Partially Paid', variant: 'warning' }
+  return { label: 'Credit', variant: 'info' }
 }
 
 const COLORS = {
@@ -123,13 +135,18 @@ export function Finance() {
 
   // Fetch item counts for invoices in the current page
   const [invoiceItemCounts, setInvoiceItemCounts] = useState<Record<string, number>>({})
-  // Fetch payment methods used per invoice for multi-method display
+  // Fetch payment methods + amounts per invoice for multi-method breakdown display
   const [invoicePaymentMethods, setInvoicePaymentMethods] = useState<Record<string, string[]>>({})
+  // Fetch payment breakdown (method + amount) per invoice for amount-per-method display
+  const [invoicePaymentBreakdowns, setInvoicePaymentBreakdowns] = useState<Record<string, Array<{ method: string; amount: number }>>>({})
+  // Fetch total paid (non-credit) per invoice for Paid & Outstanding columns
+  const [invoicePaidAmounts, setInvoicePaidAmounts] = useState<Record<string, number>>({})
   useEffect(() => {
     const invoiceIds = invoicesPage.map(inv => inv.id)
     if (invoiceIds.length === 0) {
       setInvoiceItemCounts({})
       setInvoicePaymentMethods({})
+      setInvoicePaidAmounts({})
       return
     }
     let cancelled = false
@@ -140,7 +157,7 @@ export function Finance() {
         .in('invoice_id', invoiceIds),
       insforge.database
         .from('payments')
-        .select('invoice_id, payment_method')
+        .select('invoice_id, payment_method, amount')
         .in('invoice_id', invoiceIds)
         .not('payment_method', 'is', null),
     ]).then(([itemsResult, paymentsResult]) => {
@@ -151,17 +168,31 @@ export function Finance() {
         counts[row.invoice_id] = (counts[row.invoice_id] ?? 0) + 1
       }
       setInvoiceItemCounts(counts)
-      // Payment methods per invoice
+
+      // Payment methods, breakdowns & totals per invoice
       const methods: Record<string, Set<string>> = {}
-      for (const row of (paymentsResult.data ?? []) as Array<{ invoice_id: string; payment_method: string }>) {
+      const breakdowns: Record<string, Array<{ method: string; amount: number }>> = {}
+      const paidAmounts: Record<string, number> = {}
+      for (const row of (paymentsResult.data ?? []) as Array<{ invoice_id: string; payment_method: string; amount: number }>) {
         if (!methods[row.invoice_id]) methods[row.invoice_id] = new Set()
         methods[row.invoice_id].add(row.payment_method)
+
+        // Store each payment with its amount for breakdown display
+        if (!breakdowns[row.invoice_id]) breakdowns[row.invoice_id] = []
+        breakdowns[row.invoice_id].push({ method: row.payment_method, amount: Number(row.amount) })
+
+        // Aggregate REAL MONEY only — credit is NOT payment
+        if (row.payment_method !== 'credit') {
+          paidAmounts[row.invoice_id] = (paidAmounts[row.invoice_id] ?? 0) + Number(row.amount)
+        }
       }
       const methodList: Record<string, string[]> = {}
       for (const [invId, methodSet] of Object.entries(methods)) {
         methodList[invId] = Array.from(methodSet)
       }
       setInvoicePaymentMethods(methodList)
+      setInvoicePaymentBreakdowns(breakdowns)
+      setInvoicePaidAmounts(paidAmounts)
     }).catch((err) => { console.warn('[Finance] Failed to fetch invoice metadata:', err) })
     return () => { cancelled = true }
   }, [invoicesPage])
@@ -254,15 +285,38 @@ export function Finance() {
     { key: "invoiceNumber", header: "Invoice #", render: (r) => <span className="font-medium text-primary">{r.invoiceNumber}</span> },
     { key: "customer", header: "Customer" },
     { key: "items", header: "Items", render: (r) => <span>{invoiceItemCounts[r.id] ?? 0} items</span> },
-    { key: "subtotal", header: "Subtotal", render: (r) => formatCurrency(r.subtotal) },
-    { key: "tax", header: "Tax", render: (r) => formatCurrency(r.tax) },
     { key: "discount", header: "Discount", render: (r) => r.discount > 0 ? <span className="text-destructive">-{formatCurrency(r.discount)}</span> : <span className="text-muted-foreground">-</span> },
-    { key: "total", header: "Total", render: (r) => <span className="font-semibold">{formatCurrency(r.total)}</span> },
-    { key: "status", header: "Status", render: (r) => <StatusBadge label={r.status} variant={statusVariant[r.status]} /> },
+    { key: "total", header: "Invoice Total", render: (r) => <span className="font-semibold">{formatCurrency(r.total)}</span> },
+    { key: "paid", header: "Paid", render: (r) => {
+      const paid = invoicePaidAmounts[r.id] ?? 0
+      return <span className="font-semibold text-success">{formatCurrency(paid)}</span>
+    } },
+    { key: "outstanding", header: "Outstanding", render: (r) => {
+      const paid = invoicePaidAmounts[r.id] ?? 0
+      const outstanding = Math.max(0, r.total - paid)
+      const isZero = outstanding === 0
+      return (
+        <span className={cn('font-semibold tabular-nums', isZero ? 'text-success' : 'text-orange-500 dark:text-orange-400')}>
+          {formatCurrency(outstanding)}
+        </span>
+      )
+    } },
+    { key: "status", header: "Status", render: (r) => {
+      const paid = invoicePaidAmounts[r.id] ?? 0
+      const { label, variant } = getDisplayStatus(paid, r.total)
+      return <StatusBadge label={label} variant={variant} />
+    } },
     { key: "paymentMethod", header: "Payment", render: (r) => {
       const methods = invoicePaymentMethods[r.id]
-      if (methods && methods.length > 1) {
-        return <PaymentMethodBadge multi={methods} size="sm" />
+      const breakdown = invoicePaymentBreakdowns[r.id]
+      if (methods && methods.length > 0 && breakdown && breakdown.length > 0) {
+        return (
+          <PaymentBreakdown
+            payments={breakdown}
+            variant="inline"
+            showTotal={false}
+          />
+        )
       }
       return <PaymentMethodBadge method={r.paymentMethod} size="sm" />
     } },
@@ -534,7 +588,7 @@ export function Finance() {
                         : "border border-border bg-card text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    {status === "all" ? "All" : status === "credit_invoice" ? "Credit Invoice" : status.charAt(0).toUpperCase() + status.slice(1)}
+                    {status === "all" ? "All" : status === "credit_invoice" ? "Credit" : status.charAt(0).toUpperCase() + status.slice(1)}
                   </button>
                 ))}
               </div>

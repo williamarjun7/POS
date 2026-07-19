@@ -110,12 +110,32 @@ export default function DashboardPage() {
       if (error) throw error
 
       const rows = (data ?? []) as any[]
-      const items: PendingPaymentItem[] = []
+      // ⚠️ PostgREST `!left` join on `payments` flattens each payment into a
+      //    separate row. An invoice with 2 payments produces 2 rows with the
+      //    same invoice data but different `payments` objects. We must aggregate
+      //    ALL payments per invoice before calculating remaining balances.
+      const invoiceMap = new Map<string, {
+        row: any
+        allPayments: Array<{ amount: number; payment_method: string; status: string }>
+      }>()
 
+      // First pass: group all payment rows by invoice ID
       for (const row of rows) {
+        if (!row.id) continue
+        if (!invoiceMap.has(row.id)) {
+          invoiceMap.set(row.id, { row, allPayments: [] })
+        }
+        // Each flattened row carries a single payment object — accumulate it
+        if (row.payments) {
+          invoiceMap.get(row.id)!.allPayments.push(row.payments as any)
+        }
+      }
+
+      // Second pass: process each unique invoice once with ALL its payments
+      const items: PendingPaymentItem[] = []
+      for (const { row, allPayments } of invoiceMap.values()) {
         const invTotal = Number(row.total || 0)
-        const paymentLogs = (row.payments ?? []) as Array<{ amount: number; payment_method: string; status: string }>
-        const nonCreditPayments = paymentLogs.filter(p => p.payment_method !== 'credit')
+        const nonCreditPayments = allPayments.filter(p => p.payment_method !== 'credit')
         const nonCreditPaid = nonCreditPayments.reduce((sum, p) => sum + Number(p.amount), 0)
         const remaining = Math.max(0, invTotal - nonCreditPaid)
 
@@ -763,14 +783,14 @@ export default function DashboardPage() {
               <span className="text-sm font-bold tabular-nums text-blue-600 dark:text-blue-400">Rs. {(paymentMethods.find(m => m.method === 'fonepay')?.amount ?? 0).toFixed(0)}</span>
               <span className="text-[10px] text-muted-foreground/60">{paymentMethods.find(m => m.method === 'fonepay')?.count ?? 0} payments</span>
             </div>
-            {/* Credit */}
+            {/* Outstanding Credit — from customers.credit_balance (NOT payments) */}
             <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px]">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
                 <CreditCard className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
               </div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Credit</span>
-              <span className="text-sm font-bold tabular-nums text-purple-600 dark:text-purple-400">Rs. {(paymentMethods.find(m => m.method === 'credit')?.amount ?? 0).toFixed(0)}</span>
-              <span className="text-[10px] text-muted-foreground/60">{paymentMethods.find(m => m.method === 'credit')?.count ?? 0} payments</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Outstanding Credit</span>
+              <span className="text-sm font-bold tabular-nums text-purple-600 dark:text-purple-400">Rs. {(report?.summary.credit_outstanding ?? 0).toFixed(0)}</span>
+              <span className="text-[10px] text-muted-foreground/60">Customer balances</span>
             </div>
             {/* Net Profit */}
             <div className={`flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px]`}>
@@ -910,7 +930,7 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   recentActivity.slice(0, 8).map((act) => (
-                    <div key={act.entity_id} className="relative pl-8 group">
+                    <div key={act.id} className="relative pl-8 group">
                       <div className="absolute left-0 top-1 w-6 h-6 rounded-full bg-white dark:bg-gray-900 border-2 border-blue-300 dark:border-blue-700 flex items-center justify-center group-hover:border-blue-500 transition-colors">
                         <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">
                           {act.activity_type.includes('payment') ? 'Rs.' : '#'}

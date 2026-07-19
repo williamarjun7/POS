@@ -113,7 +113,11 @@ export async function getDashboardReport(
     created_at: string
   }>
 
-  const collected = payments.reduce((sum, p) => sum + Number(p.amount), 0)
+  // ═══ Collect only REAL MONEY received — credit is NOT payment ═══
+  // Credit entries in the payments table represent outstanding debt,
+  // NOT money in the cash drawer. They must be excluded from cash metrics.
+  const realPayments = payments.filter(p => p.payment_method !== 'credit')
+  const collected = realPayments.reduce((sum, p) => sum + Number(p.amount), 0)
   const creditCollected = payments
     .filter(p => p.payment_method === 'credit')
     .reduce((sum, p) => sum + Number(p.amount), 0)
@@ -229,7 +233,8 @@ export async function getDashboardReport(
       const bh = new Date(b.created_at).getHours()
       return bh === hour
     })
-    const hourPayments = payments.filter(p => {
+    // Hourly revenue = REAL payments only (credit is not revenue)
+    const hourPayments = realPayments.filter(p => {
       const ph = new Date(p.created_at).getHours()
       return ph === hour
     })
@@ -242,9 +247,10 @@ export async function getDashboardReport(
     }
   })
 
-  // ── 7. Payment method breakdown ───────────────────────────
+  // ── 7. Payment method breakdown (REAL MONEY only, NOT credit) ──
+  //    Credit is debt, not payment. It's tracked separately via credit_outstanding.
   const methodMap: Record<string, { method: string; label: string; amount: number; count: number }> = {}
-  for (const p of payments) {
+  for (const p of realPayments) {
     const method = p.payment_method || 'unknown'
     if (!methodMap[method]) {
       methodMap[method] = { method, label: methodLabel(method), amount: 0, count: 0 }

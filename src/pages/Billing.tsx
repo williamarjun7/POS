@@ -14,6 +14,7 @@ import {
 } from '@/lib/services/order-calculation-service'
 import type { OrderBatchItemRow } from '@/lib/db/types'
 import { showSuccess, showError } from "@/components/ui/toast"
+import { printService } from '@/lib/services/print-service'
 import { useInvoice } from '@/lib/services/invoice-service'
 import { useInvoicePayments, recordPaymentSafe } from '@/lib/services/payment-service'
 import { fetchInvoiceItems } from "@/lib/services/invoice-items-service"
@@ -31,6 +32,7 @@ import {
 } from "@/lib/services/fonepay-service"
 import { getPaymentMethodLabel, toPaymentMethodKey } from "@/lib/payment-methods"
 import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
+import { PaymentBreakdown } from "@/components/payments/PaymentBreakdown"
 import type { PaymentMethod } from "@/types"
 
 interface InvoiceItemDisplay {
@@ -161,11 +163,17 @@ export function Billing() {
   const errorMessage = invoiceError instanceof Error ? invoiceError.message : (invoiceError ? String(invoiceError) : 'Invoice not found')
 
   // ─── Computed values ───────────────────────────────────
+  // ═══ CREDIT IS NOT PAYMENT ═══
+  // Credit entries in the payments table represent outstanding debt,
+  // NOT money received. They must be excluded from the paid total
+  // and outstanding calculation. Separate tracking keeps them visible.
   const subtotal = useMemo(() => invoiceItems.reduce((s, i) => s + i.totalPrice, 0), [invoiceItems])
   const taxAmount = invoice?.tax ?? 0
   const discountAmount = invoice?.discount ?? 0
   const total = invoice?.total ?? subtotal
-  const totalPaid = useMemo(() => payments.reduce((s, p) => s + p.amount, 0), [payments])
+  const realPayments = useMemo(() => payments.filter(p => p.method !== 'credit'), [payments])
+  const totalPaid = useMemo(() => realPayments.reduce((s, p) => s + p.amount, 0), [realPayments])
+  const totalCredit = useMemo(() => payments.filter(p => p.method === 'credit').reduce((s, p) => s + p.amount, 0), [payments])
   const outstanding = Math.max(0, total - totalPaid)
   const isFullyPaid = totalPaid >= total
   const splitAmount = useMemo(() => Math.round(outstanding / 2 * 100) / 100, [outstanding])
@@ -213,8 +221,18 @@ export function Billing() {
 
     if (!createdPayment) throw new Error('Failed to create payment')
 
+    // ═══ Status: only REAL MONEY counts toward 'paid' ═══
+    // Credit is accounts receivable, not payment. The outstanding balance
+    // is computed from (total - realPaid), so credit does not reduce it.
+    // If the invoice has credit_on credit, its status stays 'credit_invoice'
+    // even after a real-money payment — the credit must be settled separately.
     const newPaidTotal = totalPaid + payAmount
-    const newStatus = newPaidTotal >= total ? 'paid' : 'partial'
+    const hasRemainingCredit = totalCredit > 0
+    const newStatus = hasRemainingCredit
+      ? 'credit_invoice'
+      : newPaidTotal >= total
+        ? 'paid'
+        : 'partial'
     const { error: updateError } = await insforge.database
       .from('invoices')
       .update({ status: newStatus, payment_method: method })
@@ -411,7 +429,22 @@ export function Billing() {
   }
 
   const handlePrintReceipt = () => {
-    window.print()
+    // Print via thermal printer template with payment breakdown
+    const printData: import('@/components/printing/InvoiceTemplate').InvoiceData = {
+      invoiceNumber: invoice.invoice_number ?? `INV-${id?.slice(0, 8)}`,
+      date: invoice.created_at?.split('T')[0] ?? new Date().toLocaleDateString(),
+      time: invoice.created_at?.split('T')[1]?.slice(0, 5) ?? new Date().toLocaleTimeString(),
+      items: invoiceItems.map(item => ({
+        name: item.name,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+      subtotal,
+      discount: discountAmount,
+      total,
+      paymentBreakdown: payments.map(p => ({ method: p.method, amount: p.amount })),
+    }
+    printService.printInvoice(printData)
     showSuccess("Receipt sent to printer")
   }
 
@@ -567,6 +600,12 @@ export function Billing() {
                         <td className="px-3 py-2.5 text-right text-success">{formatCurrency(totalPaid)}</td>
                       </tr>
                     )}
+                    {totalCredit > 0 && (
+                      <tr className="text-muted-foreground">
+                        <td colSpan={3} className="px-3 py-2.5 text-right text-sm">Outstanding Credit</td>
+                        <td className="px-3 py-2.5 text-right text-purple-600 dark:text-purple-400">{formatCurrency(totalCredit)}</td>
+                      </tr>
+                    )}
                     {voidedState.count > 0 && (
                       <tr className="text-muted-foreground/60">
                         <td colSpan={3} className="px-3 py-2.5 text-right text-sm text-red-500/60 dark:text-red-400/60">Voided Items: {voidedState.count}</td>
@@ -603,20 +642,18 @@ export function Billing() {
               {payments.length > 0 && (
                 <div className="mt-6 pt-4 border-t border-border">
                   <h4 className="text-sm font-semibold text-foreground mb-3">Payment History</h4>
-                  <div className="space-y-2">
-                    {payments.map(p => (
-                      <div key={p.id} className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2 text-sm">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-success" />
-                          <PaymentMethodBadge method={p.method} size="sm" />
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs text-muted-foreground">{p.date} {p.time}</span>
-                          <span className="font-semibold text-success">{formatCurrency(p.amount)}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <PaymentBreakdown
+                    payments={payments.map(p => ({
+                      id: p.id,
+                      method: p.method,
+                      amount: p.amount,
+                      createdAt: `${p.date}T${p.time}:00`,
+                      reference: '',
+                    }))}
+                    total={total}
+                    variant="detailed"
+                    showTimestamps
+                  />
                 </div>
               )}
             </div>
@@ -726,10 +763,8 @@ export function Billing() {
                     Payment Methods
                   </h3>
                   <div className="space-y-2">
-                    {[
-                      { id: "cash" as PaymentMethod, label: getPaymentMethodLabel('cash'), icon: Banknote, color: "text-emerald-500", desc: "Pay in cash at counter" },
+                    {[                    {id: "cash" as PaymentMethod, label: getPaymentMethodLabel('cash'), icon: Banknote, color: "text-emerald-500", desc: "Pay in cash at counter" },
                       { id: "fonepay" as PaymentMethod, label: getPaymentMethodLabel('fonepay'), icon: Smartphone, color: "text-blue-500", desc: "Scan QR to pay via Fonepay" },
-                      { id: "credit" as PaymentMethod, label: getPaymentMethodLabel('credit'), icon: CreditCard, color: "text-violet-500", desc: "Add to account / credit" },
                       { id: "reception_qr" as PaymentMethod, label: getPaymentMethodLabel('reception_qr'), icon: QrCode, color: "text-cyan-500", desc: "Customer pays via QR at reception" },
                     ].map((method) => {
                       const IconComp = method.icon
@@ -813,13 +848,21 @@ export function Billing() {
                 </div>
                 <h3 className="text-base font-semibold text-foreground mb-1">Fully Paid</h3>
                 <p className="text-sm text-muted-foreground mb-2">
-                  {formatCurrency(totalPaid)} received via{' '}
-                  {payments.length === 1 ? (
-                    <PaymentMethodBadge method={payments[0].method} size="sm" />
-                  ) : (
-                    <PaymentMethodBadge multi={payments.map(p => p.method)} size="sm" />
-                  )}
+                  {formatCurrency(totalPaid)} received
                 </p>
+                <div className="mb-3">
+                  <PaymentBreakdown
+                    payments={payments.map(p => ({
+                      id: p.id,
+                      method: p.method,
+                      amount: p.amount,
+                      createdAt: `${p.date}T${p.time}:00`,
+                    }))}
+                    total={total}
+                    variant="compact"
+                    showTotal={false}
+                  />
+                </div>
                 <div className="rounded-lg bg-muted/30 px-3 py-2 text-sm mb-4">
                   <div className="flex justify-between"><span className="text-muted-foreground">Invoice Total</span><span className="font-semibold text-foreground">{formatCurrency(total)}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Total Paid</span><span className="font-semibold text-success">{formatCurrency(totalPaid)}</span></div>

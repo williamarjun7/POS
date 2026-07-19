@@ -173,7 +173,6 @@ function useCustomerProfileData(customer: Customer | null, refreshKey: number = 
       const [
         ordersResult,
         invoicesResult,
-        paymentsResult,
       ] = await Promise.all([
         insforge.database
           .from('order_batches')
@@ -188,17 +187,26 @@ function useCustomerProfileData(customer: Customer | null, refreshKey: number = 
           .eq('customer_name', customerName)
           .order('created_at', { ascending: false })
           .limit(200),
-
-        insforge.database
-          .from('payments')
-          .select('*')
-          .eq('customer_id', customerId)
-          .order('created_at', { ascending: false })
-          .limit(200),
       ])
 
+      // ── Payments: match by customer_id OR by invoice_id (for older records) ──
+      // Extract invoice IDs from the invoices result (avoids an extra query)
+      const customerInvoiceIds = (invoicesResult.data ?? []).map((inv: any) => inv.id)
+      // Build an OR filter: customer_id matches OR invoice_id is in the customer's invoices
+      const paymentFilters = [`customer_id.eq.${customerId}`]
+      if (customerInvoiceIds.length > 0) {
+        paymentFilters.push(`invoice_id.in.(${customerInvoiceIds.join(',')})`)
+      }
+      const paymentsResponse = await insforge.database
+        .from('payments')
+        .select('*')
+        .or(paymentFilters.join(','))
+        .order('created_at', { ascending: false })
+        .limit(200)
+
       // ── Process Payments (FIRST — needed by invoice processing) ──
-      const paymentRows = (paymentsResult.data ?? []) as PaymentRow[]
+      const paymentsData = (paymentsResponse as { data: PaymentRow[] | null }).data ?? []
+      const paymentRows = paymentsData as PaymentRow[]
       const paidByInvoice = new Map<string, number>()
       for (const p of paymentRows) {
         if (p.invoice_id) {

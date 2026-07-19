@@ -12,14 +12,14 @@ import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
 import { showSuccess, showError } from '@/components/ui/toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RequirePermission } from '@/lib/core/PermissionGuards';
-import { recordCreditCharge } from '@/lib/services/customer-ledger';
+import { recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
 import { getNextInvoiceNumber } from '@/lib/services/sequence-service';
 import { useMenuCategories, useMenuItems } from '@/lib/api/menu.hooks';
 import { useDashboardTables, useRooms, useTableBatches } from '@/lib/hooks';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRateLimit } from '@/lib/hooks/useRateLimit'
 import { recordPaymentSafe } from '@/lib/services/payment-service';
-import { toPaymentMethodKey } from '@/lib/payment-methods';
+import { toPaymentMethodKey, getPaymentMethodLabel } from '@/lib/payment-methods';
 import { useAuth } from '@/lib/core/auth-context';
 import { logActivitySafe } from '@/lib/services/activity-log-service';
 import { insforge } from '@/lib/services/auth-service';
@@ -30,7 +30,6 @@ import { db } from '@/lib/db/insforge';
 import { formatCurrency } from '@/lib/utils';
 import { TABLE_STATUS_LABELS, TABLE_STATUS_COLORS } from '@/lib/constants';
 import {
-  calculateRunningTotal,
   calculateTotalWithCart,
   collectBillableItems,
   hasBillableItems,
@@ -43,6 +42,7 @@ import {
 
 import type { OrderBatch, OrderBatchItem, CartItemStatus, PaymentMethod } from '@/types';
 import type { MenuItem } from '@/types';
+import type { InvoiceRow } from '@/lib/db/types'
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -408,24 +408,27 @@ export function POS() {
     setNewCartItems(prev => prev.map(l => l.menu_item_id === menuItemId ? { ...l, notes } : l));
   }
 
-  // ─── Cart persistence (sessionStorage) ────────────
-  // Uses sessionStorage so cart data is automatically cleared when the
-  // browser tab closes — preventing the next user on a shared terminal
-  // from seeing the previous user's orders, prices, or customer info.
-  // sessionStorage is also scoped per tab, not per origin, so concurrent
-  // POS sessions on different tabs won't interfere.
+  // ─── Session state persistence (sessionStorage) ────
+  // Only persists business-critical state: the last-used table and customer name.
+  // ⚠️ Temporary UI state (cart items, menu selections, search/filter, etc.)
+  //    is NEVER persisted. The cart ALWAYS starts empty.
+  //    Only after an order is placed does the database track the session.
+  // sessionStorage is scoped per tab, so concurrent POS sessions don't interfere.
   const CART_STORAGE_KEY = 'pos_cart_state';
 
-  // Restore cart from sessionStorage on mount
+  // Restore session state on mount
+  // ⚠️ IMPORTANT: URL params (Dashboard navigation) take precedence.
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem(CART_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.cartItems && Array.isArray(parsed.cartItems)) {
-          setNewCartItems(parsed.cartItems);
-        }
-        if (parsed.selectedTableId) {
+        // NEVER restore newCartItems — cart is always temporary UI state.
+        // Only active orders in the database (order_batches) are restored.
+        // URL params always win — they represent an explicit user action
+        // (e.g., navigating from Dashboard).
+        const hasUrlTable = !!searchParams.get('table') || !!searchParams.get('room');
+        if (!hasUrlTable && parsed.selectedTableId) {
           setSelectedTableId(parsed.selectedTableId);
         }
         if (parsed.customerName) {
@@ -435,15 +438,14 @@ export function POS() {
     } catch { /* ignore corrupt sessionStorage */ }
   }, []);
 
-  // Save cart to sessionStorage on changes (debounced 500ms to avoid
-  // blocking the main thread during rapid POS item entry)
+  // Save session state on changes (debounced 500ms)
   const cartSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (cartSaveTimerRef.current) clearTimeout(cartSaveTimerRef.current);
     cartSaveTimerRef.current = setTimeout(() => {
       try {
         sessionStorage.setItem(CART_STORAGE_KEY, JSON.stringify({
-          cartItems: newCartItems,
+          // newCartItems intentionally excluded — temporary UI state
           selectedTableId,
           customerName,
         }));
@@ -452,7 +454,7 @@ export function POS() {
     return () => {
       if (cartSaveTimerRef.current) clearTimeout(cartSaveTimerRef.current);
     };
-  }, [newCartItems, selectedTableId, customerName]);
+  }, [selectedTableId, customerName]); // newCartItems removed — it's temporary UI
 
   // ─── Load batches from DB when table is selected ─
   // Always fetch batches whenever a table/room is selected — the hook handles
@@ -500,12 +502,29 @@ export function POS() {
     [tableBatches]
   );
 
-  // ─── Running total across ALL billable batches (previous + current cart) ─
-  // Uses shared calculation service — single source of truth.
-  const unpaidPreviousTotal = useMemo(
-    () => calculateRunningTotal(tableBatches),
+  // ─── Running totals ────────────────────────────────────────────
+  // There are TWO distinct running totals with different meanings:
+  //
+  //   1. originalPreviousTotal — Sum of ALL batch subtotals (original amounts).
+  //      NEVER changes after payment. Represents the total value of every batch.
+  //      Displayed as "Previous batches" in the cart.
+  //
+  //   2. unpaidRunningTotal — Sum of only UNPAID billable items.
+  //      Decreases as items are paid. Represents what's still owed.
+  //      Displayed as "Running Total" in the cart.
+  //
+  // This separation ensures that partial payments don't erase the historical
+  // order total. The original batch amounts are immutable once created.
+  // ─── Original batch totals (IMMUTABLE — never recalculated after creation) ─
+  // Uses each item's original unit_price * quantity directly, NOT batch.subtotal
+  // which can be modified by voidBatchItem. This ensures the "Previous batches"
+  // line always shows the original order value regardless of voids or payments.
+  const originalPreviousTotal = useMemo(
+    () => tableBatches.reduce((sum, b) =>
+      sum + b.items.reduce((itemSum, item) => itemSum + item.unit_price * item.quantity, 0), 0
+    ),
     [tableBatches],
-  );
+  )
   const totalRunning = calculateTotalWithCart(tableBatches, newSubtotal);
 
   // ─── Voided items summary for reporting ───
@@ -556,6 +575,13 @@ export function POS() {
     return items;
   }, [tableBatches, newCartItems]);
 
+  // ─── Payment completion guard — prevents handlePaymentComplete
+  //     from executing more than once, regardless of code path.
+  //     This is the second line of defense after PosPaymentDialog's
+  //     safeComplete guard. Handles edge cases like React Strict Mode
+  //     double-mounting and rapid user interactions.
+  const paymentProcessingRef = useRef(false)
+
   // ─── Rate limit for order placement ──────────────────
   const { checkLimit: checkOrderLimit } = useRateLimit({ cooldownMs: 2000, maxAttempts: 10 })
 
@@ -575,17 +601,57 @@ export function POS() {
   };
 
   // ─── Handle payment complete ──────────────────────
+  // ═══════════════════════════════════════════════════════════════
+  // SINGLE SOURCE OF TRUTH FOR INVOICE & PAYMENT CREATION
+  // ═══════════════════════════════════════════════════════════════
+  // This function is the ONLY place in the entire application where
+  // invoices are created and payments are recorded. Every payment
+  // method (Cash, QR, Fonepay, Credit, Split, Partial) flows through
+  // this one function via the PosPaymentDialog's onComplete callback.
+  //
+  // GUARD: paymentProcessingRef ensures at most one execution at a time.
+  //   - Set to true on entry, reset to false on completion or error.
+  //   - Prevents duplicate invoice creation from:
+  //     * React Strict Mode double-mounting
+  //     * Rapid user interactions
+  //     * Accidental double-fires from child components
+  // ═══════════════════════════════════════════════════════════════
   const handlePaymentComplete = useCallback(async (providedInvoiceNumber?: string, paymentResult?: PaymentResult) => {
-    if (!selectedTableId) return;
+    // ═══════════════════════════════════════════════════════════════
+    // GUARD: Prevent concurrent execution
+    // ═══════════════════════════════════════════════════════════════
+    // This ref is set to true BEFORE any async operations. It prevents
+    // a second call from slipping past while the first call is awaiting
+    // async operations (idempotency check, DB writes, etc.).
+    // ═══════════════════════════════════════════════════════════════
+    if (paymentProcessingRef.current) {
+      logPayment('duplicate_blocked', { invoiceNumber: providedInvoiceNumber })
+      return
+    }
+    paymentProcessingRef.current = true
+
+    if (!selectedTableId) {
+      paymentProcessingRef.current = false
+      return;
+    }
     // ── Guard: Only block if nothing to pay AND no payment was processed ──
     if (!paymentResult && allUnpaidItemsForPayment.length === 0) {
       showError('Nothing to pay — all items are already settled or the cart is empty.');
       setShowPayment(false);
       return;
     }
-    let invoiceTotal = paymentResult?.grandTotal ?? 0;
-    let totalSettled = (paymentResult?.paidAmount ?? 0) + (paymentResult?.creditAmount ?? 0);
-    let remainingBalance = Math.max(0, invoiceTotal - totalSettled);
+    // ── Core calculation: invoice total is ALWAYS the full bill amount ──
+    // invoiceTotal = the FULL invoice total (e.g. 390 for partial payments)
+    // paidAmount = actual real money received (e.g. 90 cash)
+    // creditAmount = outstanding credit created (e.g. 300)
+    // remainingBalance = actual outstanding after this transaction (invoiceTotal - paidAmount)
+    // Credit is NOT subtracted from remaining — it IS the remaining.
+    const invoiceTotal = paymentResult?.invoiceTotal ?? paymentResult?.grandTotal ?? 0;
+    const actualPaid = paymentResult?.paidAmount ?? 0;
+    const creditAmount = paymentResult?.creditAmount ?? 0;
+    const remainingBalance = Math.max(0, invoiceTotal - actualPaid);
+    const isFullySettled = remainingBalance <= 0;
+    const hasOutstandingCredit = creditAmount > 0;
     setShowPayment(false);
     // IMPORTANT: cart is NOT cleared here — clearing before DB persistence
     //     would destroy the user's items if the payment transaction fails.
@@ -634,9 +700,33 @@ export function POS() {
       )),
     ];
 
-    // 0. Generate sequential invoice number
-    const invNumber = providedInvoiceNumber ?? await getNextInvoiceNumber();
-    logPayment('invoice_number_generated', { invoiceNumber: invNumber });
+    // ═══ Look up existing partial/credit invoice ═══
+    // If there's already an invoice for these batches (from a prior split/partial payment),
+    // UPDATE it instead of creating a duplicate. This is the single reason remaining-balance
+    // payments were creating phantom second invoices.
+    // NOTE: Must be declared BEFORE invoice number generation below, which references it.
+    let existingInvoice: InvoiceRow | null = null
+    const batchIdArray = tableBatches.map(b => b.id)
+    if (batchIdArray.length > 0) {
+      const { data: matchedInvoices } = await insforge.database
+        .from('invoices')
+        .select('*')
+        .eq('table_id', selectedTableId)
+        .in('status', ['partial', 'credit_invoice'])
+        .order('created_at', { ascending: false })
+      if (matchedInvoices && matchedInvoices.length > 0) {
+        existingInvoice = (matchedInvoices as InvoiceRow[]).find(inv =>
+          inv.order_batch_ids?.some((bid: string) => batchIdArray.includes(bid))
+        ) ?? null
+      }
+    }
+    if (existingInvoice) {
+      logPayment('existing_invoice_found', { invoiceId: existingInvoice.id, invoiceNumber: existingInvoice.invoice_number, status: existingInvoice.status })
+    }
+
+    // 0. Generate sequential invoice number (use existing invoice's number for remaining balance)
+    const invNumber = existingInvoice?.invoice_number ?? (providedInvoiceNumber ?? await getNextInvoiceNumber());
+    logPayment('invoice_number_generated', { invoiceNumber: invNumber, isExisting: !!existingInvoice });
 
     // 0a. Validate payment amount before any DB writes
     if (!paymentResult.grandTotal || paymentResult.grandTotal <= 0) {
@@ -669,13 +759,16 @@ export function POS() {
     }
     logPayment('idempotency_passed', { idempotencyKey });
 
-    // 2. Determine invoice status based on actual amount received vs total
-    //    An invoice is only 'paid' when total settled >= invoice total
-    //    Otherwise it's 'partial' (remaining balance due)      invoiceTotal = paymentResult.grandTotal ?? subtotal;
-      totalSettled = (paymentResult.paidAmount ?? 0) + (paymentResult.creditAmount ?? 0);
-      remainingBalance = Math.max(0, invoiceTotal - totalSettled);
-      let invoiceStatus: string;
+    // 2. Determine invoice status based on ACTUAL REAL MONEY received vs total.
+    //    CREDIT is NOT payment — it is Accounts Receivable.
+    //    An invoice is only 'paid' when real money covers the total.
+    //    If credit was created, status is 'credit_invoice'.
+    //    If only partial real money was received (no credit), status is 'partial'.
+    let invoiceStatus: string;
     if (isCreditPayment) {
+      invoiceStatus = 'credit_invoice';
+    } else if (hasOutstandingCredit) {
+      // Partial real money + credit for the rest — invoice has outstanding credit
       invoiceStatus = 'credit_invoice';
     } else if (remainingBalance <= 0) {
       invoiceStatus = 'paid';
@@ -683,60 +776,88 @@ export function POS() {
       invoiceStatus = 'partial';
     }
 
-    // 2. Create invoice record first
-    let invoiceId: string | null = null;
+    // 2. Create or update invoice record
+    //    If an existing partial/credit_invoice was found, UPDATE its status instead of
+    //    creating a new invoice. This prevents duplicate invoices on remaining balance payments.
+    let invoiceId: string | null = existingInvoice?.id ?? null;
+    const isNewInvoice = !existingInvoice;
     try {
-      const { data: invData, error: invError } = await insforge.database
-        .from('invoices')
-        .insert([{
-          invoice_number: invNumber,
-          customer_name: paymentResult.creditCustomerName || customerName || 'Walk-in',
-          table_id: selectedTableId,
-          order_batch_ids: tableBatches.map(b => b.id),
-          subtotal,
-          tax: 0,
-          discount,
-          total: invoiceTotal,
-          status: invoiceStatus,
-          payment_method: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
-        }])
-        .select()
-        .single();
+      if (existingInvoice) {
+        // ── UPDATE existing invoice status ──
+        const { error: updateError } = await insforge.database
+          .from('invoices')
+          .update({ status: invoiceStatus })
+          .eq('id', existingInvoice.id)
 
-      if (invError) {
-        logPayment('invoice_insert_failed', { error: invError, invoiceNumber: invNumber });
-        throw invError;
+        if (updateError) {
+          logPayment('invoice_update_failed', { error: updateError, invoiceId: existingInvoice.id });
+          throw updateError;
+        }
+        invoiceId = existingInvoice.id;
+        logPayment('invoice_updated', { invoiceId, invoiceNumber: invNumber, newStatus: invoiceStatus });
+      } else {
+        // ── CREATE new invoice ──
+        const { data: invData, error: invError } = await insforge.database
+          .from('invoices')
+          .insert([{
+            invoice_number: invNumber,
+            customer_name: paymentResult.creditCustomerName || customerName || 'Walk-in',
+            table_id: selectedTableId,
+            order_batch_ids: tableBatches.map(b => b.id),
+            subtotal,
+            tax: 0,
+            discount,
+            total: invoiceTotal,
+            status: invoiceStatus,
+            payment_method: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
+          }])
+          .select()
+          .single();
+
+        if (invError) {
+          logPayment('invoice_insert_failed', { error: invError, invoiceNumber: invNumber });
+          throw invError;
+        }
+        invoiceId = invData.id;
+        logPayment('invoice_created', { invoiceId, invoiceNumber: invNumber, status: invoiceStatus, paidAmount: paymentResult.paidAmount, remaining: remainingBalance });
+
+        // ── Update customer record (new invoices only) ──
+        // Existing invoices already have customer_id backfilled; re-running would
+        // double-count total_spent and total_orders on the customer profile.
+        const invoiceCustomerName = paymentResult.creditCustomerName || customerName || ''
+        const customerId = await updateCustomerAfterInvoice(invoiceCustomerName, invoiceTotal, invoiceId)
+
+        // 3. Write invoice items (new invoices only — existing invoices already have items)
+        if (invoiceItemsList.length > 0 && invoiceId) {
+          const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList);
+          logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length });
+        } else {
+          logPayment('invoice_items_skipped', { invoiceId, reason: invoiceItemsList.length === 0 ? 'no items' : 'no invoiceId' });
+        }
       }
-      invoiceId = invData.id;
-      logPayment('invoice_created', { invoiceId, invoiceNumber: invNumber, status: invoiceStatus, paidAmount: paymentResult.paidAmount, remaining: remainingBalance });
 
-      // For full credit payments, skip recordPaymentSafe — recordCreditCharge handles it
-      // to avoid duplicate payment records. For other methods, record normally.
+      // Record ONLY the actual real money received (NOT credit amounts).
+      // Credit is NOT payment — it's accounts receivable.
+      // The remaining amount is handled separately via credit recording below.
       if (!isCreditPayment || hasSplitCredit) {
+        const paymentAmount = actualPaid;
         const paymentRecord = await recordPaymentSafe({
           invoiceId: invoiceId!,
           batchId: tableBatches[0]?.id ?? null,
-          amount: paymentResult.grandTotal,
+          amount: paymentAmount,
           paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash') as PaymentMethod,
           reference: idempotencyKey,
           notes: `Payment via ${paymentResult.paymentMethod ?? 'cash'}`,
+          customerId: undefined, // customer_id backfilled separately via updateCustomerAfterInvoice
         });
 
         if (!paymentRecord) {
-          logPayment('payment_record_failed', { invoiceId, amount: paymentResult.grandTotal, method: paymentResult.paymentMethod });
-          throw new Error(`Failed to record payment of ${npr(paymentResult.grandTotal)} via ${paymentResult.paymentMethod}. The database rejected the insert — check that the amount is valid.`);
+          logPayment('payment_record_failed', { invoiceId, amount: paymentAmount, method: paymentResult.paymentMethod });
+          throw new Error(`Failed to record payment of ${npr(paymentAmount)} via ${paymentResult.paymentMethod}. The database rejected the insert — check that the amount is valid.`);
         }
-        logPayment('payment_recorded', { invoiceId, paymentId: paymentRecord.id, amount: paymentResult.grandTotal, method: paymentResult.paymentMethod });
+        logPayment('payment_recorded', { invoiceId, paymentId: paymentRecord.id, amount: paymentAmount, method: paymentResult.paymentMethod });
       } else {
         logPayment('payment_skipped_credit', { invoiceId, reason: 'full credit - recordCreditCharge handles it' });
-      }
-
-      // 3. Write invoice items to invoice_items table
-      if (invoiceItemsList.length > 0 && invoiceId) {
-        const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList);
-        logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length });
-      } else {
-        logPayment('invoice_items_skipped', { invoiceId, reason: invoiceItemsList.length === 0 ? 'no items' : 'no invoiceId' });
       }
 
       // 4. Log activity (non-critical)
@@ -811,12 +932,15 @@ export function POS() {
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : typeof err === 'object' && err !== null ? JSON.stringify(err) : 'Unknown error';
       if (import.meta.env.DEV) console.error('[PAYMENT] payment failed:', errMessage);
-      const invoiceCreated = !!invoiceId;
+      const invoiceCreated = !!invoiceId && isNewInvoice;
       showError(`Payment failed: ${errMessage}. ${
-        invoiceCreated
-          ? `Invoice #${invNumber ?? ''} was created but could not be fully processed.`
-          : `Invoice #${invNumber ?? ''} could not be created.`
+        existingInvoice
+          ? `Existing invoice #${invNumber ?? ''} could not be updated with the new payment.`
+          : invoiceCreated
+            ? `Invoice #${invNumber ?? ''} was created but could not be fully processed.`
+            : `Invoice #${invNumber ?? ''} could not be created.`
       }`);
+      paymentProcessingRef.current = false // Reset guard on error
       return;
     }
 
@@ -872,13 +996,19 @@ export function POS() {
     }
     logPayment('completed', { invoiceNumber: invNumber, invoiceId, totalAmount: paymentResult.grandTotal, method: paymentResult.paymentMethod, unpaidItems: newUnpaidTotal });
 
-    // ── Safety net: close table session via RPC (belt-and-suspenders) ──
-    // The database triggers (trg_order_batches_auto_close_session) already
-    // auto-close the session when all batches transition to paid/cancelled.
-    // This RPC call is a safety net for edge cases where the trigger might
-    // not have fired (e.g., batch was already paid before trigger existed,
-    // or a race condition). Fire-and-forget — errors are non-critical.
-    if (selectedTableId && (remainingBalance <= 0 || isCreditPayment)) {
+    // ═══════════════════════════════════════════════════════════════
+    // CLOSE TABLE SESSION
+    // ═══════════════════════════════════════════════════════════════
+    // The dining session is ALWAYS finished after checkout,
+    // regardless of whether the bill was fully paid or partially
+    // paid with credit. Outstanding credit is tracked on the
+    // invoice and customer account, NOT on the table.
+    // ═══════════════════════════════════════════════════════════════
+    // ── Close table session — the dining session is ALWAYS finished after checkout,
+    //     regardless of whether the bill was fully paid or partially paid with credit.
+    //     Outstanding credit is tracked on the invoice, not the table.
+    //     Fire-and-forget — errors are non-critical (DB triggers also handle this).
+    if (selectedTableId) {
       db.rpc('close_table_session', { p_table_id: selectedTableId })
         .then(({ data, error }: { data: any; error: any }) => {
           if (error) {
@@ -896,29 +1026,34 @@ export function POS() {
     setCustomerName('');
     try { sessionStorage.removeItem(CART_STORAGE_KEY); } catch { /* ignore */ }
 
-    // ── For fully settled payments: reset table selection & local batches ──
-    // Partial payments keep the table selection so the cashier can continue.
-    if (remainingBalance <= 0 || paymentResult.creditAmount) {
-      setSelectedTableId('');
-      setOrderBatches(prev => {
-        const updated = { ...prev };
-        delete updated[selectedTableId];
-        return updated;
-      });
-    }
+    // Reset guard after successful completion
+    paymentProcessingRef.current = false
+
+    // ALWAYS reset table selection — the dining session is finished.
+    // Outstanding credit is tracked on the invoice, not on the table.
+    setSelectedTableId('');
+    setOrderBatches(prev => {
+      const updated = { ...prev };
+      delete updated[selectedTableId];
+      return updated;
+    });
 
     // Invalidations are fire-and-forget — single wildcard covers all dashboard-* keys
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     queryClient.invalidateQueries({ queryKey: ['batches'] });
 
-    // Don't navigate to dashboard for partial payments — the cashier may continue
-    // paying the remaining balance from the same POS session.
-    if (remainingBalance > 0 && !paymentResult.creditAmount) {
-      showSuccess(`Partial payment received${paymentResult.paymentMethod ? ` via ${paymentResult.paymentMethod}` : ''}! Rs. ${npr(remainingBalance)} remaining.`);
+    // ── Navigation & success messages ──
+    // Credit is NOT "remaining" — it's "outstanding".
+    // Only real-money remaining counts as "remaining".
+    if (hasOutstandingCredit) {
+      showSuccess(`Invoice #${invNumber}: ${npr(actualPaid)} received via ${getPaymentMethodLabel(paymentResult.paymentMethod)}. Outstanding credit: ${npr(creditAmount)} assigned to ${paymentResult.creditCustomerName || 'customer'}.`);
+    } else if (remainingBalance > 0) {
+      showSuccess(`Partial payment of ${npr(actualPaid)} received. ${npr(remainingBalance)} remaining.`);
     } else {
-      showSuccess(`Payment received${paymentResult.paymentMethod ? ` via ${paymentResult.paymentMethod}` : ''}!`);
-      navigate('/dashboard');
+      showSuccess(`Payment of ${npr(actualPaid)} received${paymentResult.paymentMethod ? ` via ${getPaymentMethodLabel(paymentResult.paymentMethod)}` : ''}!`);
     }
+    // Always navigate to dashboard after checkout
+    navigate('/dashboard');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTableId, orderBatches, newCartItems, newSubtotal, customerName, queryClient, navigate]);
 
@@ -1675,16 +1810,16 @@ export function POS() {
               </div>
 
               <div className="p-4 bg-card border-t border-border space-y-2">
-                {/* Running total — unpaid items across previous batches + current cart */}
+                {/* Running total — previous batches (original) + current batch */}
                 <div className="space-y-1">
-                  {unpaidPreviousTotal > 0 && (
+                  {originalPreviousTotal > 0 && (
                     <div className="flex items-center justify-between text-xs text-muted-foreground/70">
                       <span>Previous batches</span>
-                      <span className="tabular-nums">{npr(unpaidPreviousTotal)}</span>
+                      <span className="tabular-nums">{npr(originalPreviousTotal)}</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between" key={newSubtotal}>
-                    <span className="text-sm text-muted-foreground">{unpaidPreviousTotal > 0 ? 'Current batch' : 'Subtotal'}</span>
+                    <span className="text-sm text-muted-foreground">{originalPreviousTotal > 0 ? 'Current batch' : 'Subtotal'}</span>
                     <span className="text-sm font-semibold tabular-nums">{npr(newSubtotal)}</span>
                   </div>
                   {voidedSummary.count > 0 && (
@@ -1857,14 +1992,14 @@ export function POS() {
             <div className="p-4 bg-card border-t border-border space-y-2">
               {/* Running total — unpaid items across previous batches + current cart */}
               <div className="space-y-1">
-                {unpaidPreviousTotal > 0 && (
+                {originalPreviousTotal > 0 && (
                   <div className="flex items-center justify-between text-xs text-muted-foreground/70">
                     <span>Previous batches</span>
-                    <span className="tabular-nums">{npr(unpaidPreviousTotal)}</span>
+                    <span className="tabular-nums">{npr(originalPreviousTotal)}</span>
                   </div>
                 )}
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">{unpaidPreviousTotal > 0 ? 'Current batch' : 'Subtotal'}</span>
+                  <span className="text-sm text-muted-foreground">{originalPreviousTotal > 0 ? 'Current batch' : 'Subtotal'}</span>
                   <span className="text-sm font-semibold tabular-nums">{npr(newSubtotal)}</span>
                 </div>
                 {totalRunning > 0 && (
