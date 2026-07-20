@@ -279,14 +279,17 @@ function useCustomerProfileData(customer: Customer | null, refreshKey: number = 
       })
       setOrders(mappedOrders)
 
-      // ── Build Ledger ──
+      // ── Build Ledger (credit is NOT payment — exclude it) ──
       const ledgerEntries: LedgerEntry[] = []
 
       for (const inv of invoiceRows) {
+        const isCreditInvoice = inv.status === 'credit_invoice'
         ledgerEntries.push({
           id: `inv-${inv.id}`,
           date: inv.created_at,
-          description: `Invoice ${inv.invoice_number}`,
+          description: isCreditInvoice
+            ? `Credit Sale — Invoice ${inv.invoice_number}`
+            : `Invoice ${inv.invoice_number}`,
           debit: Number(inv.total),
           credit: 0,
           runningBalance: 0,
@@ -294,7 +297,9 @@ function useCustomerProfileData(customer: Customer | null, refreshKey: number = 
         })
       }
 
+      // Only real payments (credit method = old-style financing, NOT money received)
       for (const p of paymentRows) {
+        if (p.payment_method === 'credit') continue
         ledgerEntries.push({
           id: `pay-${p.id}`,
           date: p.created_at,
@@ -444,51 +449,60 @@ function ProfileHeader({
 
 /* ─── KPI Summary Cards ────────────────────────────────────── */
 
-function KpiCards({ customer, avgOrderValue }: { customer: Customer; avgOrderValue: number }) {
+interface KpiCardsProps {
+  totalOrders: number
+  totalSpent: number
+  outstandingCredit: number
+  avgOrderValue: number
+  loyaltyPoints: number
+  lastVisit: string
+}
+
+function KpiCards({ totalOrders, totalSpent, outstandingCredit, avgOrderValue, loyaltyPoints, lastVisit }: KpiCardsProps) {
   const kpis = useMemo(() => [
     {
       label: "Total Orders",
-      value: formatNumber(customer.totalOrders),
+      value: formatNumber(totalOrders),
       icon: ShoppingBag,
       color: "text-primary",
       bg: "bg-primary/10",
     },
     {
       label: "Total Spent",
-      value: formatCurrency(customer.totalSpent),
+      value: formatCurrency(totalSpent),
       icon: TrendingUp,
       color: "text-success",
       bg: "bg-success/10",
     },
     {
       label: "Outstanding Credit",
-      value: formatCurrency(customer.creditBalance),
+      value: formatCurrency(outstandingCredit),
       icon: Wallet,
-      color: customer.creditBalance > 0 ? "text-destructive" : "text-muted-foreground",
-      bg: customer.creditBalance > 0 ? "bg-destructive/10" : "bg-muted",
+      color: outstandingCredit > 0 ? "text-destructive" : "text-muted-foreground",
+      bg: outstandingCredit > 0 ? "bg-destructive/10" : "bg-muted",
     },
     {
       label: "Avg. Order Value",
-      value: customer.totalOrders > 0 ? formatCurrency(avgOrderValue) : "—",
+      value: totalOrders > 0 ? formatCurrency(avgOrderValue) : "—",
       icon: TrendingUp,
       color: "text-info",
       bg: "bg-primary/10",
     },
     {
       label: "Loyalty Points",
-      value: formatNumber(customer.loyaltyPoints),
+      value: formatNumber(loyaltyPoints),
       icon: Star,
-      color: customer.loyaltyPoints > 0 ? "text-warning" : "text-muted-foreground",
-      bg: customer.loyaltyPoints > 0 ? "bg-warning/10" : "bg-muted",
+      color: loyaltyPoints > 0 ? "text-warning" : "text-muted-foreground",
+      bg: loyaltyPoints > 0 ? "bg-warning/10" : "bg-muted",
     },
     {
       label: "Last Visit",
-      value: formatDate(customer.lastVisit),
+      value: formatDate(lastVisit),
       icon: Clock,
       color: "text-muted-foreground",
       bg: "bg-muted",
     },
-  ], [customer, avgOrderValue])
+  ], [totalOrders, totalSpent, outstandingCredit, avgOrderValue, loyaltyPoints, lastVisit])
 
   return (
     <div className="px-5 pb-3">
@@ -522,17 +536,17 @@ function KpiCards({ customer, avgOrderValue }: { customer: Customer; avgOrderVal
    ══════════════════════════════════════════════════════════════ */
 
 function OverviewTab({
-  customer,
   orders,
   invoices,
   payments,
   loading,
+  outstandingCredit,
 }: {
-  customer: Customer
   orders: CustomerOrder[]
   invoices: CustomerInvoice[]
   payments: CustomerPayment[]
   loading: boolean
+  outstandingCredit: number
 }) {
   const recentActivity = useMemo<RecentActivity[]>(() => {
     const activities: RecentActivity[] = []
@@ -549,16 +563,20 @@ function OverviewTab({
       activities.push({
         id: `inv-${inv.id}`,
         type: 'invoice' as const,
-        description: `Invoice ${inv.invoiceNumber}`,
+        description: inv.status === 'credit_invoice'
+          ? `Credit Sale — Invoice ${inv.invoiceNumber}`
+          : `Invoice ${inv.invoiceNumber}`,
         amount: inv.amount,
         date: inv.date,
       })
     }
-    for (const p of payments.slice(0, 5)) {
+    // Only real payments in activity (credit is NOT payment)
+    const realPayments = payments.filter(p => p.method !== 'credit')
+    for (const p of realPayments.slice(0, 5)) {
       activities.push({
         id: `pay-${p.id}`,
         type: 'payment' as const,
-        description: `Payment via ${getPaymentMethodLabel(p.method)}`,
+        description: `Payment received — ${getPaymentMethodLabel(p.method)}`,
         amount: p.amount,
         date: p.date,
       })
@@ -584,11 +602,14 @@ function OverviewTab({
 
   const paymentBreakdown = useMemo(() => {
     const methodTotals = new Map<string, number>()
-    for (const p of payments) {
+    // Only count REAL money methods (credit is NOT payment)
+    const realPayments = payments.filter(p => p.method !== 'credit')
+    for (const p of realPayments) {
       const key = getPaymentMethodLabel(p.method)
       methodTotals.set(key, (methodTotals.get(key) ?? 0) + p.amount)
     }
-    for (const inv of invoices.filter(i => i.status === 'paid')) {
+    // Also count paid invoice amounts by their real payment method
+    for (const inv of invoices.filter(i => i.status === 'paid' && i.paymentMethod !== 'credit')) {
       const key = getPaymentMethodLabel(inv.paymentMethod)
       methodTotals.set(key, (methodTotals.get(key) ?? 0) + inv.amount)
     }
@@ -733,14 +754,14 @@ function OverviewTab({
         </SectionCard>
       )}
 
-      {customer.creditBalance > 0 && (
+      {outstandingCredit > 0 && (
         <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-destructive" />
               <span className="text-sm font-semibold text-foreground">Outstanding Credit</span>
             </div>
-            <span className="text-lg font-bold text-destructive">{formatCurrency(customer.creditBalance)}</span>
+            <span className="text-lg font-bold text-destructive">{formatCurrency(outstandingCredit)}</span>
           </div>
           <p className="text-xs text-muted-foreground">
             {invoices.filter(i => i.status !== 'paid' && i.status !== 'cancelled').length} unpaid invoice(s)
@@ -1032,7 +1053,9 @@ function PaymentsTab({
   payments: CustomerPayment[]
   loading: boolean
 }) {
-  const { displayed, hasMore, showAll, toggle } = usePaginatedDisplay(payments, 15)
+  // Filter out credit — credit is NOT payment
+  const realPayments = useMemo(() => payments.filter(p => p.method !== 'credit'), [payments])
+  const { displayed, hasMore, showAll, toggle } = usePaginatedDisplay(realPayments, 15)
 
   if (loading) {
     return (
@@ -1042,7 +1065,7 @@ function PaymentsTab({
     )
   }
 
-  if (payments.length === 0) {
+  if (realPayments.length === 0) {
     return (
       <EmptyState
         icon="CreditCard"
@@ -1119,12 +1142,12 @@ function PaymentsTab({
 
 function LedgerTab({
   ledger,
-  customer,
   loading,
+  currentBalance,
 }: {
   ledger: LedgerEntry[]
-  customer: Customer
   loading: boolean
+  currentBalance: number
 }) {
   const { displayed, hasMore, showAll, toggle } = usePaginatedDisplay(ledger, 15)
 
@@ -1150,21 +1173,21 @@ function LedgerTab({
     <div className="p-5 pt-3 space-y-4">
       <div className={cn(
         "rounded-xl border p-4",
-        customer.creditBalance > 0
+        currentBalance > 0
           ? "border-destructive/20 bg-destructive/5"
           : "border-success/20 bg-success/5"
       )}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {customer.creditBalance > 0
+            {currentBalance > 0
               ? <AlertTriangle className="h-5 w-5 text-destructive" />
               : <CheckCircle2 className="h-5 w-5 text-success" />
             }
             <div>
               <p className="text-sm font-medium text-foreground">Current Balance</p>
               <p className="text-xs text-muted-foreground">
-                {customer.creditBalance > 0
-                  ? `${formatCurrency(customer.creditBalance)} outstanding`
+                {currentBalance > 0
+                  ? `${formatCurrency(currentBalance)} outstanding`
                   : "Account settled"
                 }
               </p>
@@ -1172,9 +1195,9 @@ function LedgerTab({
           </div>
           <span className={cn(
             "text-xl font-bold",
-            customer.creditBalance > 0 ? "text-destructive" : "text-success"
+            currentBalance > 0 ? "text-destructive" : "text-success"
           )}>
-            {formatCurrency(customer.creditBalance)}
+            {formatCurrency(currentBalance)}
           </span>
         </div>
       </div>
@@ -1291,19 +1314,29 @@ export function CustomerProfile({
   const [activeTab, setActiveTab] = useState("overview")
   const { orders, invoices, payments, ledger, loading, error } = useCustomerProfileData(customer, refreshKey)
 
-  const avgOrderValue = useMemo(() => {
-    if (!customer || customer.totalOrders === 0) return 0
-    return customer.totalSpent / customer.totalOrders
-  }, [customer])
+  // ── Compute KPIs from fetched data (invoices = source of truth) ──
+  const computedStats = useMemo(() => {
+    const totalOrders = orders.length
+    const totalSpent = invoices.reduce((sum, inv) => sum + inv.amount, 0)
+    const outstandingCredit = invoices
+      .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled')
+      .reduce((sum, inv) => sum + inv.remaining, 0)
+    const avgOrderValue = totalOrders > 0 ? totalSpent / totalOrders : 0
+    // Current balance from ledger (last running balance if ledger is reversed)
+    const currentBalance = ledger.length > 0
+      ? ledger[0].runningBalance // ledger is reversed (most recent first)
+      : 0
+    return { totalOrders, totalSpent, outstandingCredit, avgOrderValue, currentBalance }
+  }, [orders, invoices, ledger])
 
   const tabsWithCounts = useMemo(() => tabs.map(t => ({
     ...t,
     count: t.id === "orders" ? orders.length :
            t.id === "invoices" ? invoices.length :
-           t.id === "payments" ? payments.length :
+           t.id === "payments" ? payments.filter(p => p.method !== 'credit').length :
            t.id === "ledger" ? ledger.length :
            undefined,
-  })), [orders.length, invoices.length, payments.length, ledger.length])
+  })), [orders.length, invoices.length, payments, ledger.length])
 
   useEffect(() => {
     setActiveTab("overview")
@@ -1336,7 +1369,14 @@ export function CustomerProfile({
               onRecordPayment={() => onRecordPayment(customer.id)}
             />
 
-            <KpiCards customer={customer} avgOrderValue={avgOrderValue} />
+            <KpiCards
+              totalOrders={computedStats.totalOrders}
+              totalSpent={computedStats.totalSpent}
+              outstandingCredit={computedStats.outstandingCredit}
+              avgOrderValue={computedStats.avgOrderValue}
+              loyaltyPoints={customer.loyaltyPoints}
+              lastVisit={customer.lastVisit}
+            />
 
             {error && (
               <div className="mx-5 mb-3 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-2">
@@ -1366,11 +1406,11 @@ export function CustomerProfile({
               >
                 {activeTab === "overview" && (
                   <OverviewTab
-                    customer={customer}
                     orders={orders}
                     invoices={invoices}
                     payments={payments}
                     loading={loading}
+                    outstandingCredit={computedStats.outstandingCredit}
                   />
                 )}
                 {activeTab === "orders" && (
@@ -1383,7 +1423,7 @@ export function CustomerProfile({
                   <PaymentsTab payments={payments} loading={loading} />
                 )}
                 {activeTab === "ledger" && (
-                  <LedgerTab ledger={ledger} customer={customer} loading={loading} />
+                  <LedgerTab ledger={ledger} loading={loading} currentBalance={computedStats.currentBalance} />
                 )}
               </motion.div>
             </AnimatePresence>

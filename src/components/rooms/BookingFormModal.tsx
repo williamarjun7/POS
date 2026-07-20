@@ -50,6 +50,7 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
   const [checkOut, setCheckOut] = useState(defaultCheckOut);
   const [adults, setAdults] = useState(1);
   const [children, setChildren] = useState(0);
+  const [discount, setDiscount] = useState(0);
   const [idType, setIdType] = useState('citizenship');
   const [idNumber, setIdNumber] = useState('');
   const [paymentMethod, setPaymentMethod] = useState(booking?.paymentMethod ?? 'cash');
@@ -75,7 +76,7 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
   }, [checkIn, checkOut]);
 
   const subtotal = nightlyRate * nights;
-  const total = subtotal;
+  const total = Math.max(0, subtotal - discount);
 
   const roomLabel = room.room_number || room.number;
   const roomTypeLabel = room.room_types?.name || room.type || 'Room';
@@ -129,10 +130,12 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
         checkIn,
         checkOut,
         totalAmount: total,
-        paidAmount: 0,          paymentMethod,
-          specialRequests: notes.trim() || undefined,
-          adults,
-          children,
+        paidAmount: 0,
+        discount,
+        paymentMethod,
+        specialRequests: notes.trim() || undefined,
+        adults,
+        children,
       });
 
       const roomStatus = isBookMode ? 'occupied' : 'reserved';
@@ -326,12 +329,28 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                       leadingIcon={<CalendarRange className="h-4 w-4" />} />
                   </div>
                   <div className="grid grid-cols-2 gap-3 mt-3">
-                    <FormSelect label="Adults" value={String(adults)} onChange={(e) => setAdults(Number(e.target.value))}>
-                      {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
-                    </FormSelect>
-                    <FormSelect label="Children" value={String(children)} onChange={(e) => setChildren(Number(e.target.value))}>
-                      {[0, 1, 2, 3].map(n => <option key={n} value={n}>{n}</option>)}
-                    </FormSelect>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium text-muted-foreground">Adults</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={adults}
+                        onChange={(e) => setAdults(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="block text-xs font-medium text-muted-foreground">Children</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={children}
+                        onChange={(e) => setChildren(Math.max(0, parseInt(e.target.value) || 0))}
+                        className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -348,11 +367,22 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                   </div>
                 </div>
 
-                {/* Payment & Notes */}
+                {/* Discount */}
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
-                    <CreditCard className="h-3 w-3" /> Payment & Notes
+                    <CreditCard className="h-3 w-3" /> Discount & Payment
                   </h4>
+                  <div className="mb-3">
+                    <FormInput
+                      label="Discount Amount (Rs.)"
+                      type="number"
+                      min={0}
+                      max={subtotal}
+                      value={discount || ''}
+                      onChange={(e) => setDiscount(Math.min(subtotal, Math.max(0, parseFloat(e.target.value) || 0)))}
+                      placeholder="0"
+                    />
+                  </div>
                   <div className="space-y-3">
                     <div>
                       <label className="block text-xs font-medium text-muted-foreground mb-1.5">Payment Method</label>
@@ -392,9 +422,21 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                     <span className="text-muted-foreground">Rate</span>
                     <span className="font-medium">{formatCurrency(nightlyRate)} / night</span>
                   </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Total</span>
-                    <span className="font-medium">{formatCurrency(subtotal)}</span>
+                  {discount > 0 && (
+                    <>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Subtotal</span>
+                        <span className="font-medium">{formatCurrency(subtotal)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Discount</span>
+                        <span className="font-medium text-destructive">-{formatCurrency(discount)}</span>
+                      </div>
+                    </>
+                  )}
+                  <div className="flex justify-between text-sm border-t border-border pt-2">
+                    <span className="text-muted-foreground font-medium">Total</span>
+                    <span className="font-semibold text-foreground">{formatCurrency(total)}</span>
                   </div>
                 </div>
               </>

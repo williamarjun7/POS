@@ -73,11 +73,7 @@ export interface CustomerRow {
   phone: string
   email: string
   address: string
-  total_orders: number
-  total_spent: number
   last_visit: string | null
-  loyalty_points: number
-  credit_balance: number
   notes: string | null
   created_at: string
   updated_at: string
@@ -125,6 +121,7 @@ export interface BookingRow {
   status: 'pending' | 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled'
   total_amount: number
   paid_amount: number
+  discount: number
   payment_status: 'pending' | 'partial' | 'paid' | 'refunded'
   payment_method: string | null
   special_requests: string | null

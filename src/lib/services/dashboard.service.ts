@@ -199,13 +199,11 @@ export async function getDashboardReport(
     }
   }
 
-  // ── 4. Credit outstanding ─────────────────────────────────
-  const { data: customers } = await insforge.database
-    .from('customers')
-    .select('credit_balance')
-
-  const customerList = (customers ?? []) as Array<{ credit_balance: number }>
-  const creditOutstanding = customerList.reduce((sum, c) => sum + Number(c.credit_balance), 0)
+  // ── 4. Credit outstanding (computed from invoices — NOT stale credit_balance) ──
+  // Outstanding credit = SUM(invoice.total - real payments) for unpaid invoices.
+  // This is the same calculation as `outstanding` above, computed via invoice-based
+  // single source of truth rather than the stale customers.credit_balance column.
+  const creditOutstanding = outstanding
 
   // ── 5. Average check ──────────────────────────────────────
   const paidInvoices = invoices.filter(inv =>

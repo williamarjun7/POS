@@ -8,8 +8,10 @@ import { formatCurrency, formatTimeAgo, cn } from "@/lib/utils"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { logActivitySafe } from "@/lib/services/activity-log-service"
 import { BookingFormModal } from "@/components/rooms/BookingFormModal"
+import { useBookings } from "@/lib/services/booking-service"
 import { useOperationsData } from "../lib/hooks/useOperationsData"
 import type { Room, RoomStatus, HousekeepingTask, MaintenanceRequest } from "@/types"
+import type { Booking } from "@/lib/services/booking-service"
 import {
   useCreateRoom,
   useUpdateRoom,
@@ -35,6 +37,7 @@ import { RequirePermission } from "@/lib/core/PermissionGuards"
 import { SummaryDashboard } from "@/components/operations/SummaryDashboard"
 import type { RoomStats, TableStats, TabId } from "@/components/operations/SummaryDashboard"
 import { RoomCard } from "@/components/operations/RoomCard"
+import { RoomCheckoutDialog } from "@/components/operations/RoomCheckoutDialog"
 import { TableCard } from "@/components/operations/TableCard"
 import {
   RoomFormModal, TableFormModal, MaintenanceFormModal, HousekeepingAssignModal,
@@ -203,6 +206,9 @@ function RoomsView({
   const [editingRoom, setEditingRoom] = useState<Room | null>(null)
   const [deletingRoom, setDeletingRoom] = useState<Room | null>(null)
   const [bookingRoom, setBookingRoom] = useState<Room | null>(null)
+  const [checkoutRoom, setCheckoutRoom] = useState<Room | null>(null)
+  const [checkoutBooking, setCheckoutBooking] = useState<Booking | null>(null)
+  const [releaseConfirmRoom, setReleaseConfirmRoom] = useState<Room | null>(null)
   const [showHKForm, setShowHKForm] = useState(false)
   const [showMTForm, setShowMTForm] = useState(false)
   const [,setMtFormRoom] = useState<Room | null>(null)
@@ -210,10 +216,13 @@ function RoomsView({
   const createRoom = useCreateRoom()
   const updateRoom = useUpdateRoom()
   const deleteRoom = useDeleteRoom()
+  const queryClient = useQueryClient()
   const updateRoomStatus = useUpdateRoomStatus()
   const createMT = useCreateMaintenanceRequest()
   const isSavingRoom = createRoom.isPending || updateRoom.isPending
   const floors = useMemo(() => [...new Set(rooms.map(r => r.floor))].sort(), [rooms])
+
+  const { activeBookings, cancelBooking } = useBookings()
 
   const hkByRoom = useMemo(() => {
     const map = new Map<string, HousekeepingTask>()
@@ -264,15 +273,44 @@ function RoomsView({
     return result
   }, [rooms, searchQuery, statusFilter, floorFilter, hkFilter, mtFilter, sortBy, hkByRoom, mtByRoom])
 
+  const navigate2 = useNavigate()
+
   const handleRoomAction = useCallback(async (room: Room, action: string) => {
     switch (action) {
+      case "reserve":
       case "checkin":
         setBookingRoom(room); break
       case "checkout":
+        // Find the booking for this room to show in checkout dialog
+        const checkoutRoomBooking = activeBookings.find(b => b.roomId === room.id)
+        setCheckoutBooking(checkoutRoomBooking ?? null)
+        setCheckoutRoom(room)
+        break
+      case "openpos":
+        navigate2(`/pos?room=${room.id}`)
+        break
+      case "cancelreservation":
+        try {
+          // Cancel the actual booking record — this also frees the room
+          const roomBooking = activeBookings.find(b => b.roomId === room.id)
+          if (roomBooking) {
+            await cancelBooking(roomBooking.id)
+          } else {
+            // No booking record found — free the room directly
+            await updateRoomStatus.mutateAsync({ id: room.id, status: "vacant" })
+          }
+          logActivitySafe({ activityType: "booking_cancelled", entityId: room.id, entityLabel: `Room ${room.room_number || room.number}`, status: "vacant" })
+          showSuccess(`Reservation for Room ${room.room_number || room.number} cancelled`)
+        } catch (err) { showError((err as Error)?.message || "Failed to cancel reservation") }
+        break
+      case "release":
+        setReleaseConfirmRoom(room)
+        break
+      case "markclean":
         try {
           await updateRoomStatus.mutateAsync({ id: room.id, status: "vacant" })
-          showSuccess(`Room ${room.room_number || room.number} checked out`)
-        } catch (err) { showError((err as Error)?.message || "Failed to check out") }
+          showSuccess(`Room ${room.room_number || room.number} marked clean`)
+        } catch (err) { showError((err as Error)?.message || "Failed to update") }
         break
       case "edit":
         setEditingRoom(room); setShowRoomForm(true); break
@@ -286,12 +324,8 @@ function RoomsView({
           showSuccess(`Room ${room.room_number || room.number} marked as cleaning`)
         } catch (err) { showError((err as Error)?.message || "Failed to update") }
         break
-      case "markclean":
-        try {
-          await updateRoomStatus.mutateAsync({ id: room.id, status: "vacant" })
-          showSuccess(`Room ${room.room_number || room.number} marked clean`)
-        } catch (err) { showError((err as Error)?.message || "Failed to update") }
-        break
+      case "details":
+        showSuccess(`Room ${room.room_number || room.number} — ${room.type || ''}`); break
       case "toggle":
         const newStatus: RoomStatus = room.status === "out_of_order" ? "vacant" : "out_of_order"
         try {
@@ -302,9 +336,11 @@ function RoomsView({
         break
       case "bookings":
       case "history":
-        showSuccess("History view coming soon"); break
+      case "editbooking":
+      case "extend":
+        showSuccess(`${action.replace(/_/g, " ")} feature coming soon`); break
     }
-  }, [updateRoomStatus])
+  }, [updateRoomStatus, logActivitySafe, navigate2, activeBookings, cancelBooking])
 
   const handleSaveRoom = useCallback(async (data: Omit<Room, "id"> & { id?: string }) => {
     try {
@@ -328,6 +364,16 @@ function RoomsView({
       setDeletingRoom(null)
     } catch (err) { showError((err as Error)?.message || "Failed to delete room") }
   }, [deletingRoom, deleteRoom])
+
+  const handleReleaseRoom = useCallback(async () => {
+    if (!releaseConfirmRoom) return
+    try {
+      await updateRoomStatus.mutateAsync({ id: releaseConfirmRoom.id, status: "vacant" })
+      logActivitySafe({ activityType: "room_released", entityId: releaseConfirmRoom.id, entityLabel: `Room ${releaseConfirmRoom.room_number || releaseConfirmRoom.number}`, status: "vacant" })
+      showSuccess(`Room ${releaseConfirmRoom.room_number || releaseConfirmRoom.number} released to available`)
+      setReleaseConfirmRoom(null)
+    } catch (err) { showError((err as Error)?.message || "Failed to release room") }
+  }, [releaseConfirmRoom, updateRoomStatus])
 
   const handleCreateMT = useCallback(async (data: { room_number: string; description: string; priority: string }) => {
     try {
@@ -468,11 +514,64 @@ function RoomsView({
       {/* Modals */}
       <RoomFormModal open={showRoomForm} room={editingRoom} roomTypeOptions={roomTypeOptions} onSave={handleSaveRoom} onClose={() => { setShowRoomForm(false); setEditingRoom(null) }} isSubmitting={isSavingRoom} existingRooms={rooms.map(r => ({ id: r.id, number: r.number || r.room_number || '' }))} />
       {bookingRoom && <BookingFormModal room={bookingRoom} onClose={() => setBookingRoom(null)} />}
+      {checkoutRoom && (
+        <RoomCheckoutDialog
+          room={checkoutRoom}
+          booking={checkoutBooking}
+          onClose={() => { setCheckoutRoom(null); setCheckoutBooking(null) }}
+          onComplete={() => {
+            invalidateOperationsData(queryClient)
+            setCheckoutRoom(null)
+            setCheckoutBooking(null)
+          }}
+        />
+      )}
       <HousekeepingAssignModal open={showHKForm} rooms={rooms} onSave={async (data) => {
         showSuccess(`Housekeeping assigned to ${data.assigned_to} for Room ${data.room_number}`)
       }} onClose={() => setShowHKForm(false)} />
       <MaintenanceFormModal open={showMTForm} onSave={handleCreateMT} onClose={() => { setShowMTForm(false); setMtFormRoom(null) }} />
       <ConfirmDialog open={!!deletingRoom} title="Delete Room" message={`Delete Room ${deletingRoom?.room_number || deletingRoom?.number}?`} confirmLabel="Delete" variant="danger" onConfirm={handleDeleteRoom} onCancel={() => setDeletingRoom(null)} />
+      {/* Release confirmation — separate warning box + dialog because ConfirmDialog.message only accepts a string */}
+      {releaseConfirmRoom && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={() => setReleaseConfirmRoom(null)}>
+          <div className="w-full max-w-sm rounded-2xl border bg-card shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 space-y-4">
+              <div>
+                <h3 className="text-base font-semibold text-foreground">Release Room — Are you sure?</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  This will release <strong>Room {releaseConfirmRoom.room_number || releaseConfirmRoom.number}</strong>
+                  {releaseConfirmRoom.guest && <> ({releaseConfirmRoom.guest})</>} to <strong>Available</strong>.
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 p-3.5">
+                <p className="text-xs font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider mb-1.5">
+                  ⚠️ Warning
+                </p>
+                <p className="text-xs text-amber-700 dark:text-amber-400/90 leading-relaxed">
+                  This bypasses the normal checkout flow. The guest's outstanding charges will <strong>not</strong> be
+                  settled, no invoice will be generated, and no payment will be collected. Use the{' '}
+                  <strong>Checkout</strong> button for proper billing.
+                </p>
+              </div>
+
+              <p className="text-xs text-muted-foreground/60">This action cannot be undone.</p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button onClick={() => setReleaseConfirmRoom(null)}
+                  className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-all">
+                  Cancel
+                </button>
+                <button onClick={handleReleaseRoom}
+                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition-all shadow-sm active:scale-95">
+                  Yes, Release Room
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   )
 

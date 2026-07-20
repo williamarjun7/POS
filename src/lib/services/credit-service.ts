@@ -1,13 +1,14 @@
 /**
- * Credit Service — Automatic Credit Creation for Partial Payments
+ * Credit Service — Automatic Customer Linking for Partial Payments
  * ────────────────────────────────────────────────────────────────
  *
  * When a customer pays less than the invoice total, the ENTIRE remaining
- * amount MUST automatically become customer credit. This service handles
- * that conversion.
+ * amount is tracked as outstanding on the invoice (status = 'credit_invoice').
+ * This service links the customer to the invoice so the customer profile
+ * can display the outstanding balance.
  *
- * This wraps the lower-level recordCreditCharge from customer-ledger.ts
- * with additional validation, idempotency checks, and cache invalidation.
+ * NOTE: This service no longer creates payment records or mutable counters.
+ * Invoices are the single source of truth for outstanding credit.
  */
 
 import { recordCreditCharge } from '@/lib/services/customer-ledger'
@@ -37,19 +38,19 @@ export interface CreditCreationInput {
 // ─── Auto-Credit Creation ────────────────────────────────────
 
 /**
- * Automatically create a credit payment record when a partial payment is processed.
+ * Link a customer to an invoice when a partial payment is processed.
  *
  * This is called AFTER the primary payment record has been created.
- * It creates an ADDITIONAL payment record with method 'credit' for the
- * remaining amount and updates the customer's credit balance.
+ * It ensures the customer record exists and backfills customer_id on
+ * the invoice so the outstanding balance appears in the customer profile.
  *
- * The operation is designed to be idempotent — calling it twice with the
- * same invoiceNumber and customerName will skip if a credit record already exists.
+ * The operation is idempotent — calling it twice with the same invoiceId
+ * is safe since it just re-links the customer.
  */
 export async function createAutoCredit(
   input: CreditCreationInput,
 ): Promise<AutoCreditResult> {
-  const { customerName, creditAmount, invoiceNumber, invoiceId, paymentMethod } = input
+  const { customerName, creditAmount, invoiceId } = input
 
   if (creditAmount <= 0) {
     return { success: false, error: 'Credit amount must be greater than zero.' }
@@ -60,25 +61,26 @@ export async function createAutoCredit(
   }
 
   try {
-    // Check idempotency — has this credit already been recorded for this invoice?
-    const { data: existingCredit } = await insforge.database
-      .from('payments')
-      .select('id')
-      .eq('reference', invoiceNumber)
-      .eq('payment_method', 'credit')
-      .maybeSingle()
+    // Check idempotency — has this invoice already been linked to a customer?
+    if (invoiceId) {
+      const { data: existingInvoice } = await insforge.database
+        .from('invoices')
+        .select('customer_id')
+        .eq('id', invoiceId)
+        .maybeSingle()
 
-    if (existingCredit) {
-      // Already recorded — idempotent skip
-      return { success: true, creditAmount, customerName, invoiceId }
+      if (existingInvoice?.customer_id) {
+        // Already linked — idempotent skip
+        return { success: true, creditAmount, customerName, invoiceId }
+      }
     }
 
-    // Record the credit charge (creates payment record + updates customer balance)
+    // Link customer to invoice (ensures customer exists + backfills customer_id)
     await recordCreditCharge(
       customerName.trim(),
       creditAmount,
-      invoiceNumber,
-      `Auto-credit from partial payment via ${paymentMethod}`,
+      input.invoiceNumber,
+      `Auto-credit from partial payment via ${input.paymentMethod}`,
       invoiceId,
     )
 

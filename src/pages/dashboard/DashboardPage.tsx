@@ -318,6 +318,22 @@ export default function DashboardPage() {
           showError((err as Error)?.message || 'Failed to update room');
         }
         break;
+      case 'sendtocleaning':
+        try {
+          await updateStatus.mutateAsync({ id: room.id, status: 'cleaning' });
+          showSuccess(`Room ${room.room_number || room.number} sent to housekeeping`);
+        } catch (err) {
+          showError((err as Error)?.message || 'Failed to update room');
+        }
+        break;
+      case 'sendtomaintenance':
+        try {
+          await updateStatus.mutateAsync({ id: room.id, status: 'maintenance' });
+          showSuccess(`Room ${room.room_number || room.number} sent to maintenance`);
+        } catch (err) {
+          showError((err as Error)?.message || 'Failed to update room');
+        }
+        break;
     }
   }, [updateStatus, navigate]);
 
@@ -556,7 +572,7 @@ export default function DashboardPage() {
               {activeSection === 'rooms' && (
                 <>
                   {roomViewMode === 'grid' ? (
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                       {roomsLoading ? (
                         <div className="flex items-center justify-center py-12">
                           <div className="h-6 w-6 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
@@ -572,19 +588,45 @@ export default function DashboardPage() {
                           <p className="text-xs mt-1">Try adjusting your filters</p>
                         </motion.div>
                       ) : (
-                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3">
-                          {filteredRooms.map((room: Room) => {
-                            const roomBooking = getRoomBooking(room.id)
-                            return (
-                              <DashboardRoomTile
-                                key={room.id}
-                                room={room}
-                                booking={roomBooking}
-                                onAction={handleRoomAction}
-                              />
-                            )
-                          })}
-                        </div>
+                        <>
+                          {/* Room status summary bar */}
+                          <div className="flex items-center gap-3 text-[11px] font-medium text-muted-foreground flex-wrap">
+                            {(() => {
+                              const counts = {
+                                available: filteredRooms.filter(r => r.status === 'available' || r.status === 'vacant').length,
+                                occupied: filteredRooms.filter(r => r.status === 'occupied').length,
+                                reserved: filteredRooms.filter(r => r.status === 'reserved').length,
+                                cleaning: filteredRooms.filter(r => r.status === 'cleaning' || r.status === 'dirty').length,
+                                maintenance: filteredRooms.filter(r => r.status === 'maintenance' || r.status === 'out_of_order').length,
+                              }
+                              return (
+                                <>
+                                  <span className="tabular-nums">{filteredRooms.length} rooms</span>
+                                  <span className="text-border">·</span>
+                                  {counts.available > 0 && <span className="text-emerald-600 dark:text-emerald-400">{counts.available} available</span>}
+                                  {counts.occupied > 0 && <span className="text-violet-600 dark:text-violet-400">{counts.occupied} occupied</span>}
+                                  {counts.reserved > 0 && <span className="text-amber-600 dark:text-amber-400">{counts.reserved} reserved</span>}
+                                  {counts.cleaning > 0 && <span className="text-sky-600 dark:text-sky-400">{counts.cleaning} cleaning</span>}
+                                  {counts.maintenance > 0 && <span className="text-orange-600 dark:text-orange-400">{counts.maintenance} maintenance</span>}
+                                </>
+                              )
+                            })()}
+                          </div>
+                          {/* Room grid */}
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                            {filteredRooms.map((room: Room) => {
+                              const roomBooking = getRoomBooking(room.id)
+                              return (
+                                <DashboardRoomTile
+                                  key={room.id}
+                                  room={room}
+                                  booking={roomBooking}
+                                  onAction={handleRoomAction}
+                                />
+                              )
+                            })}
+                          </div>
+                        </>
                       )}
                     </div>
                   ) : (

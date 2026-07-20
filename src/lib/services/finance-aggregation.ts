@@ -62,7 +62,7 @@ export interface FinancialSummary {
   overdueCount: number
   /** Total invoice count */
   totalInvoices: number
-  /** Customer credit outstanding balance (from customers table) */
+  /** Customer credit outstanding balance (computed from invoices minus real payments) */
   creditOutstanding: number
   /** Today's revenue (payments) */
   collectedToday: number
@@ -210,13 +210,10 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
   const totalExpenses = ((expensesData ?? []) as Array<{ amount: number }>)
     .reduce((sum, e) => sum + Number(e.amount), 0)
 
-  // 4. Customer credit outstanding
-  const { data: customersData } = await insforge.database
-    .from('customers')
-    .select('credit_balance')
-
-  const creditOutstanding = ((customersData ?? []) as Array<{ credit_balance: number }>)
-    .reduce((sum, c) => sum + Number(c.credit_balance), 0)
+  // 4. Customer credit outstanding (computed from invoices, NOT stale credit_balance)
+  // Outstanding credit = SUM(invoice.total - real payments) for unpaid invoices.
+  // Reuses the outstandingReceivables value computed above from invoices.
+  const creditOutstanding = outstandingReceivables
 
   // 5. Today's collected (REAL MONEY only — credit is NOT payment)
   const { data: todayPayments } = await insforge.database
@@ -346,12 +343,9 @@ async function fetchFinancialSummaryForRange(
     }
   }
 
-  // Customer credit outstanding
-  const { data: custData } = await insforge.database
-    .from('customers')
-    .select('credit_balance')
-  const creditOutstanding = ((custData ?? []) as Array<{ credit_balance: number }>)
-    .reduce((s, c) => s + Number(c.credit_balance), 0)
+  // Customer credit outstanding (computed from invoices, NOT stale credit_balance)
+  // Reuses the outstandingReceivables value computed above from invoices.
+  const creditOutstanding = outstandingReceivables
 
   // Today's REAL payments collected (credit is NOT payment)
   const { data: todayPays } = await insforge.database

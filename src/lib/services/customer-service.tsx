@@ -25,12 +25,16 @@ export interface Customer {
   phone: string
   email: string
   address?: string
-  totalOrders: number
-  totalSpent: number
   lastVisit: string
-  loyaltyPoints: number
-  creditBalance: number
   notes?: string
+  /** @deprecated Stored counter — not maintained. Use invoice-based computation. */
+  totalOrders: number
+  /** @deprecated Stored counter — not maintained. Use invoice-based computation. */
+  totalSpent: number
+  /** @deprecated Always 0 — loyalty points are not implemented. */
+  loyaltyPoints: number
+  /** @deprecated Stored counter — not maintained. Use invoice-based computation. */
+  creditBalance: number
 }
 
 /* ─── React Query Keys ──────────────────────────────────── */
@@ -55,12 +59,13 @@ function rowToCustomer(row: CustomerRow): Customer {
     phone: row.phone,
     email: row.email,
     address: row.address || undefined,
-    totalOrders: row.total_orders,
-    totalSpent: row.total_spent,
     lastVisit: row.last_visit ?? new Date().toISOString(),
-    loyaltyPoints: row.loyalty_points,
-    creditBalance: row.credit_balance,
     notes: row.notes ?? undefined,
+    // These fields are no longer stored in DB — default to 0 for backward compat
+    totalOrders: 0,
+    totalSpent: 0,
+    loyaltyPoints: 0,
+    creditBalance: 0,
   }
 }
 
@@ -70,11 +75,7 @@ function customerToRow(data: Omit<Customer, 'id'>): Record<string, unknown> {
     phone: data.phone,
     email: data.email,
     address: data.address ?? '',
-    total_orders: data.totalOrders,
-    total_spent: data.totalSpent,
     last_visit: data.lastVisit,
-    loyalty_points: data.loyaltyPoints,
-    credit_balance: data.creditBalance,
     notes: data.notes ?? null,
   }
 }
@@ -108,12 +109,10 @@ async function updateCustomerInDb(id: string, data: Partial<Omit<Customer, 'id'>
   if (data.phone !== undefined) payload.phone = data.phone
   if (data.email !== undefined) payload.email = data.email
   if (data.address !== undefined) payload.address = data.address
-  if (data.totalOrders !== undefined) payload.total_orders = data.totalOrders
-  if (data.totalSpent !== undefined) payload.total_spent = data.totalSpent
   if (data.lastVisit !== undefined) payload.last_visit = data.lastVisit
-  if (data.loyaltyPoints !== undefined) payload.loyalty_points = data.loyaltyPoints
-  if (data.creditBalance !== undefined) payload.credit_balance = data.creditBalance
   if (data.notes !== undefined) payload.notes = data.notes ?? null
+  // NOTE: totalOrders, totalSpent, loyaltyPoints, creditBalance are dead columns
+  // and are no longer sent to the database.
 
   const { data: updated, error } = await insforge.database
     .from('customers')

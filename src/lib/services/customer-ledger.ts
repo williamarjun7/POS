@@ -12,8 +12,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { db } from '@/lib/db/insforge'
-import type { CustomerRow, PaymentRow } from '@/lib/db/types'
-import { customerLedgerSchemas, validateOrThrow } from '@/lib/validation'
+import type { CustomerRow, InvoiceRow, PaymentRow } from '@/lib/db/types'
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -54,17 +53,13 @@ async function ensureCustomer(name: string): Promise<CustomerRow> {
 
   if (existing) return existing
 
-  // Create a new customer record
+  // Create a new customer record (dead columns removed — all computed from invoices)
   const { data: created, error } = await db.insertOne<CustomerRow>('customers', {
     name,
     phone: '',
     email: '',
     address: '',
-    total_orders: 0,
-    total_spent: 0,
     last_visit: new Date().toISOString(),
-    loyalty_points: 0,
-    credit_balance: 0,
     notes: null,
   })
 
@@ -73,17 +68,20 @@ async function ensureCustomer(name: string): Promise<CustomerRow> {
 }
 
 /**
- * Update customer spending after an invoice is created.
+ * Link a customer to an invoice after the invoice is created.
  *
  * Called from POS checkout flow AFTER the invoice is successfully created.
- * Increments total_spent (by invoice total), total_orders, and last_visit.
- * Backfills customer_id on the invoice so the FK relationship is intact.
+ * Ensures the customer record exists, updates last_visit, and backfills
+ * customer_id on the invoice.
+ *
+ * NOTE: total_spent and total_orders are NOT stored on the customers table
+ * anymore — they are calculated dynamically from invoices in the UI.
  *
  * @returns The customer's database ID, or null if no real customer name.
  */
 export async function updateCustomerAfterInvoice(
   customerName: string,
-  invoiceTotal: number,
+  _invoiceTotal: number,
   invoiceId?: string,
 ): Promise<string | null> {
   // Skip anonymous/Walk-in — no customer record to update
@@ -93,19 +91,17 @@ export async function updateCustomerAfterInvoice(
 
   const customer = await ensureCustomer(customerName.trim())
 
-  // Update the customer's totals
+  // Update the customer's last_visit only
   const { error: updateError } = await db.update(
     'customers',
     {
-      total_spent: (customer.total_spent ?? 0) + invoiceTotal,
-      total_orders: (customer.total_orders ?? 0) + 1,
       last_visit: new Date().toISOString(),
     },
     { id: customer.id },
   )
 
   if (updateError) {
-    console.error('Failed to update customer spending:', updateError)
+    console.error('Failed to update customer last_visit:', updateError)
     // Non-fatal — the invoice and payments are already committed
   }
 
@@ -125,184 +121,193 @@ export async function updateCustomerAfterInvoice(
 }
 
 /**
- * Record a credit charge (customer buys on credit).
- * Inserts a payment record and increases the customer's credit_balance.
+ * Link a customer to a credit invoice.
+ *
+ * Called when a customer buys on credit (no real money exchanged).
+ * Ensures the customer record exists, backfills customer_id on the invoice,
+ * and updates last_visit.
+ *
+ * NOTE: This function NO LONGER creates payment records or mutates
+ * credit_balance on the customers table. Invoices are the single source
+ * of truth for outstanding credit — calculated as SUM(total - paid) across
+ * non-cancelled invoices for the customer.
  */
 export async function recordCreditCharge(
   customerName: string,
-  amount: number,
-  invoiceNumber?: string,
-  description?: string,
+  _amount: number,
+  _invoiceNumber?: string,
+  _description?: string,
   invoiceId?: string,
 ): Promise<void> {
-  // Validate input via Zod (amount must be >= 0.01 by schema)
-  const safe = validateOrThrow(customerLedgerSchemas.creditCharge, {
-    customerName,
-    amount,
-    invoiceNumber: invoiceNumber ?? '',
-    description: description ?? '',
-    invoiceId: invoiceId ?? '',
-  })
-
-  const customer = await ensureCustomer(safe.customerName)
-
-  // Insert a single payment record with method 'credit' linked to both customer and invoice
-  const { error: payError } = await db.insertOne('payments', {
-    customer_id: customer.id,
-    invoice_id: safe.invoiceId || null,
-    amount: safe.amount,
-    payment_method: 'credit',
-    reference: safe.invoiceNumber || null,
-    notes: safe.description || `Credit charge — Invoice ${safe.invoiceNumber || 'N/A'}`,
-  })
-
-  if (payError) {
-    console.error('Failed to record credit payment:', payError)
-    throw payError
+  if (!customerName || !customerName.trim()) {
+    throw new Error('Customer name is required for credit transactions.')
   }
+
+  const customer = await ensureCustomer(customerName.trim())
 
   // Backfill the invoice's customer_id so the FK relationship is intact.
   // The invoice was created before the customer existed, so customer_id was NULL.
-  if (safe.invoiceId) {
+  if (invoiceId) {
     const { error: invUpdateError } = await db.update(
       'invoices',
       { customer_id: customer.id },
-      { id: safe.invoiceId },
+      { id: invoiceId },
     )
     if (invUpdateError) {
       console.error('Failed to backfill invoice customer_id:', invUpdateError)
-      // Non-fatal — the invoice is already committed; the payment is linked
+      // Non-fatal — the invoice is already committed
     }
   }
 
-  // Update the customer's credit balance
-  // IMPORTANT: credit_balance increases (customer now owes more)
-  //            total_spent and total_orders are handled by updateCustomerAfterInvoice
-  //            (called from POS.tsx after invoice creation)
-  const newBalance = (customer.credit_balance ?? 0) + safe.amount
+  // Update last_visit on the customer record
   const { error: updateError } = await db.update(
     'customers',
     {
-      credit_balance: newBalance,
       last_visit: new Date().toISOString(),
     },
     { id: customer.id },
   )
 
   if (updateError) {
-    console.error('Failed to update customer credit balance:', updateError)
-    throw updateError
+    console.error('Failed to update customer last_visit:', updateError)
   }
 }
 
 /**
- * Record a credit payment (customer pays down their balance).
- * Inserts a payment record and decreases the customer's credit_balance.
- */
-export async function recordCreditPayment(
-  customerName: string,
-  amount: number,
-  description?: string,
-): Promise<void> {
-  // Validate input via Zod (amount must be >= 0.01 by schema)
-  const safe = validateOrThrow(customerLedgerSchemas.creditPayment, {
-    customerName,
-    amount,
-    description: description ?? '',
-  })
-
-  const customer = await ensureCustomer(safe.customerName)
-  const currentBalance = customer.credit_balance ?? 0
-  if (currentBalance <= 0) return
-
-  const actualPayment = Math.min(safe.amount, currentBalance)
-  if (actualPayment <= 0) return
-
-  // Insert a payment record
-  const { error: payError } = await db.insertOne('payments', {
-    customer_id: customer.id,
-    amount: actualPayment,
-    payment_method: 'credit',
-    notes: safe.description || `Credit payment of Rs. ${actualPayment.toFixed(2)}`,
-  })
-
-  if (payError) {
-    console.error('Failed to record credit payment:', payError)
-    throw payError
-  }
-
-  // Update the customer's credit balance
-  const { error: updateError } = await db.update(
-    'customers',
-    { credit_balance: currentBalance - actualPayment },
-    { id: customer.id },
-  )
-
-  if (updateError) {
-    console.error('Failed to update customer credit balance:', updateError)
-    throw updateError
-  }
-}
-
-/**
- * Get a customer's current outstanding balance from the DB.
+ * Get a customer's current outstanding balance from invoices and real payments.
+ *
+ * Calculates: SUM(non-cancelled invoice totals) - SUM(real payments for those invoices)
+ * This is the single source of truth — NOT a stored counter on the customers table.
  */
 export async function getCustomerBalance(customerName: string): Promise<number> {
-  const { data } = await db.findOne<CustomerRow>('customers', { name: customerName })
-  return data?.credit_balance ?? 0
+  const { data: customer } = await db.findOne<CustomerRow>('customers', { name: customerName })
+  if (!customer) return 0
+
+  // Get all invoices for this customer
+  const { data: invoices } = await db.findMany<InvoiceRow>('invoices', {
+    customer_id: customer.id,
+  })
+  if (!invoices || invoices.length === 0) return 0
+
+  // Filter to outstanding invoices (not fully paid, not cancelled)
+  const outstandingInvoices = invoices.filter(
+    inv => inv.status !== 'paid' && inv.status !== 'cancelled'
+  )
+  if (outstandingInvoices.length === 0) return 0
+
+  // Get all payments for this customer and calculate real money received per invoice
+  const { data: allPayments } = await db.findMany<PaymentRow>('payments', {
+    customer_id: customer.id,
+  })
+  const realPayments = (allPayments ?? []).filter(p => p.payment_method !== 'credit')
+
+  const paidByInvoice = new Map<string, number>()
+  for (const p of realPayments) {
+    if (p.invoice_id) {
+      paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount))
+    }
+  }
+
+  // Outstanding = invoice total - real payments received
+  return outstandingInvoices.reduce((sum, inv) => {
+    const paid = paidByInvoice.get(inv.id) ?? 0
+    return sum + Math.max(0, Number(inv.total) - paid)
+  }, 0)
 }
 
 /**
- * Get a customer's full ledger (payment history + current balance).
+ * Get a customer's full ledger (invoices + payments) from the database.
+ *
+ * Single source of truth: invoices are debits, real payments are credits.
+ * Current balance = SUM(invoice totals) - SUM(real payments) for non-cancelled invoices.
  */
 export async function getCustomerLedger(
   customerName: string,
 ): Promise<CustomerLedger | null> {
-  const { data: customer } = await db.findOne<CustomerRow>('customers', {
+  const customerResult = await db.findOne<CustomerRow>('customers', {
     name: customerName,
   })
-  if (!customer) return null
+  if (!customerResult?.data) return null
+  const customer = customerResult.data
 
-  // Fetch all payments for this customer
-  const { data: payments } = await db.findMany<PaymentRow>('payments', {
-    customer_id: customer.id,
-  })
+  // Fetch invoices and payments in parallel
+  const [invoicesResult, paymentsResult] = await Promise.all([
+    db.findMany<InvoiceRow>('invoices', { customer_id: customer.id }),
+    db.findMany<PaymentRow>('payments', { customer_id: customer.id }),
+  ])
 
-  const entries: LedgerEntry[] = (payments ?? [])
-    .filter((p) => p.payment_method === 'credit')
-    .map((p) => ({
-      id: p.id,
-      date: p.created_at,
-      // NOTE: All credit entries in the payments table with method='credit'
-      // are CHARGES (customer owes money). Payments (customer pays down)
-      // are also stored with method='credit' and can be differentiated by
-      // amount sign or notes — for now, the credit_balance tells the real story.
+  const invoices = (invoicesResult?.data ?? []) as InvoiceRow[]
+  const payments = (paymentsResult?.data ?? []) as PaymentRow[]
+
+  // Build chronological entries: invoices = debits, real payments = credits
+  const entries: LedgerEntry[] = []
+
+  // Invoice creation = debit (customer owes money)
+  for (const inv of invoices) {
+    entries.push({
+      id: `inv-${inv.id}`,
+      date: inv.created_at,
       type: 'charge' as LedgerEntryType,
-      amount: p.amount,
-      invoiceNumber: p.reference ?? undefined,
-      description: p.notes?.startsWith('Credit payment')
-        ? p.notes  // Customer paying down balance
-        : p.notes?.startsWith('Credit charge')
-          ? p.notes
-          : p.notes?.startsWith('Auto-credit')
-            ? p.notes
-            : `Credit created — ${p.reference ? `Invoice ${p.reference}` : 'Outstanding charge'}`,
-    }))
-    .sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-    )
+      amount: Number(inv.total),
+      invoiceNumber: inv.invoice_number,
+      description: inv.status === 'cancelled'
+        ? `Invoice ${inv.invoice_number} (Cancelled)`
+        : `Invoice ${inv.invoice_number} — ${inv.status === 'paid' ? 'Paid' : inv.status === 'credit_invoice' ? 'Credit Sale' : inv.status}`,
+    })
+  }
+
+  // Real payment = credit (customer pays money down)
+  for (const p of payments) {
+    if (p.payment_method === 'credit') continue // Old-style credit entries are ignored
+
+    const inv = invoices.find(i => i.id === p.invoice_id)
+    entries.push({
+      id: `pay-${p.id}`,
+      date: p.created_at,
+      type: 'payment' as LedgerEntryType,
+      amount: Number(p.amount),
+      invoiceNumber: inv?.invoice_number ?? p.reference ?? undefined,
+      description: p.notes ?? `Payment via ${p.payment_method}`,
+    })
+  }
+
+  // Sort chronologically (oldest first for running balance calculation)
+  entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+  // Calculate current balance from invoices minus real payments
+  // Only count non-cancelled invoices
+  let balance = 0
+  for (const inv of invoices) {
+    if (inv.status !== 'cancelled') {
+      balance += Number(inv.total)
+    }
+  }
+  // Subtract real payments linked to non-cancelled invoices
+  for (const p of payments) {
+    if (p.payment_method !== 'credit' && p.invoice_id) {
+      const inv = invoices.find(i => i.id === p.invoice_id)
+      if (inv && inv.status !== 'cancelled') {
+        balance -= Number(p.amount)
+      }
+    }
+  }
+
+  // Reverse for most-recent-first display
+  entries.reverse()
 
   return {
     customerName: customer.name,
     entries,
-    currentBalance: customer.credit_balance ?? 0,
+    currentBalance: Math.max(0, balance),
   }
 }
 
 /**
  * Get all known customer ledgers (for admin overview).
  *
- * Optimized: fetches customers and their payments in batch queries
+ * Single source of truth: invoices are debits, real payments are credits.
+ * 
+ * Optimized: fetches customers, invoices, and payments in batch queries
  * instead of N+1 individual queries.
  */
 export async function getAllLedgers(): Promise<CustomerLedger[]> {
@@ -310,47 +315,101 @@ export async function getAllLedgers(): Promise<CustomerLedger[]> {
 
   if (!customers || customers.length === 0) return []
 
-  // Filter to customers with activity
-  const activeCustomers = customers.filter(
-    (c) => (c.credit_balance ?? 0) > 0 || c.total_orders > 0
-  )
+  const customerIds = customers.map((c) => c.id)
 
-  if (activeCustomers.length === 0) return []
+  // Batch-fetch all invoices and payments for all customers
+  const [invoicesResult, paymentsResult] = await Promise.all([
+    db.findMany<InvoiceRow>('invoices'),
+    db.findMany<PaymentRow>('payments'),
+  ])
 
-  // Batch-fetch all payments for active customers in one query
-  const customerIds = activeCustomers.map((c) => c.id)
-  const { data: allPayments } = await db.findMany<PaymentRow>('payments')
+  const allInvoices = (invoicesResult.data ?? []) as InvoiceRow[]
+  const allPayments = (paymentsResult.data ?? []) as PaymentRow[]
+
+  // Group invoices and real payments by customer
+  const invoicesByCustomer = new Map<string, InvoiceRow[]>()
+  for (const inv of allInvoices) {
+    if (inv.customer_id) {
+      const existing = invoicesByCustomer.get(inv.customer_id) ?? []
+      existing.push(inv)
+      invoicesByCustomer.set(inv.customer_id, existing)
+    }
+  }
 
   const paymentsByCustomer = new Map<string, PaymentRow[]>()
-  for (const payment of allPayments ?? []) {
-    if (payment.customer_id && customerIds.includes(payment.customer_id)) {
+  for (const payment of allPayments) {
+    if (payment.customer_id) {
       const existing = paymentsByCustomer.get(payment.customer_id) ?? []
       existing.push(payment)
       paymentsByCustomer.set(payment.customer_id, existing)
     }
   }
 
-  // Build ledgers from the batch data
-  const ledgers: CustomerLedger[] = activeCustomers.map((customer) => {
+  // Build ledgers for customers with activity
+  const ledgers: CustomerLedger[] = []
+
+  for (const customer of customers) {
+    const invoices = invoicesByCustomer.get(customer.id) ?? []
     const payments = paymentsByCustomer.get(customer.id) ?? []
-    const entries: LedgerEntry[] = payments
-      .filter((p) => p.payment_method === 'credit')
-      .map((p) => ({
-        id: p.id,
+
+    // Skip customers with no activity
+    if (invoices.length === 0 && payments.length === 0) continue
+
+    // Build entries
+    const entries: LedgerEntry[] = []
+
+    for (const inv of invoices) {
+      entries.push({
+        id: `inv-${inv.id}`,
+        date: inv.created_at,
+        type: 'charge' as LedgerEntryType,
+        amount: Number(inv.total),
+        invoiceNumber: inv.invoice_number,
+        description: inv.status === 'cancelled'
+          ? `Invoice ${inv.invoice_number} (Cancelled)`
+          : `Invoice ${inv.invoice_number} — ${inv.status}`,
+      })
+    }
+
+    for (const p of payments) {
+      if (p.payment_method === 'credit') continue
+      const inv = invoices.find(i => i.id === p.invoice_id)
+      entries.push({
+        id: `pay-${p.id}`,
         date: p.created_at,
         type: 'payment' as LedgerEntryType,
-        amount: p.amount,
-        invoiceNumber: p.reference ?? undefined,
-        description: p.notes ?? `Credit transaction on ${p.created_at}`,
-      }))
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        amount: Number(p.amount),
+        invoiceNumber: inv?.invoice_number ?? p.reference ?? undefined,
+        description: p.notes ?? `Payment via ${p.payment_method}`,
+      })
+    }
 
-    return {
+    // Sort chronologically oldest-first for balance calculation
+    entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+    // Calculate balance
+    let balance = 0
+    for (const inv of invoices) {
+      if (inv.status !== 'cancelled') balance += Number(inv.total)
+    }
+    for (const p of payments) {
+      if (p.payment_method !== 'credit' && p.invoice_id) {
+        const inv = invoices.find(i => i.id === p.invoice_id)
+        if (inv && inv.status !== 'cancelled') {
+          balance -= Number(p.amount)
+        }
+      }
+    }
+
+    // Reverse for display
+    entries.reverse()
+
+    ledgers.push({
       customerName: customer.name,
       entries,
-      currentBalance: customer.credit_balance ?? 0,
-    }
-  })
+      currentBalance: Math.max(0, balance),
+    })
+  }
 
   return ledgers
 }

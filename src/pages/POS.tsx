@@ -839,7 +839,7 @@ export function POS() {
       // Record ONLY the actual real money received (NOT credit amounts).
       // Credit is NOT payment — it's accounts receivable.
       // The remaining amount is handled separately via credit recording below.
-      if (!isCreditPayment || hasSplitCredit) {
+      if ((!isCreditPayment || hasSplitCredit) && actualPaid > 0) {
         const paymentAmount = actualPaid;
         const paymentRecord = await recordPaymentSafe({
           invoiceId: invoiceId!,

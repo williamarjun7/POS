@@ -303,15 +303,17 @@ function ReceivePaymentModal({
   }, [selectedCustomerId, customers, refreshCounter, open, initialCustomerId])
 
   // ── Derived data ────────────────────────────────────────────
-  const creditCustomers = useMemo(
-    () => customers.filter((c) => c.creditBalance > 0),
-    [customers]
-  )
-
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === selectedCustomerId),
     [customers, selectedCustomerId]
   )
+
+  // Compute outstanding credit from fetched invoices (source of truth)
+  const selectedOutstanding = useMemo(() => {
+    return customerInvoices
+      .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled')
+      .reduce((sum, inv) => sum + Math.max(0, inv.total - inv.paid), 0)
+  }, [customerInvoices])
 
   const outstandingInvoices = useMemo(() => {
     if (!selectedCustomerId) return []
@@ -457,7 +459,7 @@ function ReceivePaymentModal({
         {fromProfile && selectedCustomer && (
           <div className="flex items-center justify-between -mt-1 mb-1">
             <span className="text-sm text-muted-foreground">
-              Outstanding Credit: <span className="font-semibold text-foreground">{formatCurrency(selectedCustomer.creditBalance)}</span>
+              Outstanding Credit: <span className="font-semibold text-foreground">{formatCurrency(selectedOutstanding)}</span>
             </span>
             {outstandingInvoices.length > 0 && (
               <span className="text-xs text-muted-foreground">
@@ -478,7 +480,7 @@ function ReceivePaymentModal({
             }}
             options={[
               { value: "", label: "Choose a customer..." },
-              ...creditCustomers.map((c) => ({ value: c.id, label: `${c.name} (${formatCurrency(c.creditBalance)} credit)` })),
+              ...customers.map((c) => ({ value: c.id, label: c.name })),
             ]}
           />
         )}
@@ -667,7 +669,7 @@ function ReceivePaymentModal({
 
 export function Customers() {
   const queryClient = useQueryClient()
-  const { customers, isLoading: _isLoading, loadError: _loadError, isSaving: _isSaving, addCustomer, editCustomer, removeCustomer } = useCustomers()
+  const { customers, isLoading: _isLoading, loadError: _loadError, isSaving: _isSaving, addCustomer, editCustomer, removeCustomer, refresh: refreshCustomers } = useCustomers()
   const [profileRefreshCounter, setProfileRefreshCounter] = useState(0)
   // Server-side pagination for the DataTable
   const {
@@ -679,18 +681,65 @@ export function Customers() {
     refresh: refreshCustomerPage,
   } = useServerPagination<import('@/lib/db/types').CustomerRow>('customers', { pageSize: 15, orderBy: 'name', orderDir: 'asc' })
 
+  // ═══ Compute real order/spend stats from invoices for displayed customers ═══
+  // The stored total_orders / total_spent / credit_balance columns were dropped.
+  // We compute these values from invoices instead.
+  const [customerInvoiceStats, setCustomerInvoiceStats] = useState<
+    Map<string, { totalOrders: number; totalSpent: number }>
+  >(new Map())
+
+  useEffect(() => {
+    let cancelled = false
+    const customerIds = customerPage.map(r => r.id).filter(Boolean)
+    if (customerIds.length === 0) return
+
+    ;(async () => {
+      try {
+        // Fetch all invoices belonging to any displayed customer
+        const { data: invoicesData } = await insforge.database
+          .from('invoices')
+          .select('customer_id, total')
+          .in('customer_id', customerIds)
+
+        if (cancelled) return
+
+        const invoiceRows = (invoicesData ?? []) as Array<{
+          customer_id: string | null
+          total: number
+        }>
+
+        // Aggregate: for each customer, count invoices and sum totals
+        const stats = new Map<string, { totalOrders: number; totalSpent: number }>()
+        for (const inv of invoiceRows) {
+          if (!inv.customer_id) continue
+          const current = stats.get(inv.customer_id) ?? { totalOrders: 0, totalSpent: 0 }
+          current.totalOrders++
+          current.totalSpent += Number(inv.total)
+          stats.set(inv.customer_id, current)
+        }
+
+        setCustomerInvoiceStats(stats)
+      } catch {
+        // Non-critical — fall through to stale row values
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [customerPage])
+
   // Map DB rows to Customer type for DataTable display
+  // Uses invoice-computed stats when available, falls back to row values
   const paginatedCustomers: import('@/lib/services/customer-service').Customer[] = customerPage.map(row => ({
     id: row.id,
     name: row.name,
     phone: row.phone,
     email: row.email,
     address: row.address || undefined,
-    totalOrders: row.total_orders,
-    totalSpent: row.total_spent,
+    totalOrders: customerInvoiceStats.get(row.id)?.totalOrders ?? 0,
+    totalSpent: customerInvoiceStats.get(row.id)?.totalSpent ?? 0,
     lastVisit: row.last_visit ?? new Date().toISOString(),
-    loyaltyPoints: row.loyalty_points,
-    creditBalance: row.credit_balance,
+    loyaltyPoints: 0,
+    creditBalance: 0,
     notes: row.notes ?? undefined,
   }))
 
@@ -706,10 +755,63 @@ export function Customers() {
   const [paymentCustomerId, setPaymentCustomerId] = useState<string | null>(null)
   const [paymentSelectedInvoiceIds, setPaymentSelectedInvoiceIds] = useState<string[]>([])
 
+  // ═══ Fetch real outstanding stats from invoices (not stale customers.credit_balance) ═══
+  const [realOutstandingBalance, setRealOutstandingBalance] = useState(0)
+  const [creditCustomerCount, setCreditCustomerCount] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        // Fetch all non-paid, non-cancelled invoices
+        const { data: outstandingInvoices } = await insforge.database
+          .from('invoices')
+          .select('id, customer_id, total, status')
+          .not('status', 'in', '(paid,cancelled)')
+
+        if (cancelled || !outstandingInvoices) return
+
+        const invoiceIds = (outstandingInvoices as Array<{ id: string; customer_id: string | null; total: number }>)
+          .map(inv => inv.id)
+
+        // Get real payments for these invoices (credit is NOT payment)
+        const paidByInvoice = new Map<string, number>()
+        if (invoiceIds.length > 0) {
+          const { data: payments } = await insforge.database
+            .from('payments')
+            .select('invoice_id, amount, payment_method')
+            .in('invoice_id', invoiceIds)
+          for (const p of (payments ?? []) as Array<{ invoice_id: string; amount: number; payment_method: string }>) {
+            if (p.payment_method !== 'credit' && p.invoice_id) {
+              paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount))
+            }
+          }
+        }
+
+        // Calculate outstanding per customer
+        const customersWithDebt = new Set<string>()
+        let totalOutstanding = 0
+        for (const inv of outstandingInvoices as Array<{ id: string; customer_id: string | null; total: number }>) {
+          const paid = paidByInvoice.get(inv.id) ?? 0
+          const outstanding = Math.max(0, Number(inv.total) - paid)
+          if (outstanding > 0) {
+            totalOutstanding += outstanding
+            if (inv.customer_id) customersWithDebt.add(inv.customer_id)
+          }
+        }
+
+        if (!cancelled) {
+          setRealOutstandingBalance(totalOutstanding)
+          setCreditCustomerCount(customersWithDebt.size)
+        }
+      } catch {
+        // Fallback to stale values on error — non-critical
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
   const totalCustomers = customers.length
   const activeCustomers = customers.filter((c) => daysSince(c.lastVisit) <= 7).length
-  const creditCustomers = customers.filter((c) => c.creditBalance > 0).length
-  const outstandingBalance = customers.reduce((sum, c) => sum + c.creditBalance, 0)
 
   const filteredCustomers = useMemo(() => {
     let result = paginatedCustomers
@@ -850,10 +952,9 @@ export function Customers() {
         }
       }
 
-      // Update customer credit balance (don't inflate totalSpent)
-      await editCustomer(customerId, {
-        creditBalance: Math.max(0, current.creditBalance - amount),
-      })
+      // NOTE: credit_balance is no longer stored on the customers table.
+      // Outstanding credit is calculated dynamically from invoices.
+      // Payment records inserted above are the source of truth.
 
       // Update invoice statuses — only for the selected invoices
       if (invoiceIds && invoiceIds.length > 0) {
@@ -1043,10 +1144,10 @@ export function Customers() {
           <StatCard label="Active (7d)" value={formatNumber(activeCustomers)} icon="TrendingUp" color="text-success" index={1} />
         </motion.div>
         <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label="Credit Customers" value={formatNumber(creditCustomers)} icon="CreditCard" color="text-warning" index={2} />
+          <StatCard label="Credit Customers" value={formatNumber(creditCustomerCount)} icon="CreditCard" color="text-warning" index={2} />
         </motion.div>
         <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label="Outstanding Balance" value={formatCurrency(outstandingBalance)} icon="AlertCircle" color="text-destructive" index={3} />
+          <StatCard label="Outstanding Balance" value={formatCurrency(realOutstandingBalance)} icon="AlertCircle" color="text-destructive" index={3} />
         </motion.div>
       </motion.div>
 

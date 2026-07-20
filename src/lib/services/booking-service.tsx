@@ -32,6 +32,7 @@ export interface Booking {
   isArchived: boolean;
   totalAmount: number;
   paidAmount: number;
+  discount: number;
   paymentStatus: string;
   paymentMethod: string;
   specialRequests: string;
@@ -56,6 +57,7 @@ function rowToBooking(row: BookingRow): Booking {
     isArchived: false, // not in DB schema — we'll use a filter
     totalAmount: Number(row.total_amount),
     paidAmount: Number(row.paid_amount),
+    discount: Number(row.discount ?? 0),
     paymentStatus: row.payment_status,
     paymentMethod: row.payment_method ?? '',
     specialRequests: row.special_requests ?? '',
@@ -75,6 +77,7 @@ export interface NewBookingData {
   status?: BookingStatus;
   totalAmount: number;
   paidAmount?: number;
+  discount?: number;
   paymentMethod?: string;
   specialRequests?: string;
   adults?: number;
@@ -130,6 +133,7 @@ async function createBookingInDb(data: NewBookingData): Promise<Booking> {
         status: data.status ?? 'confirmed',
         total_amount: data.totalAmount,
         paid_amount: data.paidAmount ?? 0,
+        discount: data.discount ?? 0,
         payment_method: data.paymentMethod ?? null,
         special_requests: data.specialRequests ?? null,
         adults: data.adults ?? 1,
@@ -233,6 +237,7 @@ async function updateBookingInDb(id: string, data: Partial<NewBookingData>): Pro
   if (data.checkOut !== undefined) payload.check_out = data.checkOut;
   if (data.totalAmount !== undefined) payload.total_amount = data.totalAmount;
   if (data.paidAmount !== undefined) payload.paid_amount = data.paidAmount;
+  if (data.discount !== undefined) payload.discount = data.discount;
   if (data.paymentMethod !== undefined) payload.payment_method = data.paymentMethod;
   if (data.specialRequests !== undefined) payload.special_requests = data.specialRequests;
   if (data.adults !== undefined) payload.adults = data.adults;
