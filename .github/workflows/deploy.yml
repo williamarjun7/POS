@@ -16,8 +16,13 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: 22
           script: |
+            set -e
             cd /var/www/pos
-            sudo git pull origin main
+            echo "=== Deploying $(date) ==="
+            echo "Current commit: $(git -C /var/www/pos log --oneline -1 || echo 'unknown')"
+            sudo git fetch origin main
+            sudo git reset --hard origin/main
+            echo "Updated to: $(git -C /var/www/pos log --oneline -1)"
             sudo npm install
             sudo VITE_INSFORGE_URL='${{ secrets.VITE_INSFORGE_URL }}' \
               VITE_INSFORGE_ANON_KEY='${{ secrets.VITE_INSFORGE_ANON_KEY }}' \
@@ -25,4 +30,4 @@ jobs:
               VITE_FONEPAY_API_BASE_URL='${{ secrets.VITE_FONEPAY_API_BASE_URL }}' \
               npx vite build
             sudo systemctl reload nginx
-            echo "Deploy complete!"
+            echo "Deploy complete! Now serving: $(git -C /var/www/pos log --oneline -1)"

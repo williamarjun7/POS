@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SERVER_HOST="${SERVER_HOST:-103.233.58.46}"
-SERVER_USER="${SERVER_USER:-root}"
+SERVER_USER="${SERVER_USER:-highlandscafe}"
 SERVER_DIR="/var/www/pos"
 
 echo "Deploying to $SERVER_USER@$SERVER_HOST:$SERVER_DIR"
@@ -11,8 +11,13 @@ ssh "$SERVER_USER@$SERVER_HOST" << 'DEPLOY'
 set -euo pipefail
 
 cd /var/www/pos
-echo "→ Pulling latest code..."
-sudo git pull origin main
+echo "=== Deploying $(date) ==="
+echo "Current commit: $(git -C /var/www/pos log --oneline -1 || echo 'unknown')"
+
+echo "→ Fetching and resetting to origin/main..."
+sudo git fetch origin main
+sudo git reset --hard origin/main
+echo "Updated to: $(git -C /var/www/pos log --oneline -1)"
 
 echo "→ Installing dependencies..."
 sudo npm install
@@ -27,5 +32,5 @@ sudo VITE_INSFORGE_URL='https://659pq3pb.us-east.insforge.app' \
 echo "→ Reloading nginx..."
 sudo systemctl reload nginx
 
-echo "✅ Deploy complete!"
+echo "✅ Deploy complete! Now serving: $(git -C /var/www/pos log --oneline -1)"
 DEPLOY
