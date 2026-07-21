@@ -104,7 +104,7 @@ export default function DashboardPage() {
       const { data, error } = await insforge.database
         .from('invoices')
         .select('*, restaurant_tables!invoices_table_id_fkey!left(table_number), payments!payments_invoice_id_fkey!left(amount, payment_method)')
-        .not('status', 'in', ['paid', 'refunded', 'cancelled'])
+        .not('status', 'in', '(paid,refunded,cancelled)')
         .order('created_at', { ascending: false })
         .limit(50)
       if (error) throw error

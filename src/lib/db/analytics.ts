@@ -131,7 +131,7 @@ export async function fetchQueueAnalytics(): Promise<QueueAnalyticsData> {
   const { data: activeOrders, error: ordersError } = await insforge.database
     .from('order_batches')
     .select('created_at, status')
-    .not('status', 'in', ['paid', 'cancelled'])
+    .not('status', 'in', '(paid,cancelled)')
 
   if (ordersError) throw ordersError
 

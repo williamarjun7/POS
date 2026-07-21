@@ -59,7 +59,7 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
     .from('order_batches')
     .select('id, table_id, customer_name, subtotal, paid_amount, status, created_at')
     .in('table_id', tableIds)
-    .not('status', 'in', ['paid', 'cancelled'])
+    .not('status', 'in', '(paid,cancelled)')
 
   const batches = (batchesData ?? []) as Array<{
     id: string
@@ -542,7 +542,7 @@ export async function deleteTable(params: {
     .from('order_batches')
     .select('id')
     .eq('table_id', params.id)
-    .not('status', 'in', ['paid', 'cancelled'])
+    .not('status', 'in', '(paid,cancelled)')
     .limit(1)
 
   if (checkError) throw checkError
