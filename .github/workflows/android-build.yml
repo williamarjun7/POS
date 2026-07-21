@@ -61,17 +61,6 @@ jobs:
           mkdir -p dist-apk
           cp android/app/build/outputs/apk/debug/app-debug.apk "dist-apk/highlands-pos-${{ steps.version.outputs.VERSION }}.apk"
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p $GITHUB_WORKSPACE/.ssh
-          cat > $GITHUB_WORKSPACE/.ssh/deploy_key << 'KEYEOF'
-${{ secrets.SERVER_SSH_KEY }}
-KEYEOF
-          chmod 600 $GITHUB_WORKSPACE/.ssh/deploy_key
-
-      - name: Verify SSH key
-        run: ls -la $GITHUB_WORKSPACE/.ssh/ && wc -l $GITHUB_WORKSPACE/.ssh/deploy_key
-
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -84,7 +73,7 @@ KEYEOF
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
-          key_path: /github/workspace/.ssh/deploy_key
+          key: ${{ secrets.SERVER_SSH_KEY }}
           port: 22
           source: "dist-apk/*.apk"
           target: "/var/www/pos/downloads"
@@ -95,7 +84,7 @@ KEYEOF
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
-          key_path: /github/workspace/.ssh/deploy_key
+          key: ${{ secrets.SERVER_SSH_KEY }}
           port: 22
           script: |
             echo "${{ steps.version.outputs.VERSION }}" > /var/www/pos/downloads/latest-version.txt
