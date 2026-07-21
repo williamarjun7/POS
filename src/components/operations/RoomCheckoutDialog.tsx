@@ -23,7 +23,7 @@ import { createPaymentInDb } from "@/lib/services/payment-service"
 import { logActivitySafe } from "@/lib/services/activity-log-service"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { toPaymentMethodKey } from "@/lib/payment-methods"
-import { savePendingPayment, completePendingPayment } from "@/lib/services/pending-payment-store"
+import { savePendingPayment } from "@/lib/services/pending-payment-store"
 import { trackPaymentEvent } from "@/lib/services/payment-monitoring"
 import type { Room } from "@/types"
 import type { Booking } from "@/lib/services/booking-service"
@@ -344,11 +344,8 @@ export function RoomCheckoutDialog({
         await insforge.database
           .from("order_batch_items")
           .update({ status: "paid" })
-        .in("batch_id", batchIds)
-        .not("status", "in", "(cancelled,voided)")
-
-      // ── Recovery cleanup ────────────────────────────────
-      await completePendingPayment(paymentRef).catch(() => {})
+          .in("batch_id", batchIds)
+          .not("status", "in", "(cancelled,voided)")
       }
 
       // 7. Update booking to checked_out

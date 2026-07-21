@@ -121,41 +121,6 @@ function AuthAwareRealtimeSync() {
 }
 
 /**
- * Runs payment recovery on startup — finds any pending confirmed payments
- * that were interrupted by a browser crash, network timeout, or temporary
- * backend failure, and resumes processing them.
- *
- * Only runs once per browser session (guarded by sessionStorage flag).
- */
-function StartupPaymentRecovery() {
-  const { isReady } = useAuth()
-
-  useEffect(() => {
-    if (!isReady) return
-
-    let cancelled = false
-
-    const run = async () => {
-      try {
-        const { runStartupRecoveryOnce } = await import('@/lib/services/payment-recovery')
-        if (cancelled) return
-        const result = await runStartupRecoveryOnce()
-        if (result && import.meta.env.DEV) {
-          console.log('[STARTUP_RECOVERY]', result.summary)
-        }
-      } catch {
-        // Non-critical — recovery failures must never break the app
-      }
-    }
-
-    run()
-    return () => { cancelled = true }
-  }, [isReady])
-
-  return null
-}
-
-/**
  * Inner component that lives inside AuthProvider so it can consume auth context.
  * Renders the screen lock overlay for authenticated users when idle,
  * and the session timeout modal when the session is about to expire.
@@ -217,7 +182,6 @@ export default function App() {
       <ThemeProvider>          <AuthProvider>
             <AuthAwareSessionTimeout />
             <AuthAwareRealtimeSync />
-            <StartupPaymentRecovery />
             <PrintSettingsProvider>
             <ToastProvider>
             <BrowserRouter>
