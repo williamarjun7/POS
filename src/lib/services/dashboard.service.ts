@@ -158,7 +158,7 @@ export async function getDashboardReport(
   const { data: unpaidInvoices } = await insforge.database
     .from('invoices')
     .select('id, total, status')
-    .not('status', 'in', '(paid,refunded,cancelled)')
+    .not('status', 'in', ['paid', 'refunded', 'cancelled'])
 
   const unpaid = (unpaidInvoices ?? []) as Array<{
     id: string

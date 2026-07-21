@@ -766,7 +766,7 @@ export function Customers() {
         const { data: outstandingInvoices } = await insforge.database
           .from('invoices')
           .select('id, customer_id, total, status')
-          .not('status', 'in', '(paid,cancelled)')
+          .not('status', 'in', ['paid', 'cancelled'])
 
         if (cancelled || !outstandingInvoices) return
 
