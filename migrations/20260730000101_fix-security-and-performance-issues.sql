@@ -35,7 +35,7 @@ ALTER FUNCTION public.close_table_session(p_table_id uuid) SECURITY INVOKER;
 -- =============================================================================
 -- Issue 10: Add missing index on foreign key column
 -- =============================================================================
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_batch_items_voided_by
+CREATE INDEX IF NOT EXISTS idx_order_batch_items_voided_by
   ON order_batch_items(voided_by);
 
 -- =============================================================================

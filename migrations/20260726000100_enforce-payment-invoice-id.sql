@@ -30,12 +30,21 @@ WHERE invoice_id IS NULL
 -- Step 2: Add CHECK constraint — non-credit payments MUST have an invoice_id.
 --         Credit payments are exempt because credit-settlement records
 --         (customer paying down their balance) don't map to a single invoice.
-ALTER TABLE payments
-  ADD CONSTRAINT payments_non_credit_invoice_id_not_null
-  CHECK (
-    payment_method = 'credit'
-    OR invoice_id IS NOT NULL
-  );
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'payments_non_credit_invoice_id_not_null'
+  ) THEN
+    ALTER TABLE payments
+      ADD CONSTRAINT payments_non_credit_invoice_id_not_null
+      CHECK (
+        payment_method = 'credit'
+        OR invoice_id IS NOT NULL
+      );
+  END IF;
+END;
+$$;
 
 -- Step 3: Verify the constraint is in place
 SELECT
