@@ -11,8 +11,13 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p $GITHUB_WORKSPACE/.ssh
-          echo "${{ secrets.SERVER_SSH_KEY }}" > $GITHUB_WORKSPACE/.ssh/deploy_key
+          cat > $GITHUB_WORKSPACE/.ssh/deploy_key << 'KEYEOF'
+${{ secrets.SERVER_SSH_KEY }}
+KEYEOF
           chmod 600 $GITHUB_WORKSPACE/.ssh/deploy_key
+
+      - name: Verify SSH key
+        run: ls -la $GITHUB_WORKSPACE/.ssh/ && wc -l $GITHUB_WORKSPACE/.ssh/deploy_key
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1
