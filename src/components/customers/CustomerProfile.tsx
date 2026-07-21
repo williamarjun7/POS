@@ -176,7 +176,7 @@ function useCustomerProfileData(customer: Customer | null, refreshKey: number = 
       ] = await Promise.all([
         insforge.database
           .from('order_batches')
-          .select('*, order_batch_items(*), restaurant_tables!left(table_number)')
+          .select('*, order_batch_items(*), restaurant_tables!order_batches_table_id_fkey!left(table_number)')
           .eq('customer_name', customerName)
           .order('created_at', { ascending: false })
           .limit(200),

@@ -239,19 +239,24 @@ export function DashboardRoomTile({ room, booking, onAction }: DashboardRoomTile
                 const nightsElapsed = checkInStart
                   ? Math.max(0, Math.floor((todayStart.getTime() - checkInStart.getTime()) / 86400000))
                   : 0
-                const nightsLeft = Math.max(0, totalNights - nightsElapsed)
-                const isLastNight = nightsLeft <= 1 && totalNights > 0 && nightsElapsed < totalNights
+                const hasFixedStay = totalNights > 0
+                const nightsLeft = hasFixedStay ? Math.max(0, totalNights - nightsElapsed) : 0
+                const isLastNight = nightsLeft <= 1 && hasFixedStay && nightsElapsed < totalNights
                 const isOverdue = checkOutStart && todayStart > checkOutStart
                 const initial = guestName ? guestName.charAt(0).toUpperCase() : ''
                 const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                 const dateLabel = checkIn && checkOut ? `${fmt(checkIn)} – ${fmt(checkOut)}` : ''
                 const charge = booking?.totalAmount
 
-                const nightText = totalNights === 1
-                  ? '1 Night'
-                  : nightsLeft > 0
-                    ? `${nightsLeft} Night${nightsLeft === 1 ? '' : 's'} left`
-                    : `${totalNights} Night${totalNights === 1 ? '' : 's'}`
+                // For open-ended stays (no checkout), show elapsed nights instead of 0
+                const displayNights = hasFixedStay ? totalNights : nightsElapsed
+                const nightText = displayNights === 0
+                  ? null
+                  : displayNights === 1
+                    ? '1 Night'
+                    : hasFixedStay && nightsLeft > 0
+                      ? `${nightsLeft} Night${nightsLeft === 1 ? '' : 's'} left`
+                      : `${displayNights} Night${displayNights === 1 ? '' : 's'}`
 
                 const avatarColor = isOverdue
                   ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
@@ -278,14 +283,16 @@ export function DashboardRoomTile({ room, booking, onAction }: DashboardRoomTile
 
                     {/* Nights + charge */}
                     <div className="flex items-center justify-between">
-                      <span className={cn(
-                        'inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums',
-                        isOverdue ? 'bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400'
-                          : isLastNight ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400'
-                          : 'bg-violet-50 dark:bg-violet-950/30 text-violet-600 dark:text-violet-400',
-                      )}>
-                        {isOverdue ? 'Overdue' : nightText}
-                      </span>
+                      {(isOverdue || nightText !== null) && (
+                        <span className={cn(
+                          'inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums',
+                          isOverdue ? 'bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400'
+                            : isLastNight ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400'
+                            : 'bg-violet-50 dark:bg-violet-950/30 text-violet-600 dark:text-violet-400',
+                        )}>
+                          {isOverdue ? 'Overdue' : nightText}
+                        </span>
+                      )}
                       {charge != null && (
                         <span className="text-[13px] font-black text-foreground tabular-nums">Rs. {charge.toLocaleString()}</span>
                       )}

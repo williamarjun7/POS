@@ -169,7 +169,7 @@ export function RoomCheckoutDialog({
             .from("order_batch_items")
             .select("id, name, quantity, unit_price, status, batch_id")
             .in("batch_id", batchIds)
-            .not("status", "in", '("cancelled","voided")')
+            .not("status", "in", "(cancelled,voided)")
 
           if (itemsError) throw itemsError
 
@@ -314,7 +314,7 @@ export function RoomCheckoutDialog({
           .from("order_batch_items")
           .update({ status: "paid" })
           .in("batch_id", batchIds)
-          .not("status", "in", '("cancelled","voided")')
+          .not("status", "in", "(cancelled,voided)")
       }
 
       // 7. Update booking to checked_out

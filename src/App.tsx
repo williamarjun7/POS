@@ -100,6 +100,27 @@ function LazyRoute({ children }: { children: React.ReactNode }) {
 
 /**
  * Inner component that lives inside AuthProvider so it can consume auth context.
+ * Starts realtime polling / WebSocket subscriptions only after auth is resolved,
+ * so queries never fire before the SDK has a valid JWT.
+ */
+function AuthAwareRealtimeSync() {
+  const { isReady } = useAuth()
+
+  useEffect(() => {
+    if (!isReady) return
+    const unsubWs = subscribeToPostgresChanges(queryClient)
+    const unsubPoll = startRealtimePolling(queryClient)
+    return () => {
+      unsubWs()
+      unsubPoll()
+    }
+  }, [isReady])
+
+  return null
+}
+
+/**
+ * Inner component that lives inside AuthProvider so it can consume auth context.
  * Renders the screen lock overlay for authenticated users when idle,
  * and the session timeout modal when the session is about to expire.
  */
@@ -148,18 +169,6 @@ export default function App() {
     setShowSplash(false)
   }, [])
 
-  // Start global subscriptions so every module stays in sync
-  useEffect(() => {
-    // 1. Try to connect realtime WebSocket channels for push-based updates
-    // 2. Start polling as a reliable fallback (catches updates the WebSocket misses)
-    const unsubWs = subscribeToPostgresChanges(queryClient)
-    const unsubPoll = startRealtimePolling(queryClient)
-    return () => {
-      unsubWs()
-      unsubPoll()
-    }
-  }, [])
-
   // Auto-dismiss splash after minimum duration
   useEffect(() => {
     const timer = setTimeout(dismissSplash, SPLASH_MIN_DURATION)
@@ -171,6 +180,7 @@ export default function App() {
       <SplashScreen isVisible={showSplash} />
       <ThemeProvider>          <AuthProvider>
             <AuthAwareSessionTimeout />
+            <AuthAwareRealtimeSync />
             <PrintSettingsProvider>
             <ToastProvider>
             <BrowserRouter>

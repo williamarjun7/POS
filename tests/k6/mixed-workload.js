@@ -254,7 +254,7 @@ function dashboardFlow() {
     const endpoints = [
       'rest/v1/restaurant_tables?select=*&order=display_order.asc',
       'rest/v1/rooms?select=*,room_types(name)',
-      'rest/v1/invoices?select=*,payments!left(amount)&not=status.in.("paid","refunded","cancelled")&limit=20',
+      'rest/v1/invoices?select=*,payments!left(amount)&not=status.in.(paid,refunded,cancelled)&limit=20',
       'rest/v1/activity_logs?select=*&order=created_at.desc&limit=10',
       'rest/v1/payments?select=amount,payment_method&order=created_at.desc&limit=20',
     ]

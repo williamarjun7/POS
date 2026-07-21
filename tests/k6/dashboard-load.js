@@ -72,7 +72,7 @@ export default function () {
 
   group('Dashboard — Invoices (Pending)', () => {
     const res = http.get(
-      `${BASE_URL}/rest/v1/invoices?select=*,restaurant_tables!left(table_number),payments!left(amount,payment_method)&not=status.in.("paid","refunded","cancelled")&order=created_at.desc&limit=50`,
+      `${BASE_URL}/rest/v1/invoices?select=*,restaurant_tables!left(table_number),payments!left(amount,payment_method)&not=status.in.(paid,refunded,cancelled)&order=created_at.desc&limit=50`,
       authHeaders(),
     )
 

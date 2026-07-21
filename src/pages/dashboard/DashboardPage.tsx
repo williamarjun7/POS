@@ -89,22 +89,22 @@ export default function DashboardPage() {
   const [bookingMode, setBookingMode] = useState<BookingMode>('reserve');
   const [managedBooking, setManagedBooking] = useState<Booking | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'checkin' | 'checkout' | 'status' | 'postcheckout';
+    type: 'checkin' | 'checkout' | 'status';
     booking?: Booking;
     room?: Room;
     status?: string;
-    checkoutTarget?: 'available' | 'cleaning' | 'maintenance';
   } | null>(null);
   const [postCheckoutRoom, setPostCheckoutRoom] = useState<Room | null>(null);
   const [postCheckoutBooking, setPostCheckoutBooking] = useState<Booking | null>(null);
+
   // Pending payments query — invoices with outstanding balances
   const { data: pendingPayments } = useQuery({
     queryKey: dashboardKeys.pendingInvoices,
     queryFn: async () => {
       const { data, error } = await insforge.database
         .from('invoices')
-        .select('*, restaurant_tables!left(table_number), payments!left(amount, payment_method, status)')
-        .not('status', 'in', '("paid","refunded","cancelled")')
+        .select('*, restaurant_tables!invoices_table_id_fkey!left(table_number), payments!payments_invoice_id_fkey!left(amount, payment_method)')
+        .not('status', 'in', '(paid,refunded,cancelled)')
         .order('created_at', { ascending: false })
         .limit(50)
       if (error) throw error
@@ -116,7 +116,7 @@ export default function DashboardPage() {
       //    ALL payments per invoice before calculating remaining balances.
       const invoiceMap = new Map<string, {
         row: any
-        allPayments: Array<{ amount: number; payment_method: string; status: string }>
+        allPayments: Array<{ amount: number; payment_method: string }>
       }>()
 
       // First pass: group all payment rows by invoice ID
@@ -334,6 +334,9 @@ export default function DashboardPage() {
           showError((err as Error)?.message || 'Failed to update room');
         }
         break;
+      case 'release':
+        setConfirmAction({ type: 'status', room, status: 'available', booking });
+        break;
     }
   }, [updateStatus, navigate]);
 
@@ -386,6 +389,7 @@ export default function DashboardPage() {
       showError((err as Error)?.message || 'Failed to update room');
     }
   }, [postCheckoutRoom, updateStatus]);
+
 
   const executeStatusChange = useCallback(async () => {
     if (!confirmAction?.room) return;
@@ -1121,9 +1125,8 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
-
-
       </div>
+
       </div>
     </Skeleton>
   );

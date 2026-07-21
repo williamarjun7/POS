@@ -79,7 +79,7 @@ export async function fetchActiveTableSessions(): Promise<ActiveTableSession[]> 
     .from('order_batches')
     .select('id, table_id, customer_name, subtotal, paid_amount, status, created_at')
     .in('table_id', tableIds)
-    .not('status', 'in', '("paid","cancelled")')
+    .not('status', 'in', '(paid,cancelled)')
 
   const batches = (batchesData ?? []) as Array<{
     id: string

@@ -6,10 +6,10 @@
  */
 import { createClient, InsForgeError } from '@insforge/sdk'
 
-const baseUrl = import.meta.env.VITE_INSFORGE_URL
+const rawBaseUrl = import.meta.env.VITE_INSFORGE_URL
 const anonKey = import.meta.env.VITE_INSFORGE_ANON_KEY
 
-if (!baseUrl) {
+if (!rawBaseUrl) {
   throw new Error('Missing VITE_INSFORGE_URL environment variable')
 }
 if (!anonKey) {
@@ -17,12 +17,8 @@ if (!anonKey) {
 }
 
 export const insforge = createClient({
-  baseUrl,
+  baseUrl: rawBaseUrl,
   anonKey,
-  // Use the backend proxy path for edge functions instead of the derived
-  // subhosting URL (e.g. {appKey}.functions.insforge.app) which returns
-  // 404 with no CORS headers, causing "Network request failed" errors.
-  functionsUrl: `${baseUrl}/functions`,
 })
 
 export type InsForgeUser = Awaited<ReturnType<typeof insforge.auth.getCurrentUser>>['data']

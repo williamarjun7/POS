@@ -16,6 +16,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { insforge } from '@/lib/services/auth-service';
+import { useAuth } from '@/lib/core/auth-context';
 
 /* ─── Types ─────────────────────────────────────────────────── */
 
@@ -123,10 +124,9 @@ async function loadFromDb(): Promise<PrintSettings | null> {
       .maybeSingle();
 
     if (error) {
-      // Permission denied (42501) or table doesn't exist — use local defaults
-      // instead of flooding the console. The migration may not be applied yet
-      // or the user might not have the required role.
-      if (error.code !== '42501') {
+      // Permission denied (42501), 401 (not authenticated), or table doesn't exist
+      // — use local defaults without flooding the console.
+      if (error.code !== '42501' && error.code !== '401') {
         console.warn('[PrintSettings] DB load failed:', error.message);
       } else if (import.meta.env.DEV) {
         console.info('[PrintSettings] Using local defaults (DB load not available)');
@@ -225,13 +225,16 @@ const PrintSettingsContext = createContext<PrintSettingsContextValue | undefined
 /* ─── Provider ──────────────────────────────────────────────── */
 
 export function PrintSettingsProvider({ children }: { children: React.ReactNode }) {
+  const { isReady: authReady } = useAuth();
   const [settings, setSettings] = useState<PrintSettings>(loadFromStorage);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const dbTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialLoadDone = useRef(false);
 
-  // ── On mount: fetch from DB, merge with local state ──────────
+  // ── On mount: fetch from DB once auth is ready ──────────────
   useEffect(() => {
+    if (!authReady) return;
     let cancelled = false;
 
     (async () => {
@@ -245,15 +248,22 @@ export function PrintSettingsProvider({ children }: { children: React.ReactNode 
         _cachedSettings = dbSettings;
         setLastSyncedAt(new Date().toISOString());
       }
+
+      // Mark initial load complete so the auto-save effect can safely write
+      initialLoadDone.current = true;
     })();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [authReady]);
 
   // ── On every change: sync to localStorage immediately + debounced DB ──
   useEffect(() => {
     saveToStorage(settings);
     _cachedSettings = settings;
+
+    // Don't try DB writes before auth is ready AND initial DB load is done
+    // (avoids 401 race where the debounce fires before the session token is attached)
+    if (!authReady || !initialLoadDone.current) return;
 
     // Debounce DB write (300ms) — background failures are non-fatal since
     // localStorage is the live fallback. Log non-permission errors in DEV.
@@ -271,7 +281,7 @@ export function PrintSettingsProvider({ children }: { children: React.ReactNode 
     return () => {
       if (dbTimerRef.current) clearTimeout(dbTimerRef.current);
     };
-  }, [settings]);
+  }, [settings, authReady]);
 
   const update = useCallback((partial: Partial<PrintSettings>) => {
     setSettings(prev => ({ ...prev, ...partial }));

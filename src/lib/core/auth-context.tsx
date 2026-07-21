@@ -16,6 +16,9 @@ import {
   getSessionUserId,
 } from '@/lib/services/session-store'
 
+/** Error message from the InsForge SDK when no persistent session is available */
+const ERR_NO_REFRESH_TOKEN = 'No refresh token provided'
+
 export interface User {
   id: string
   name: string
@@ -129,7 +132,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null)
       }
     } catch (err) {
-      console.warn('[Auth] refreshUser failed:', err instanceof Error ? err.message : err)
+      const message = err instanceof Error ? err.message : String(err)
+      if (message === ERR_NO_REFRESH_TOKEN) {
+        // No SDK session exists — clear the stale local session so we
+        // don't keep retrying and avoid the misleading warning.
+        clearSession()
+      } else {
+        console.warn('[Auth] refreshUser failed:', message)
+      }
       setUser(null)
     }
   }, [])
