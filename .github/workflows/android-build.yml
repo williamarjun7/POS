@@ -78,6 +78,7 @@ jobs:
           source: "dist-apk/*.apk"
           target: "/var/www/pos/downloads"
           strip_components: 1
+          overwrite: true
 
       - name: Update latest version file on server
         uses: appleboy/ssh-action@v1
