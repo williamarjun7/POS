@@ -8,6 +8,8 @@ on:
       - 'tests/**'
   workflow_dispatch:
 
+# Trigger: deploy APK builds to server on each push
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
