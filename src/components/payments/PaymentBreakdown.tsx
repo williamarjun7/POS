@@ -25,6 +25,7 @@ export interface PaymentBreakdownEntry {
   id: string
   method: string
   amount: number
+  discount?: number
   createdAt: string
   reference?: string
 }
@@ -59,6 +60,7 @@ function useInvoicePayments(invoiceId: string | undefined) {
         id: r.id,
         method: r.paymentMethod,
         amount: r.amount,
+        discount: r.discount,
         createdAt: r.createdAt,
         reference: r.reference,
       }))
@@ -73,18 +75,20 @@ function useInvoicePayments(invoiceId: string | undefined) {
 function aggregateByMethod(entries: PaymentBreakdownEntry[]): Array<{
   method: string
   amount: number
+  discount: number
   count: number
   lastDate: string
 }> {
-  const map = new Map<string, { amount: number; count: number; lastDate: string }>()
+  const map = new Map<string, { amount: number; discount: number; count: number; lastDate: string }>()
   for (const e of entries) {
     const existing = map.get(e.method)
     if (existing) {
       existing.amount += e.amount
+      existing.discount += e.discount ?? 0
       existing.count += 1
       if (e.createdAt > existing.lastDate) existing.lastDate = e.createdAt
     } else {
-      map.set(e.method, { amount: e.amount, count: 1, lastDate: e.createdAt })
+      map.set(e.method, { amount: e.amount, discount: e.discount ?? 0, count: 1, lastDate: e.createdAt })
     }
   }
   return Array.from(map.entries())
@@ -148,7 +152,7 @@ export function PaymentBreakdown({
   if (variant === 'inline') {
     return (
       <span className={cn('inline-flex flex-wrap items-center gap-x-2 gap-y-1', className)}>
-        {aggregated.map(({ method, amount, count }) => (
+        {aggregated.map(({ method, amount, discount, count }) => (
           <span
             key={method}
             className="inline-flex items-center gap-1 text-xs font-medium"
@@ -160,6 +164,9 @@ export function PaymentBreakdown({
             />
             {getPaymentMethodLabel(method)}
             <span className="tabular-nums">({formatCurrency(amount)})</span>
+            {discount > 0 && (
+              <span className="text-destructive/70 tabular-nums">-{formatCurrency(discount)}</span>
+            )}
             {count > 1 && <span className="text-muted-foreground/60">×{count}</span>}
           </span>
         ))}
@@ -174,7 +181,7 @@ export function PaymentBreakdown({
   if (variant === 'compact') {
     return (
       <div className={cn('space-y-1', className)}>
-        {aggregated.map(({ method, amount, count }) => (
+        {aggregated.map(({ method, amount, discount, count }) => (
           <div key={method} className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-1.5">
               <span
@@ -186,7 +193,14 @@ export function PaymentBreakdown({
                 <span className="text-xs text-muted-foreground">×{count}</span>
               )}
             </div>
-            <span className="tabular-nums font-semibold">{formatCurrency(amount)}</span>
+            <div className="flex items-center gap-2">
+              {discount > 0 && (
+                <span className="text-xs text-destructive/70 tabular-nums">
+                  -{formatCurrency(discount)} discount
+                </span>
+              )}
+              <span className="tabular-nums font-semibold">{formatCurrency(amount)}</span>
+            </div>
           </div>
         ))}
         {remaining > 0 && (
@@ -213,13 +227,14 @@ export function PaymentBreakdown({
     )
   }
 
-  // ── Detailed variant (full history with individual entries and timestamps) ──
+  // ── Detailed variant (full history with individual entries, timestamps, and discount) ──
   return (
     <div className={cn('space-y-2', className)}>
       <div className="space-y-1.5">
         {entries.map((entry) => {
           const time = entry.createdAt?.split('T')[1]?.slice(0, 5)
           const date = entry.createdAt?.split('T')[0]
+          const hasDiscount = (entry.discount ?? 0) > 0
           return (
             <div
               key={entry.id}
@@ -241,6 +256,11 @@ export function PaymentBreakdown({
                 {(showTimestamps || variant === 'detailed') && date && (
                   <span className="text-xs text-muted-foreground tabular-nums">
                     {date}{time ? ` ${time}` : ''}
+                  </span>
+                )}
+                {hasDiscount && (
+                  <span className="text-xs text-destructive/70 tabular-nums">
+                    -{formatCurrency(entry.discount)}
                   </span>
                 )}
                 <span className="font-semibold tabular-nums">{formatCurrency(entry.amount)}</span>

@@ -248,6 +248,7 @@ export async function processPaymentTransaction(
       invoiceId,
       batchId: tableBatches[0]?.id ?? null,
       amount: payment.grandTotal,
+      discount,
       paymentMethod: toPaymentMethodKey(payment.paymentMethod ?? 'cash') as PaymentMethod,
       reference: `IDEM-${invNumber}`,
       notes: `Payment via ${payment.paymentMethod ?? 'cash'}`,

@@ -293,6 +293,7 @@ export function RoomCheckoutDialog({
         invoiceId,
         batchId: orderBatches[0]?.id ?? null,
         amount: grandTotal,
+        discount: discountAmount,
         paymentMethod: toPaymentMethodKey(paymentMethod) as any,
         reference: `CHK-${invNumber}`,
         notes: `Room checkout payment via ${paymentMethod}`,

@@ -16,9 +16,16 @@ if (!anonKey) {
   throw new Error('Missing VITE_INSFORGE_ANON_KEY environment variable')
 }
 
+// The SDK's auto-derivation of the function URL is incorrect for this project.
+// Use an env var so the correct URL is baked in at build time.
+// Set VITE_INSFORGE_FUNCTIONS_URL to your project's actual function deployment URL.
+// Example: https://659pq3pb.function2.insforge.app
+const functionsUrl = import.meta.env.VITE_INSFORGE_FUNCTIONS_URL || 'https://659pq3pb.function2.insforge.app'
+
 export const insforge = createClient({
   baseUrl: rawBaseUrl,
   anonKey,
+  functionsUrl,
 })
 
 export type InsForgeUser = Awaited<ReturnType<typeof insforge.auth.getCurrentUser>>['data']

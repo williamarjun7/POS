@@ -46,6 +46,7 @@ interface InvoiceItemDisplay {
 interface PaymentRecord {
   id: string
   amount: number
+  discount?: number
   method: string
   date: string
   time: string
@@ -123,6 +124,7 @@ export function Billing() {
     () => paymentsData.map(p => ({
       id: p.id,
       amount: p.amount,
+      discount: p.discount,
       method: p.paymentMethod,
       date: p.createdAt.split('T')[0],
       time: p.createdAt.split('T')[1]?.slice(0, 5) ?? '',
@@ -147,6 +149,9 @@ export function Billing() {
   const [_currentPRN, setCurrentPRN] = useState<string | null>(null)
   const wsCleanupRef = useRef<(() => void) | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ─── Prevent duplicate payment recording from WS + polling race ──
+  const paymentRecordedRef = useRef(false)
 
   // Cleanup WebSocket and polling on unmount
   useEffect(() => {
@@ -213,6 +218,7 @@ export function Billing() {
     const createdPayment = await recordPaymentSafe({
       invoiceId: id,
       amount: payAmount,
+      discount: 0, // discount is already on the invoice; billing payments just settle the balance
       paymentMethod: method,
       reference: reference ?? idempotencyKey,
       notes: `Payment via ${method}`,
@@ -305,7 +311,15 @@ export function Billing() {
               showSuccess("QR verified by customer")
             },
             onPaymentSuccess: async (_status) => {
+              // ═══ Single-flight lock: prevent WS + polling race ═══
+              if (paymentRecordedRef.current) {
+                if (import.meta.env.DEV) console.log('[FonePay:DUPLICATE_BLOCKED]', 'WS success handler, payment already recorded')
+                return
+              }
+              paymentRecordedRef.current = true
+
               setFonepayStep("processing")
+              // Clean up all other handlers immediately
               wsCleanupRef.current?.()
               if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
               try {
@@ -319,6 +333,7 @@ export function Billing() {
               }
             },
             onPaymentFailed: (_status) => {
+              // Never record a failed payment — just update UI state
               setFonepayStep("failed")
               setFonepayError(_status.message || "Payment failed or cancelled by user")
               wsCleanupRef.current?.()
@@ -331,9 +346,19 @@ export function Billing() {
 
       // Fallback: poll QR status every 5s if WebSocket doesn't deliver
       pollTimerRef.current = setInterval(async () => {
+        // ═══ Single-flight lock: if WS already recorded the payment, skip ═══
+        if (paymentRecordedRef.current) return
+
         try {
           const result = await checkQRStatus(prn)
           if (result.paymentStatus === 'success') {
+            // Double-check lock after async await — WS may have fired while we were polling
+            if (paymentRecordedRef.current) {
+              if (import.meta.env.DEV) console.log('[FonePay:DUPLICATE_BLOCKED]', 'Poll success handler, payment already recorded')
+              return
+            }
+            paymentRecordedRef.current = true
+
             if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null }
             wsCleanupRef.current?.()
             setFonepayStep("processing")
@@ -442,7 +467,7 @@ export function Billing() {
       subtotal,
       discount: discountAmount,
       total,
-      paymentBreakdown: payments.map(p => ({ method: p.method, amount: p.amount })),
+      paymentBreakdown: payments.map(p => ({ method: p.method, amount: p.amount, discount: p.discount })),
     }
     printService.printInvoice(printData)
     showSuccess("Receipt sent to printer")
@@ -647,6 +672,7 @@ export function Billing() {
                       id: p.id,
                       method: p.method,
                       amount: p.amount,
+                      discount: p.discount,
                       createdAt: `${p.date}T${p.time}:00`,
                       reference: '',
                     }))}
@@ -856,6 +882,7 @@ export function Billing() {
                       id: p.id,
                       method: p.method,
                       amount: p.amount,
+                      discount: p.discount,
                       createdAt: `${p.date}T${p.time}:00`,
                     }))}
                     total={total}

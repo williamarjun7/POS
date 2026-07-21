@@ -22,6 +22,7 @@ export interface Payment {
   invoiceId: string;
   batchId: string;
   amount: number;
+  discount: number;
   paymentMethod: PaymentMethod;
   reference: string;
   customerId: string;
@@ -38,6 +39,7 @@ function rowToPayment(row: PaymentRow): Payment {
     invoiceId: row.invoice_id ?? '',
     batchId: row.batch_id ?? '',
     amount: Number(row.amount),
+    discount: Number(row.discount ?? 0),
     paymentMethod: row.payment_method as PaymentMethod,
     reference: row.reference ?? '',
     customerId: row.customer_id ?? '',
@@ -50,6 +52,7 @@ function rowToPayment(row: PaymentRow): Payment {
 export interface NewPaymentData {
   invoiceId: string;
   amount: number;
+  discount?: number;
   paymentMethod: PaymentMethod;
   reference?: string;
   notes?: string;
@@ -89,6 +92,7 @@ export async function createPaymentInDb(data: NewPaymentData): Promise<Payment> 
   const safe = validateOrThrow(paymentSchemas.createPayment, {
     invoiceId: data.invoiceId,
     amount: data.amount,
+    discount: data.discount ?? 0,
     paymentMethod: data.paymentMethod,
     reference: data.reference,
     notes: data.notes,
@@ -103,6 +107,7 @@ export async function createPaymentInDb(data: NewPaymentData): Promise<Payment> 
       {
         invoice_id: safe.invoiceId,
         amount: safe.amount,
+        discount: safe.discount,
         payment_method: safe.paymentMethod,
         reference: safe.reference ?? null,
         notes: safe.notes ?? null,

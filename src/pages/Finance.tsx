@@ -137,8 +137,8 @@ export function Finance() {
   const [invoiceItemCounts, setInvoiceItemCounts] = useState<Record<string, number>>({})
   // Fetch payment methods + amounts per invoice for multi-method breakdown display
   const [invoicePaymentMethods, setInvoicePaymentMethods] = useState<Record<string, string[]>>({})
-  // Fetch payment breakdown (method + amount) per invoice for amount-per-method display
-  const [invoicePaymentBreakdowns, setInvoicePaymentBreakdowns] = useState<Record<string, Array<{ method: string; amount: number }>>>({})
+  // Fetch payment breakdown (method + amount + discount) per invoice for amount-per-method display
+  const [invoicePaymentBreakdowns, setInvoicePaymentBreakdowns] = useState<Record<string, Array<{ method: string; amount: number; discount?: number }>>>({})
   // Fetch total paid (non-credit) per invoice for Paid & Outstanding columns
   const [invoicePaidAmounts, setInvoicePaidAmounts] = useState<Record<string, number>>({})
   useEffect(() => {
@@ -157,7 +157,7 @@ export function Finance() {
         .in('invoice_id', invoiceIds),
       insforge.database
         .from('payments')
-        .select('invoice_id, payment_method, amount')
+        .select('invoice_id, payment_method, amount, discount')
         .in('invoice_id', invoiceIds)
         .not('payment_method', 'is', null),
     ]).then(([itemsResult, paymentsResult]) => {
@@ -171,15 +171,15 @@ export function Finance() {
 
       // Payment methods, breakdowns & totals per invoice
       const methods: Record<string, Set<string>> = {}
-      const breakdowns: Record<string, Array<{ method: string; amount: number }>> = {}
+      const breakdowns: Record<string, Array<{ method: string; amount: number; discount?: number }>> = {}
       const paidAmounts: Record<string, number> = {}
-      for (const row of (paymentsResult.data ?? []) as Array<{ invoice_id: string; payment_method: string; amount: number }>) {
+      for (const row of (paymentsResult.data ?? []) as Array<{ invoice_id: string; payment_method: string; amount: number; discount?: number }>) {
         if (!methods[row.invoice_id]) methods[row.invoice_id] = new Set()
         methods[row.invoice_id].add(row.payment_method)
 
-        // Store each payment with its amount for breakdown display
+        // Store each payment with its amount and discount for breakdown display
         if (!breakdowns[row.invoice_id]) breakdowns[row.invoice_id] = []
-        breakdowns[row.invoice_id].push({ method: row.payment_method, amount: Number(row.amount) })
+        breakdowns[row.invoice_id].push({ method: row.payment_method, amount: Number(row.amount), discount: row.discount ? Number(row.discount) : undefined })
 
         // Aggregate REAL MONEY only — credit is NOT payment
         if (row.payment_method !== 'credit') {

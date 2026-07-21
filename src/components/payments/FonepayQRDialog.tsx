@@ -153,7 +153,15 @@ export function FonepayQRDialog({
   }
   const timerPercent = (timeLeft / FONEPAY_CONFIG.qrTimeoutSeconds) * 100
 
-  // ─── QR Generation (mount only) ──────────────────────────
+  // ─── QR Generation (mount only, with retry for gateway warmup) ─
+  //
+  // Console logs show the FonePay gateway returns empty qrMessage on the
+  // FIRST call with a new PRN, and the actual QR on the SECOND call with
+  // that SAME PRN.  This retry loop keeps using the same PRN so the
+  // gateway session created by the first call is reused on retries.
+  //
+  // Only retries on empty QR — auth/network errors surface immediately.
+  // ────────────────────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true
 
@@ -168,53 +176,83 @@ export function FonepayQRDialog({
         return
       }
 
+      // Generate PRN ONCE — reuse across retries so the gateway session
+      // created by the first call is picked up by subsequent attempts.
       const prn = orderId || generatePRN()
-      try {
-        const data = await generateFonepayQR({
-          amount,
-          prn,
-          remarks1: `Highlands Cafe POS\n${invoiceNumber || customerName || 'POS Payment'}`,
-        })
+
+      const MAX_ATTEMPTS = 3
+      const RETRY_DELAY_MS = 1500
+
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         if (!mounted || cancelledRef.current) return
 
-        log('QR_GENERATED', { prn: prn.slice(0, 8) })
-
-        // Validate the API response has a non-empty QR message
-        if (!data.qrMessage || data.qrMessage.trim().length === 0) {
-          throw new FonepayError(
-            'Payment gateway returned an empty QR code. ' +
-              'Please check the gateway configuration and try again.',
-            'EMPTY_QR_MESSAGE',
-          )
+        if (attempt > 0) {
+          log('QR_EMPTY_RETRY', `Empty QR, retrying (${attempt}/${MAX_ATTEMPTS - 1})...`)
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
+          if (!mounted || cancelledRef.current) return
         }
 
-        const qrImage = generateQRDataURL(data.qrMessage, {
-          width: 320,
-          margin: 2,
-          color: { dark: '#000000', light: '#ffffff' },
-        })
+        try {
+          const data = await generateFonepayQR({
+            amount,
+            prn,
+            remarks1: `Highlands Cafe POS\n${invoiceNumber || customerName || 'POS Payment'}`,
+          })
+          if (!mounted || cancelledRef.current) return
 
-        setQrData({
-          qrImage,
-          paymentRefId: prn,
-          wsUrl: data.thirdpartyQrWebSocketUrl,
-        })
-        setStatus('displaying')
-      } catch (err) {
-        if (!mounted) return
-        log('QR_GENERATION_ERROR', err)
-        setErrorMessage(
-          err instanceof FonepayError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : 'Failed to generate QR code',
-        )
-        setStatus('error')
+          log('QR_GENERATED', { prn: prn.slice(0, 8), attempt })
+
+          // Empty QR → retry with same PRN (gateway needs warmup call)
+          if (!data.qrMessage || data.qrMessage.trim().length === 0) {
+            if (attempt < MAX_ATTEMPTS - 1) continue
+            throw new FonepayError(
+              'Payment gateway returned an empty QR code. ' +
+                'Please check the gateway configuration and try again.',
+              'EMPTY_QR_MESSAGE',
+            )
+          }
+
+          // Success — render QR
+          const qrImage = generateQRDataURL(data.qrMessage, {
+            width: 320,
+            margin: 2,
+            color: { dark: '#000000', light: '#ffffff' },
+          })
+
+          setQrData({
+            qrImage,
+            paymentRefId: prn,
+            wsUrl: data.thirdpartyQrWebSocketUrl,
+          })
+          setStatus('displaying')
+          return
+        } catch (err) {
+          if (!mounted) return
+          // Auth/network errors surface immediately — don't retry
+          if (err instanceof FonepayError &&
+              (err.code === 'FUNCTION_ERROR' || err.code === 'FONEPAY_API_ERROR')) {
+            throw err
+          }
+          // For unknown errors, try the last attempt before surfacing
+          if (attempt >= MAX_ATTEMPTS - 1) throw err
+          log('QR_RETRY_ERROR', `Attempt ${attempt} failed, retrying...`, err)
+        }
       }
     }
 
-    initQR()
+    initQR().catch((err) => {
+      if (!mounted) return
+      log('QR_GENERATION_ERROR', err)
+      setErrorMessage(
+        err instanceof FonepayError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to generate QR code',
+      )
+      setStatus('error')
+    })
+
     return () => {
       mounted = false
     }
@@ -435,7 +473,6 @@ export function FonepayQRDialog({
       })
       log('REGENERATE_QR_GENERATED', { prn: prn.slice(0, 8) })
 
-      // Validate the API response has a non-empty QR message
       if (!data.qrMessage || data.qrMessage.trim().length === 0) {
         throw new FonepayError(
           'Payment gateway returned an empty QR code. ' +

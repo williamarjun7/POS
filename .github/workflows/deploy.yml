@@ -26,6 +26,7 @@ jobs:
             sudo npm install
             sudo VITE_INSFORGE_URL='${{ secrets.VITE_INSFORGE_URL }}' \
               VITE_INSFORGE_ANON_KEY='${{ secrets.VITE_INSFORGE_ANON_KEY }}' \
+              VITE_INSFORGE_FUNCTIONS_URL='${{ secrets.VITE_INSFORGE_FUNCTIONS_URL }}' \
               VITE_FONEPAY_MERCHANT_CODE='${{ secrets.VITE_FONEPAY_MERCHANT_CODE }}' \
               VITE_FONEPAY_API_BASE_URL='${{ secrets.VITE_FONEPAY_API_BASE_URL }}' \
               npx vite build

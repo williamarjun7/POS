@@ -680,7 +680,16 @@ export function POS() {
     let newUnpaidTotal = 0;
 
     const subtotal = tableBatches.reduce((s, b) => s + b.subtotal, 0) + newSubtotal;
-    const discount = 0;
+    const discount = paymentResult.discount ?? 0;
+    const paidSubtotal = paymentResult.paidSubtotal ?? subtotal;
+
+    // Detect split payment: only a subset of billable items are being paid.
+    // Split payments create separate invoices — they don't merge into existing ones.
+    const totalUnpaidCount = tableBatches.reduce((count, b) => {
+      if (!isBatchBillable(b)) return count;
+      return count + b.items.filter(bi => isItemBillable(bi)).length;
+    }, 0) + newCartItems.filter(ci => ci.status !== 'voided').length;
+    const isSplitPayment = paidItemIds.size > 0 && paidItemIds.size < totalUnpaidCount;
 
     // 1. Build invoice items from cart and previous batches
     const invoiceItemsList = [
@@ -701,13 +710,15 @@ export function POS() {
     ];
 
     // ═══ Look up existing partial/credit invoice ═══
-    // If there's already an invoice for these batches (from a prior split/partial payment),
-    // UPDATE it instead of creating a duplicate. This is the single reason remaining-balance
-    // payments were creating phantom second invoices.
+    // If there's already an invoice for these batches (from a prior partial payment),
+    // UPDATE it instead of creating a duplicate.
+    // NOTE: SKIP for split payments — each split gets its OWN separate invoice with
+    // correct subtotal, discount, and total. Merging splits into one invoice corrupts
+    // the discount accumulation and outstanding calculation.
     // NOTE: Must be declared BEFORE invoice number generation below, which references it.
     let existingInvoice: InvoiceRow | null = null
     const batchIdArray = tableBatches.map(b => b.id)
-    if (batchIdArray.length > 0) {
+    if (batchIdArray.length > 0 && !isSplitPayment) {
       const { data: matchedInvoices } = await insforge.database
         .from('invoices')
         .select('*')
@@ -797,6 +808,9 @@ export function POS() {
         logPayment('invoice_updated', { invoiceId, invoiceNumber: invNumber, newStatus: invoiceStatus });
       } else {
         // ── CREATE new invoice ──
+        // For split payments, the invoice subtotal is only the paid items' subtotal
+        // (not the full batch subtotal), and discount is the per-split discount.
+        const invoiceSubtotal = isSplitPayment ? paidSubtotal : subtotal;
         const { data: invData, error: invError } = await insforge.database
           .from('invoices')
           .insert([{
@@ -804,7 +818,7 @@ export function POS() {
             customer_name: paymentResult.creditCustomerName || customerName || 'Walk-in',
             table_id: selectedTableId,
             order_batch_ids: tableBatches.map(b => b.id),
-            subtotal,
+            subtotal: invoiceSubtotal,
             tax: 0,
             discount,
             total: invoiceTotal,
@@ -845,6 +859,7 @@ export function POS() {
           invoiceId: invoiceId!,
           batchId: tableBatches[0]?.id ?? null,
           amount: paymentAmount,
+          discount: paymentResult.discount ?? 0,
           paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash') as PaymentMethod,
           reference: idempotencyKey,
           notes: `Payment via ${paymentResult.paymentMethod ?? 'cash'}`,

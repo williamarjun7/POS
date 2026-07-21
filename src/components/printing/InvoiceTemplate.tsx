@@ -40,7 +40,7 @@ export interface InvoiceData {
   discount?: number;
   total: number;
   /** Optional payment breakdown shown on the receipt */
-  paymentBreakdown?: Array<{ method: string; amount: number }>;
+  paymentBreakdown?: Array<{ method: string; amount: number; discount?: number }>;
 }
 
 /* ─── Helpers ───────────────────────────────────────────────── */
@@ -158,9 +158,20 @@ export function InvoiceTemplate({ invoice }: InvoiceTemplateProps) {
           <Divider />
           <div style={{ marginBottom: '1mm' }}>
             <div style={{ fontWeight: 700, fontSize: '9px', marginBottom: '0.5mm' }}>Payment</div>
-            {invoice.paymentBreakdown.map((pmt, i) => (
-              <Row key={i} label={pmt.method} value={fmt(pmt.amount)} />
-            ))}
+            {invoice.paymentBreakdown.map((pmt, i) => {
+              const hasDiscount = (pmt.discount ?? 0) > 0;
+              return (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', marginBottom: '0.5mm' }}>
+                  <span>{pmt.method}</span>
+                  <span style={{ display: 'flex', gap: '2mm' }}>
+                    {hasDiscount && (
+                      <span style={{ color: '#c00', fontSize: '8px' }}>-{fmt(pmt.discount)}</span>
+                    )}
+                    <span>{fmt(pmt.amount)}</span>
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </>
       )}

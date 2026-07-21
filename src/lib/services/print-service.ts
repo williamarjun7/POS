@@ -51,6 +51,8 @@ urlToDataUri(reviewUrl).then((uri) => { reviewDataUri = uri; });
 
 /* ─── Render helpers ────────────────────────────────────────── */
 
+import { getPaymentMethodLabel } from '@/lib/payment-methods'
+
 const fmt = (amount: number) =>
   amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -85,6 +87,7 @@ function itemsToHtml(items: InvoiceData['items']): string {
 
 function renderInvoiceHtml(invoice: InvoiceData): string {
   const hasDiscount = (invoice.discount ?? 0) > 0;
+  const hasPaymentBreakdown = invoice.paymentBreakdown && invoice.paymentBreakdown.length > 0;
   const showLogo = getPrintSettings().showLogo;
   const imgLogo = logoDataUri || logoUrl;
   const imgReview = reviewDataUri || reviewUrl;
@@ -134,6 +137,19 @@ function renderInvoiceHtml(invoice: InvoiceData): string {
   </div>
   ${itemsToHtml(invoice.items)}
   <div class="divider"></div>
+  ${hasPaymentBreakdown ? `
+  <div style="margin-bottom:1mm">
+    <div style="font-weight:700;font-size:9px;margin-bottom:0.5mm">Payment</div>
+    ${(invoice.paymentBreakdown ?? []).map(p => {
+      const label = getPaymentMethodLabel(p.method);
+      const hasPmtDiscount = (p.discount ?? 0) > 0;
+      return `<div class="row" style="font-size:9px;margin-bottom:0.5mm">
+        <span>${escapeHtml(label)}</span>
+        <span>${hasPmtDiscount ? `<span style="color:#c00;font-size:8px">-${fmt(p.discount)} </span>` : ''}${fmt(p.amount)}</span>
+      </div>`;
+    }).join('')}
+  </div>
+  <div class="divider"></div>` : ''}
   <div class="totals">
     <div class="row"><span>Subtotal</span><span>${fmt(invoice.subtotal)}</span></div>
     ${hasDiscount ? `<div class="row"><span>Discount</span><span style="color:#c00">-${fmt(invoice.discount ?? 0)}</span></div>` : ''}

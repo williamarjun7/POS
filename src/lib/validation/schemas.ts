@@ -52,6 +52,7 @@ export const paymentSchemas = {
   createPayment: z.object({
     invoiceId: uuid,
     amount: monetaryAmount,
+    discount: nonNegativeNumber.default(0),
     paymentMethod: dbPaymentMethod,
     reference: referenceString,
     notes: optionalSafeString,

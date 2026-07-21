@@ -208,6 +208,7 @@ export interface PaymentRow {
   invoice_id: string | null
   batch_id: string | null
   amount: number
+  discount: number
   payment_method: 'cash' | 'fonepay' | 'credit' | 'reception_qr'
   reference: string | null
   customer_id: string | null

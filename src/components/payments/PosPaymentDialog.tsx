@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';import { ArrowLeft, Banknote, QrCode, CreditCard, Percent, DollarSign,
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';import { ArrowLeft, Banknote, QrCode, CreditCard, Percent, DollarSign,
   Users, Smartphone, Check, AlertCircle, Loader2, Printer, User,
 } from 'lucide-react';
 
@@ -23,6 +23,11 @@ function buildPrintData(inv: InvoiceData): PrintInvoiceData {
     subtotal: inv.subtotal,
     discount: inv.discount || undefined,
     total: inv.grandTotal,
+    paymentBreakdown: [{
+      method: inv.paymentMethod,
+      amount: inv.paidAmount,
+      discount: inv.discount,
+    }],
   }
 }
 import { showSuccess, showError } from '@/components/ui/toast';
@@ -75,8 +80,15 @@ export interface PaymentResult {
   creditCustomerName?: string;
   /** The full invoice total (NOT the partial amount).
    *  For partial payments, this is the TOTAL bill amount.
-   *  For full payments, same as grandTotal. */
+   *  For full payments, same as grandTotal.
+   *  For split payments, same as grandTotal (the split amount). */
   invoiceTotal?: number;
+  /** The discount applied to THIS transaction (not the full invoice).
+   *  For split payments, this is the per-split discount. */
+  discount?: number;
+  /** The subtotal of items being paid in THIS transaction.
+   *  For split payments, this is only the selected items' subtotal. */
+  paidSubtotal?: number;
 }
 
 interface PosPaymentDialogProps {
@@ -161,11 +173,6 @@ export function PosPaymentDialog({
   const items = useMemo(() => unpaidItems ?? [], [unpaidItems]);
 
   const subtotal = useMemo(() => items.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0), [items]);
-  const discountAmount = useMemo(() => {
-    if (discountType === 'percentage') return subtotal * (Math.min(discountValue, 100) / 100);
-    return Math.min(discountValue, subtotal);
-  }, [subtotal, discountType, discountValue]);
-  const grandTotal = Math.max(0, subtotal - discountAmount);
 
   // ─── Split context: effective items / amounts ────────────
   // NOTE: Declared before cash/effective derivations so they can reference them.
@@ -179,13 +186,29 @@ export function PosPaymentDialog({
     () => effectiveItems.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0),
     [effectiveItems],
   )
-  const effectiveGrandTotal = useMemo(
-    () => splitContext
-      ? Math.max(0, effectiveSubtotal - discountAmount * (effectiveSubtotal / (subtotal || 1)))
-      : grandTotal,
-    [effectiveSubtotal, discountAmount, subtotal, grandTotal, splitContext],
-  )
   const isSplitMode = !!splitContext
+
+  // In split mode, discount applies to selected items directly (not proportionally scaled).
+  const discountBasis = isSplitMode ? effectiveSubtotal : subtotal;
+  const discountAmount = useMemo(() => {
+    if (discountType === 'percentage') return discountBasis * (Math.min(discountValue, 100) / 100);
+    return Math.min(discountValue, discountBasis);
+  }, [discountBasis, discountType, discountValue]);
+  const grandTotal = Math.max(0, subtotal - discountAmount);
+  const effectiveGrandTotal = Math.max(0, effectiveSubtotal - discountAmount);
+
+  // ─── Fonepay-specific memoized values (declared unconditionally for hooks rules) ──
+  // CRITICAL: FonepayQRDialog's useEffect depends on `amount`. If `amount` changes
+  // identity between renders (even with same numeric value), the effect re-runs and
+  // starts a second QR generation session. These memos prevent that.
+  const fonepayEffectiveAmount = useMemo(
+    () => partialContext?.partialAmount ?? (isSplitMode ? effectiveGrandTotal : grandTotal),
+    [partialContext?.partialAmount, isSplitMode, effectiveGrandTotal, grandTotal],
+  )
+  const fonepayCancelCallback = useCallback(() => {
+    setPartialContext(null)
+    setView('review')
+  }, []) // No deps — stable identity across renders
 
   const cashReceivedNum = Number(cashReceived) || 0;
   const effectiveCashTotal = partialContext?.partialAmount ?? (isSplitMode ? effectiveGrandTotal : grandTotal);
@@ -269,13 +292,17 @@ export function PosPaymentDialog({
       paidItemIds: inv.paidItemIds ?? items.map(i => i.id),
       grandTotal: effectiveGrandTotal,
       paidAmount: inv.paidAmount,
+      discount: inv.discount,
+      paidSubtotal: inv.subtotal,
       creditAmount: extraCredit?.amount ?? (inv.paymentMethod.startsWith('Credit') ? effectiveGrandTotal - inv.paidAmount : undefined),
       creditCustomerName: extraCredit?.customerName ?? (() => {
         // Extract customer name from "Credit (Name)" or "Partial (X) + Credit (Name)"
         const match = inv.paymentMethod.match(/Credit\s*\(([^)]+)\)/);
         return match ? match[1] : undefined;
       })(),
-      invoiceTotal: grandTotal,
+      // For split payments, invoiceTotal is the split amount (same as grandTotal).
+      // For full/partial payments, invoiceTotal is the full bill grandTotal.
+      invoiceTotal: inv.paidItemIds ? effectiveGrandTotal : grandTotal,
     };
   };
 
@@ -300,7 +327,7 @@ export function PosPaymentDialog({
       ? selectedItems.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0)
       : subtotal;
     const splitGrandTotal = isSplit
-      ? Math.max(0, splitSubtotal - discountAmount * (splitSubtotal / subtotal || 0))
+      ? Math.max(0, splitSubtotal - discountAmount)
       : grandTotal;
     const invoiceItems = selectedItems.map(i => ({ name: i.item_name, quantity: i.quantity, unitPrice: Number(i.unit_price) }));
     // Use the pre-generated Fonepay invoice number if available so the
@@ -312,7 +339,7 @@ export function PosPaymentDialog({
       tableNumber: selectedTableId,
       items: invoiceItems,
       subtotal: splitSubtotal,
-      discount: isSplit ? Math.round(discountAmount * (splitSubtotal / subtotal || 0)) : discountAmount,
+      discount: isSplit ? discountAmount : discountAmount,
       grandTotal: splitGrandTotal,
       // For credit methods (e.g. 'Credit (John)'), no cash was actually received —
       // paidAmount is 0 and the full amount is tracked via creditAmount.
@@ -404,15 +431,14 @@ export function PosPaymentDialog({
 
       const selectedItems = items.filter(i => ids.includes(i.id));
       const splitSubtotal = selectedItems.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0);
-      const splitDiscount = Math.round(discountAmount * (splitSubtotal / (subtotal || 1)))
-      const splitGrandTotalAmount = Math.max(0, splitSubtotal - splitDiscount)
+      const splitGrandTotalAmount = Math.max(0, splitSubtotal - discountAmount)
 
       const inv: InvoiceData = {
         invoiceNumber: invNum,
         tableNumber: selectedTableId,
         items: selectedItems.map(i => ({ name: i.item_name, quantity: i.quantity, unitPrice: Number(i.unit_price) })),
         subtotal: splitSubtotal,
-        discount: splitDiscount,
+        discount: discountAmount,
         grandTotal: splitGrandTotalAmount,
         paidAmount: splitGrandTotalAmount,
         paymentMethod: 'fonepay',
@@ -619,6 +645,11 @@ export function PosPaymentDialog({
         subtotal: completedInvoice.subtotal,
         discount: completedInvoice.discount || undefined,
         total: completedInvoice.grandTotal,
+        paymentBreakdown: [{
+          method: completedInvoice.paymentMethod,
+          amount: completedInvoice.paidAmount,
+          discount: completedInvoice.discount,
+        }],
       }
       printService.printInvoice(printData)
       showSuccess('Invoice sent to printer')
@@ -640,7 +671,7 @@ export function PosPaymentDialog({
           <DollarSign className="h-3 w-3" /> Amount
         </button>
       </div>
-      <div className="flex items-center gap-2">          <input type="number" min="0" max={discountType === 'percentage' ? 100 : subtotal} value={discountValue || ''}
+      <div className="flex items-center gap-2">          <input type="number" min="0" max={discountType === 'percentage' ? 100 : discountBasis} value={discountValue || ''}
             onChange={e => setDiscountValue(Math.max(0, Number(e.target.value)))}
             onWheel={e => (e.target as HTMLInputElement).blur()}
             placeholder={discountType === 'percentage' ? '0%' : 'Rs. 0'}
@@ -681,8 +712,8 @@ export function PosPaymentDialog({
         </div>
         {discountAmount > 0 && (
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Discount{isSplitMode ? ' (proportional)' : ''}</span>
-            <span className="text-destructive tabular-nums">-{npr(discountAmount * (displaySub / (subtotal || 1)))}</span>
+            <span className="text-muted-foreground">Discount{isSplitMode ? ' (split)' : ''}</span>
+            <span className="text-destructive tabular-nums">-{npr(discountAmount)}</span>
           </div>
         )}
         <hr className="border-border" />
@@ -981,11 +1012,11 @@ export function PosPaymentDialog({
           <div className="p-4 border-t space-y-2 shrink-0">
             <button onClick={() => setCashReceived(String(effectiveCashTotal))}
               className="w-full h-12 rounded-xl border-2 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-semibold hover:bg-emerald-50 dark:hover:bg-emerald-950/20 transition-all">
-              {partialContext ? `Pay ${npr(effectiveCashTotal)}` : `Exact Amount &mdash; ${npr(effectiveCashTotal)}`}
+              {partialContext ? `Pay ${npr(effectiveCashTotal)}` : `Exact Amount — ${npr(effectiveCashTotal)}`}
             </button>
             <button onClick={handleCashPay} disabled={submittingPayment || cashReceivedNum <= 0 || !isCashSufficient}
               className="w-full h-14 rounded-xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm">
-              {submittingPayment ? <><Loader2 className="h-5 w-5 animate-spin" /> Processing...</> : <><Check className="h-5 w-5" /> {partialContext ? `Receive ${npr(cashReceivedNum || effectiveCashTotal)}` : `Receive Payment &mdash; ${npr(cashReceivedNum || effectiveCashTotal)}`}</>}
+              {submittingPayment ? <><Loader2 className="h-5 w-5 animate-spin" /> Processing...</> : <><Check className="h-5 w-5" /> {partialContext ? `Receive ${npr(cashReceivedNum || effectiveCashTotal)}` : `Receive Payment — ${npr(cashReceivedNum || effectiveCashTotal)}`}</>}
             </button>
           </div>
         </div>
@@ -1156,11 +1187,19 @@ export function PosPaymentDialog({
 
   // ─── View: Fonepay ───
   if (view === 'fonepay') {
-    const effectiveAmount = partialContext?.partialAmount ?? (isSplitMode ? effectiveGrandTotal : grandTotal)
     const year = new Date().getFullYear();
     const invNum = `INV-${year}-${String(Date.now()).slice(-6)}`;
     if (!fonepayInvoiceNumberRef.current) fonepayInvoiceNumberRef.current = invNum;
-    return <FonepayQRDialog orderId={orderId} amount={effectiveAmount} onSuccess={handleFonepaySuccess} onCancel={() => { setPartialContext(null); setView('review'); }} customerName={initialCustomerName} invoiceNumber={invNum} />;
+    return (
+      <FonepayQRDialog
+        orderId={orderId}
+        amount={fonepayEffectiveAmount}
+        onSuccess={handleFonepaySuccess}
+        onCancel={fonepayCancelCallback}
+        customerName={initialCustomerName}
+        invoiceNumber={invNum}
+      />
+    );
   }
 
   // ─── View: Split ───
