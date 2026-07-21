@@ -18,6 +18,8 @@ SERVER_DIR="/var/www/pos"
 echo "Deploying to $SERVER_USER@$SERVER_HOST:$SERVER_DIR"
 
 # ── Deploy via SSH ────────────────────────────────────────────
+# Unquoted heredoc so VITE_* vars expand locally before sending.
+# Server-side expressions (date, git log) are escaped with \$.
 ssh "$SERVER_USER@$SERVER_HOST" << DEPLOY
 set -euo pipefail
 
