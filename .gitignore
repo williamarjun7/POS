@@ -47,6 +47,7 @@ secrets.*
 
 # Local config files
 *.local
+opencode.json
 
 # Windows artifacts
 nul
