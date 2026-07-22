@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/PageHeader"
 import { Icon } from "@/components/icon-mapper"
 import { BaseModal } from "@/components/ui/modal"
 import {
-  FormInput, FormSelect, FormTextarea, FormActions, FormToggle,
+  FormInput, FormSelect, FormActions, FormToggle,
 } from "@/components/ui/form-field"
 import { cn } from "@/lib/utils"
 import { showSuccess, showError } from "@/components/ui/toast"
@@ -180,7 +180,6 @@ function ItemFormModal({
   onClose: () => void
 }) {
   const [name, setName] = useState(item?.name ?? "")
-  const [description, setDescription] = useState(item?.description ?? "")
   const [price, setPrice] = useState(String(item?.price ?? ""))
   const [category, setCategory] = useState(item?.category ?? categories[0]?.id ?? "")
   const [available, setAvailable] = useState(item?.available ?? true)
@@ -196,7 +195,6 @@ function ItemFormModal({
     prevOpen.current = isOpen
     if (isOpen) {
       setName(item?.name ?? "")
-      setDescription(item?.description ?? "")
       setPrice(String(item?.price ?? ""))
       setCategory(item?.category ?? categories[0]?.id ?? "")
       setAvailable(item?.available ?? true)
@@ -239,7 +237,7 @@ function ItemFormModal({
       // 3. Call parent save
       onSave({
         id: item?.id ?? `m${Date.now()}`,
-        name, description, price: Number(price),
+        name, price: Number(price),
         category, available, image: imageUrl || undefined, tags: [],
       })
       onClose()
@@ -267,7 +265,6 @@ function ItemFormModal({
         </div>
 
         <FormInput label="Item Name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Cappuccino" disabled={uploading} />
-        <FormTextarea label="Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="Brief description" disabled={uploading} />
         <div className="grid grid-cols-2 gap-3">
           <FormInput label="Price (Rs.)" required type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} placeholder="250" disabled={uploading} />
           <FormSelect label="Category" value={category} onChange={(e) => setCategory(e.target.value)} options={categories.map((c) => ({ value: c.id, label: c.name }))} disabled={uploading} />
@@ -391,11 +388,6 @@ function MenuCard({ item, onEdit, onDelete, onToggle }: {
           <Toggle checked={item.available} onChange={onToggle} />
         </div>
 
-        {/* ── Description ── */}
-        {item.description && (
-          <p className="text-xs text-muted-foreground/50 mt-1 leading-relaxed line-clamp-1">{item.description}</p>
-        )}
-
         {/* ── Spacer pushes footer down ── */}
         <div className="flex-1 min-h-[4px]" />
 
@@ -450,7 +442,6 @@ function MenuRow({ item, onEdit, onDelete, onToggle, index }: {
       {/* Name */}
       <div className="min-w-0">
         <span className="text-sm font-medium text-foreground">{item.name}</span>
-        {item.description && <p className="truncate text-xs text-muted-foreground/50 mt-0.5">{item.description}</p>}
       </div>
 
       {/* Category */}
@@ -529,8 +520,16 @@ export function Menu() {
         await createItem.mutateAsync(payload)
         showSuccess("Item added")
       }
-    } catch {
-      showError("Failed to save item")
+    } catch (err) {
+      const errObj = err as Record<string, unknown>;
+      const errCode = errObj?.code;
+      const errMsg = err instanceof Error ? err.message : (errObj?.message as string) ?? 'Unknown error';
+      if (import.meta.env.DEV) console.error('[MENU] Failed to save item:', errCode, errMsg, err);
+      if (errCode === '23505') {
+        showError(`An item named "${data.name}" already exists in this category.`);
+      } else {
+        showError(`Failed to save item: ${errMsg}`);
+      }
     }
   }
 
@@ -568,7 +567,7 @@ export function Menu() {
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
-      r = r.filter((i) => i.name.toLowerCase().includes(q) || i.description.toLowerCase().includes(q))
+      r = r.filter((i) => i.name.toLowerCase().includes(q))
     }
     if (filterType === "available") r = r.filter((i) => i.available)
     if (filterType === "unavailable") r = r.filter((i) => !i.available)

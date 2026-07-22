@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react"
+import { useNavigate } from "react-router-dom"
 import { motion, AnimatePresence } from "framer-motion"
 import { PageTransition } from "@/components/ui/PageTransition"
 import { Button } from "@/components/ui/button"
@@ -22,7 +23,7 @@ import {
   useCreateMaintenanceRequest,
   useUpdateRoomStatus,
 } from "../lib/hooks"
-import { updateTable as updateTableOp } from "../lib/db/operations"
+import { updateTable as updateTableOp, releaseTable as releaseTableOp } from "../lib/db/operations"
 import { useQueryClient } from '@tanstack/react-query'
 import { invalidateOperationsData } from '../lib/hooks/useOperationsData'
 import {
@@ -704,8 +705,11 @@ function TablesView({ tables }: { tables: any[] }) {
         break
       case "release":
         try {
-          // 1. Update the database
-          await updateTableOp({ id: table.id, status: 'available' })
+          // 1. Cancel active batches + reset table via the single-table release function.
+          //    This properly cancels all non-paid, non-cancelled order batches and their
+          //    items, then resets the table to 'available' — preventing fetchDashboardTables()
+          //    from still deriving the status as 'occupied' from leftover batches.
+          await releaseTableOp({ id: table.id })
 
           // 2. Immediately update local cache so the UI reflects the change right away
           queryClient.setQueryData(['operations', 'all'], (old: any) => {
@@ -917,7 +921,7 @@ export function Operations() {
   const [lastUpdated, setLastUpdated] = useState(new Date().toISOString())
   const [refreshing, setRefreshing] = useState(false)
 
-  const { data, isLoading } = useOperationsData()
+  const { data, isLoading, refetch } = useOperationsData()
 
   // Memoize extracted data to give useMemo stable references — prevents
   // unnecessary recalculations when this component re-renders.
@@ -932,9 +936,9 @@ export function Operations() {
   }, [roomList.length, tableList.length, hkTasks.length, mtRequests.length])
 
   const handleRefresh = useCallback(() => {
-    setRefreshing(true)
-    setTimeout(() => setRefreshing(false), 1000)
-  }, [])
+    setRefreshing(true);
+    refetch().finally(() => setRefreshing(false));
+  }, [refetch])
 
   const roomStats: RoomStats = useMemo(() => {
     const stats = {

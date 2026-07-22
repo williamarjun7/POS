@@ -124,6 +124,14 @@ function todayDateString(): string {
   return new Date().toISOString().split('T')[0]
 }
 
+/** Today's date in Kathmandu timezone (Asia/Kathmandu = UTC+5:45).
+ *  This is the "business day" date used for invoices/payments created
+ *  in Nepal. In UTC terms, a Kathmandu day runs 18:15Z → 18:14Z next day.
+ */
+function kathmanduTodayString(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kathmandu' })
+}
+
 function daysAgoDate(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() - days)
@@ -136,6 +144,27 @@ function toISOStart(dateStr: string): string {
 
 function toISOEnd(dateStr: string): string {
   return `${dateStr}T23:59:59Z`
+}
+
+/**
+ * Convert a Kathmandu-local date string to the correct UTC range boundaries.
+ * Kathmandu is UTC+5:45, so:
+ *   Start of 2026-07-23 in Kathmandu = 2026-07-22T18:15:00Z
+ *   End   of 2026-07-23 in Kathmandu = 2026-07-23T18:14:59Z
+ *
+ * The DateFilterBar returns dates in Kathmandu timezone (via kathmanduDateString),
+ * but the DB stores created_at in UTC. Without this conversion, invoices created
+ * between 18:15-23:59 UTC on the previous day (which are already "today" in Nepal)
+ * are silently excluded from date-filtered queries.
+ */
+function kathmanduStartUTC(kathmanduDate: string): string {
+  // Parse "2026-07-23T00:00:00+05:45" as Kathmandu midnight → JS converts to UTC
+  return new Date(kathmanduDate + 'T00:00:00+05:45').toISOString()
+}
+
+function kathmanduEndUTC(kathmanduDate: string): string {
+  // Parse "2026-07-23T23:59:59+05:45" as end of day in Kathmandu → JS converts to UTC
+  return new Date(kathmanduDate + 'T23:59:59+05:45').toISOString()
 }
 
 // ─── 1. Financial Summary (from ALL records, not paginated) ──
@@ -216,10 +245,13 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
   const creditOutstanding = outstandingReceivables
 
   // 5. Today's collected (REAL MONEY only — credit is NOT payment)
+  // "Today" means the current business day in Kathmandu timezone.
+  const kathmanduToday = kathmanduTodayString()
+  const todayUTCStart = kathmanduStartUTC(kathmanduToday)
   const { data: todayPayments } = await insforge.database
     .from('payments')
     .select('amount, payment_method')
-    .gte('created_at', `${today}T00:00:00Z`)
+    .gte('created_at', todayUTCStart)
 
   const collectedToday = ((todayPayments ?? []) as Array<{ amount: number; payment_method: string | null }>)
     .filter(p => p.payment_method !== 'credit')
@@ -229,13 +261,13 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
   const { data: todayInvoices } = await insforge.database
     .from('invoices')
     .select('total, status')
-    .gte('created_at', `${today}T00:00:00Z`)
+    .gte('created_at', todayUTCStart)
 
   const salesToday = ((todayInvoices ?? []) as Array<{ total: number; status: string }>)
     .filter(inv => inv.status !== 'cancelled')
     .reduce((sum, inv) => sum + Number(inv.total), 0)
 
-  // 7. Today's expenses
+  // 7. Today's expenses — expense.date is a date column, no timezone
   const { data: todayExpData } = await insforge.database
     .from('expenses')
     .select('amount')
@@ -283,12 +315,15 @@ async function fetchFinancialSummaryForRange(
   let periodTotalInvoices = 0
 
   if (hasRange) {
+    // Convert Kathmandu-timezone date range to UTC for DB query
+    const utcStart = kathmanduStartUTC(startDate)
+    const utcEnd = kathmanduEndUTC(endDate)
     // Invoices in range
     const { data: invData } = await insforge.database
       .from('invoices')
       .select('total, status')
-      .gte('created_at', toISOStart(startDate))
-      .lte('created_at', toISOEnd(endDate))
+      .gte('created_at', utcStart)
+      .lte('created_at', utcEnd)
     const invs = (invData ?? []) as Array<{ total: number; status: string }>
     periodTotalInvoices = invs.length
     for (const inv of invs) {
@@ -302,7 +337,7 @@ async function fetchFinancialSummaryForRange(
       }
     }
 
-    // Expenses in range
+    // Expenses in range — expense.date is a date (no timezone), so starts/ends are fine
     const { data: expData } = await insforge.database
       .from('expenses')
       .select('amount')
@@ -347,11 +382,13 @@ async function fetchFinancialSummaryForRange(
   // Reuses the outstandingReceivables value computed above from invoices.
   const creditOutstanding = outstandingReceivables
 
-  // Today's REAL payments collected (credit is NOT payment)
+  // "Today" means the current business day in Kathmandu timezone.
+  const kathmanduToday = kathmanduTodayString()
+  const todayUTCStart = kathmanduStartUTC(kathmanduToday)
   const { data: todayPays } = await insforge.database
     .from('payments')
     .select('amount, payment_method')
-    .gte('created_at', toISOStart(today))
+    .gte('created_at', todayUTCStart)
   const collectedToday = ((todayPays ?? []) as Array<{ amount: number; payment_method: string | null }>)
     .filter(p => p.payment_method !== 'credit')
     .reduce((s, p) => s + Number(p.amount), 0)
@@ -360,7 +397,7 @@ async function fetchFinancialSummaryForRange(
   const { data: todayInvs } = await insforge.database
     .from('invoices')
     .select('total, status')
-    .gte('created_at', toISOStart(today))
+    .gte('created_at', todayUTCStart)
   const salesToday = ((todayInvs ?? []) as Array<{ total: number; status: string }>)
     .filter(inv => inv.status !== 'cancelled')
     .reduce((s, inv) => s + Number(inv.total), 0)
@@ -413,12 +450,15 @@ async function fetchRevenueByDay(
   const start = startDate ?? daysAgoDate(days)
   const end = endDate ?? todayDateString()
 
+  // Convert Kathmandu-timezone date range to UTC for DB query
+  const utcStart = kathmanduStartUTC(start)
+  const utcEnd = kathmanduEndUTC(end)
   // Fetch invoices in range
   const { data: invoicesData } = await insforge.database
     .from('invoices')
     .select('total, created_at, status')
-    .gte('created_at', `${start}T00:00:00Z`)
-    .lte('created_at', `${end}T23:59:59Z`)
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
 
   const invoices = (invoicesData ?? []) as Array<{ total: number; created_at: string; status: string }>
 
@@ -478,11 +518,14 @@ async function fetchPaymentMethodBreakdown(
   const start = startDate ?? daysAgoDate(30)
   const end = endDate ?? todayDateString()
 
+  // Convert Kathmandu-timezone date range to UTC for DB query
+  const utcStart = kathmanduStartUTC(start)
+  const utcEnd = kathmanduEndUTC(end)
   const q = insforge.database
     .from('payments')
     .select('payment_method, amount')
-    .gte('created_at', `${start}T00:00:00Z`)
-    .lte('created_at', `${end}T23:59:59Z`)
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
 
   const { data: paymentsData } = await q
   const payments = (paymentsData ?? []) as Array<{

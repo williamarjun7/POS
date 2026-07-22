@@ -54,6 +54,7 @@ const Finance = lazy(() => import('@/pages/Finance').then(m => ({ default: m.Fin
 const OperationalAnalytics = lazy(() => import('@/pages/OperationalAnalytics').then(m => ({ default: m.default })))
 const Reports = lazy(() => import('@/pages/Reports').then(m => ({ default: m.Reports })))
 const Admin = lazy(() => import('@/pages/Admin').then(m => ({ default: m.Admin })))
+const PaymentRecovery = lazy(() => import('@/pages/PaymentRecovery').then(m => ({ default: m.PaymentRecovery })))
 const PrintSettingsPage = lazy(() => import('@/pages/PrintSettings').then(m => ({ default: m.PrintSettingsPage })))
 const Profile = lazy(() => import('@/pages/Profile').then(m => ({ default: m.Profile })))
 const Billing = lazy(() => import('@/pages/Billing').then(m => ({ default: m.Billing })))
@@ -114,6 +115,41 @@ function AuthAwareRealtimeSync() {
       unsubWs()
       unsubPoll()
     }
+  }, [isReady])
+
+  return null
+}
+
+/**
+ * Runs payment recovery on startup — finds any pending confirmed payments
+ * that were interrupted by a browser crash, network timeout, or temporary
+ * backend failure, and resumes processing them.
+ *
+ * Only runs once per browser session (guarded by sessionStorage flag).
+ */
+function StartupPaymentRecovery() {
+  const { isReady } = useAuth()
+
+  useEffect(() => {
+    if (!isReady) return
+
+    let cancelled = false
+
+    const run = async () => {
+      try {
+        const { runStartupRecoveryOnce } = await import('@/lib/services/payment-recovery')
+        if (cancelled) return
+        const result = await runStartupRecoveryOnce()
+        if (result && import.meta.env.DEV) {
+          console.log('[STARTUP_RECOVERY]', result.summary)
+        }
+      } catch {
+        // Non-critical — recovery failures must never break the app
+      }
+    }
+
+    run()
+    return () => { cancelled = true }
   }, [isReady])
 
   return null
@@ -181,6 +217,7 @@ export default function App() {
       <ThemeProvider>          <AuthProvider>
             <AuthAwareSessionTimeout />
             <AuthAwareRealtimeSync />
+            <StartupPaymentRecovery />
             <PrintSettingsProvider>
             <ToastProvider>
             <BrowserRouter>
@@ -291,6 +328,11 @@ export default function App() {
                 <Route path="admin" element={
                   <AuthorizedRoute permission="users.manage" showAccessDenied>
                     <LazyRoute><Admin /></LazyRoute>
+                  </AuthorizedRoute>
+                } />
+                <Route path="payment-recovery" element={
+                  <AuthorizedRoute permission="finance.manage" showAccessDenied>
+                    <LazyRoute><PaymentRecovery /></LazyRoute>
                   </AuthorizedRoute>
                 } />
                 <Route path="print-settings" element={

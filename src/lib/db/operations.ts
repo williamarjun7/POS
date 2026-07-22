@@ -447,6 +447,67 @@ export async function releaseAllTables(): Promise<{ success: boolean }> {
   return { success: true }
 }
 
+/**
+ * Release a single table: cancel all active (non-paid, non-cancelled) order batches
+ * for the given table, mark their pending items as cancelled, and reset the table's
+ * status to 'available'.
+ *
+ * This is the single-table equivalent of releaseAllTables(). Without cancelling the
+ * batches, the Dashboard's fetchDashboardTables() would still derive the table status
+ * as 'occupied' from the existence of active batches.
+ */
+export async function releaseTable(params: {
+  id: string
+}): Promise<{ success: boolean }> {
+  // 1. Find all active (non-paid, non-cancelled) batches for this table
+  const { data: activeBatches } = await insforge.database
+    .from('order_batches')
+    .select('id')
+    .eq('table_id', params.id)
+    .not('status', 'in', '(paid,cancelled)')
+
+  const batchIds = (activeBatches ?? []).map(b => (b as { id: string }).id)
+
+  if (batchIds.length > 0) {
+    // 2. Cancel all pending items in these batches
+    const { error: itemError } = await insforge.database
+      .from('order_batch_items')
+      .update({ status: 'cancelled' })
+      .in('batch_id', batchIds)
+      .in('status', ['pending'])
+
+    if (itemError) throw itemError
+
+    // 3. Cancel the batches themselves — this also triggers the
+    //    auto_close_table_session trigger via order_batches UPDATE
+    const { error: batchError } = await insforge.database
+      .from('order_batches')
+      .update({ status: 'cancelled' })
+      .eq('table_id', params.id)
+      .not('status', 'in', '(paid,cancelled)')
+
+    if (batchError) throw batchError
+  }
+
+  // 4. Reset table to available
+  const { error: tableError } = await insforge.database
+    .from('restaurant_tables')
+    .update({ status: 'available' })
+    .eq('id', params.id)
+
+  if (tableError) throw tableError
+
+  // 5. Try to close the table session manually as a safety net
+  //    (the trigger should handle it, but calling the RPC ensures closure)
+  try {
+    await insforge.database.rpc('close_table_session', { p_table_id: params.id })
+  } catch {
+    // Non-critical — trigger may have already closed it
+  }
+
+  return { success: true }
+}
+
 // ─── Table CRUD ────────────────────────────────────────────────
 
 export async function createTable(params: {

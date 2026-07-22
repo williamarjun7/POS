@@ -59,6 +59,8 @@ interface OrderItem {
 
 interface InvoiceData {
   invoiceNumber: string;
+  /** Customer name carried through from POS state */
+  customerName?: string;
   tableNumber: string | null;
   items: Array<{ name?: string; quantity: number; unitPrice?: number }>;
   subtotal: number;
@@ -71,6 +73,8 @@ interface InvoiceData {
 }
 
 export interface PaymentResult {
+  /** Customer name (carried through from POS/Dialog to RPC) */
+  customerName?: string;
   invoiceNumber?: string;
   paymentMethod?: string;
   paidItemIds: string[];
@@ -87,7 +91,7 @@ export interface PaymentResult {
    *  For split payments, this is the per-split discount. */
   discount?: number;
   /** The subtotal of items being paid in THIS transaction.
-   *  For split payments, this is only the selected items' subtotal. */
+   *  For split payments, this is the selected items' subtotal. */
   paidSubtotal?: number;
 }
 
@@ -168,9 +172,17 @@ export function PosPaymentDialog({
   const [pendingPartialCredit, setPendingPartialCredit] = useState<{ amount: number; method: string; shouldPrint: boolean } | null>(null);
   const fonepayInvoiceNumberRef = useRef<string | null>(null);
 
-  // ─── Items — computed unconditionally (before early return) ────
+  // ─── Items — SNAPSHOTTED on mount (before early return) ─────
   // NOTE: MUST be declared before any hook/derivation that references it.
-  const items = useMemo(() => unpaidItems ?? [], [unpaidItems]);
+  //
+  // We snapshot unpaidItems on mount to prevent a race condition where
+  // realtime polling updates tableBatches → changes allUnpaidItemsForPayment
+  // → changes this prop → re-derives subtotal/grandTotal → causes the
+  // zero-amount guard to fire even though the bill had items when opened.
+  //
+  // The items you see when the dialog opens are the items you pay for.
+  const [snapshotItems] = useState(unpaidItems);
+  const items = useMemo(() => snapshotItems ?? [], [snapshotItems]);
 
   const subtotal = useMemo(() => items.reduce((s, i) => s + Number(i.unit_price) * i.quantity, 0), [items]);
 
@@ -285,6 +297,7 @@ export function PosPaymentDialog({
     // inv.paidAmount because paidAmount may be 0 for credit payments.
     const effectiveGrandTotal = inv.paidItemIds ? inv.grandTotal : grandTotal;
     return {
+      customerName: inv.customerName ?? selectedCustomer?.name ?? initialCustomerName,
       invoiceNumber: inv.invoiceNumber,
       paymentMethod: inv.paymentMethod,
       // Use the invoice's paidItemIds if provided (for split/partial payments),
@@ -312,6 +325,11 @@ export function PosPaymentDialog({
 
     // Guard against zero-amount payments — the database rejects them
     const effectiveAmount = amount ?? grandTotal;
+    if (import.meta.env.DEV) {
+      console.log('[POS:simulatePayment]', JSON.stringify({
+        method, amount, grandTotal, effectiveAmount, subtotal, discountAmount, itemsCount: items.length,
+      }));
+    }
     if (!effectiveAmount || effectiveAmount <= 0) {
       showError('Cannot process a zero-amount payment. Check the items and discount.');
       return;
@@ -448,8 +466,8 @@ export function PosPaymentDialog({
       const result = getPaymentResult(inv)
       printService.printInvoice(buildPrintData(inv))
       showSuccess('Invoice sent to printer')
+      // Don't call onClose — parent POS.tsx handles navigation after RPC succeeds.
       safeComplete(inv.invoiceNumber, result)
-      onClose?.()
       return
     }
 
@@ -496,12 +514,12 @@ export function PosPaymentDialog({
 
     const result = getPaymentResult(inv);
 
-    // Print + close in sequence (print before onComplete to ensure
+    // Print + safeComplete (print before onComplete to ensure
     // the dialog stays mounted for the iframe-based print)
     printService.printInvoice(buildPrintData(inv))
     showSuccess('Invoice sent to printer')
+    // Don't call onClose — parent POS.tsx handles navigation after RPC succeeds.
     safeComplete(inv.invoiceNumber, result)
-    onClose?.()
   };
 
   /**
@@ -656,6 +674,21 @@ export function PosPaymentDialog({
     }
 
     onClose?.()
+  };
+
+  // ─── Assign customer for partial credit (fires safeComplete, then parent navigates) ───
+  const handleAssignCreditAndComplete = () => {
+    if (!selectedCustomer || !completedInvoice || !pendingPartialCredit) return;
+    const creditInfo = { amount: pendingPartialCredit.amount, customerName: selectedCustomer.name };
+    const result = getPaymentResult(completedInvoice, creditInfo);
+    safeComplete(completedInvoice.invoiceNumber, result);
+
+    if (pendingPartialCredit.shouldPrint) {
+      printService.printInvoice(buildPrintData(completedInvoice));
+      showSuccess('Invoice sent to printer');
+    }
+    setPendingPartialCredit(null);
+    onClose?.();
   };
 
   const renderDiscountSection = () => (
@@ -1051,19 +1084,6 @@ export function PosPaymentDialog({
   // ─── View: Deferred Customer Assignment ───
   // Shown after a partial payment succeeds when credit is needed but no customer was set.
   if (view === 'partial_customer') {
-    const handleAssignCredit = () => {
-      if (!selectedCustomer || !completedInvoice || !pendingPartialCredit) return;
-      const creditInfo = { amount: pendingPartialCredit.amount, customerName: selectedCustomer.name };
-      const result = getPaymentResult(completedInvoice, creditInfo);
-      safeComplete(completedInvoice.invoiceNumber, result);
-
-      if (pendingPartialCredit.shouldPrint) {
-        printService.printInvoice(buildPrintData(completedInvoice));
-        showSuccess('Invoice sent to printer');
-      }
-      setPendingPartialCredit(null);
-      onClose?.();
-    };
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
@@ -1154,7 +1174,7 @@ export function PosPaymentDialog({
               <div className="flex justify-between"><span className="text-muted-foreground">Outstanding Credit</span><span className="font-semibold text-amber-600">{npr(pendingPartialCredit?.amount ?? 0)}</span></div>
             </div>
             <button
-              onClick={handleAssignCredit}
+              onClick={handleAssignCreditAndComplete}
               disabled={!selectedCustomer}
               className="w-full h-14 rounded-xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm"
             >

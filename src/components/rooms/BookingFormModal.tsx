@@ -136,6 +136,8 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
         specialRequests: notes.trim() || undefined,
         adults,
         children,
+        idType: idType || undefined,
+        idNumber: idNumber || undefined,
       });
 
       const roomStatus = isBookMode ? 'occupied' : 'reserved';

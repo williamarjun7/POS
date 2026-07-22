@@ -144,7 +144,6 @@ export function FonepayQRDialog({
   const successHandledRef = useRef(false)
   /** Already expired — don't start new polling if component re-renders */
   const expiredRef = useRef(false)
-  const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
@@ -178,19 +177,13 @@ export function FonepayQRDialog({
 
       // Generate PRN ONCE — reuse across retries so the gateway session
       // created by the first call is picked up by subsequent attempts.
-      const prn = orderId || generatePRN()
+      // PRN MUST be a UUID-format string — the Fonepay API rejects non-UUID values.
+      const prn = generatePRN()
 
-      const MAX_ATTEMPTS = 3
-      const RETRY_DELAY_MS = 1500
+      const MAX_ATTEMPTS = 5
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         if (!mounted || cancelledRef.current) return
-
-        if (attempt > 0) {
-          log('QR_EMPTY_RETRY', `Empty QR, retrying (${attempt}/${MAX_ATTEMPTS - 1})...`)
-          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
-          if (!mounted || cancelledRef.current) return
-        }
 
         try {
           const data = await generateFonepayQR({
@@ -202,12 +195,14 @@ export function FonepayQRDialog({
 
           log('QR_GENERATED', { prn: prn.slice(0, 8), attempt })
 
-          // Empty QR → retry with same PRN (gateway needs warmup call)
+          // Empty QR → retry with same PRN (gateway needs warmup call).
+          // Retries are back-to-back with no delay — the first call creates
+          // the gateway session, subsequent calls reuse it.
           if (!data.qrMessage || data.qrMessage.trim().length === 0) {
             if (attempt < MAX_ATTEMPTS - 1) continue
             throw new FonepayError(
-              'Payment gateway returned an empty QR code. ' +
-                'Please check the gateway configuration and try again.',
+              'Payment gateway is not responding. ' +
+                'Please try again or choose another payment method.',
               'EMPTY_QR_MESSAGE',
             )
           }
@@ -280,16 +275,7 @@ export function FonepayQRDialog({
     }
 
     setStatus('success')
-
-    // Brief success animation, then hand off to parent
-    successTimeoutRef.current = setTimeout(() => {
-      successTimeoutRef.current = null
-      if (!cancelledRef.current) {
-        log('ON_SUCCESS_CALLED', 'Handing off to parent')
-        onSuccess()
-      }
-    }, 600)
-  }, [onSuccess])
+  }, []) // stable identity — never re-creates
 
   // ─── Polling + WebSocket (started when QR displays) ─────
   useEffect(() => {
@@ -385,11 +371,6 @@ export function FonepayQRDialog({
     return () => {
       activePolling = false
       pollAbortRef.current?.abort()
-      // Cancel any pending success timeout
-      if (successTimeoutRef.current) {
-        clearTimeout(successTimeoutRef.current)
-        successTimeoutRef.current = null
-      }
       wsCleanupRef.current?.()
       wsCleanupRef.current = null
     }
@@ -424,15 +405,25 @@ export function FonepayQRDialog({
     }
   }, [status === 'success']) // only re-create when exiting success state
 
+  // ─── Fire onSuccess after success animation (separate effect, not clobbered by polling cleanup) ──
+  useEffect(() => {
+    if (status !== 'success') return
+
+    const timer = setTimeout(() => {
+      if (!cancelledRef.current) {
+        log('ON_SUCCESS_CALLED', 'Handing off to parent')
+        onSuccess()
+      }
+    }, 600)
+
+    return () => clearTimeout(timer)
+  }, [status, onSuccess])
+
   // ─── Callbacks ───────────────────────────────────────────
   const handleCancel = useCallback(() => {
     log('CANCEL', 'User closed payment dialog')
     cancelledRef.current = true
     if (countdownRef.current) clearInterval(countdownRef.current)
-    if (successTimeoutRef.current) {
-      clearTimeout(successTimeoutRef.current)
-      successTimeoutRef.current = null
-    }
     pollAbortRef.current?.abort()
     wsCleanupRef.current?.()
     wsCleanupRef.current = null
@@ -447,10 +438,6 @@ export function FonepayQRDialog({
     wsCleanupRef.current?.()
     wsCleanupRef.current = null
     if (countdownRef.current) clearInterval(countdownRef.current)
-    if (successTimeoutRef.current) {
-      clearTimeout(successTimeoutRef.current)
-      successTimeoutRef.current = null
-    }
 
     cancelledRef.current = false
     successHandledRef.current = false

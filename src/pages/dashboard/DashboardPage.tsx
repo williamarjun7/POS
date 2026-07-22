@@ -36,7 +36,6 @@ import {
   useDashboardTables,
   useRooms,
   useCheckIn,
-  useCheckOut,
   useUpdateRoomStatus,
 } from '../../lib/hooks';
 import { insforge } from '../../lib/services/auth-service';
@@ -81,7 +80,6 @@ export default function DashboardPage() {
 
   const { activeBookings, cancelBooking } = useBookings();
   const checkIn = useCheckIn();
-  const checkOut = useCheckOut();
   const updateStatus = useUpdateRoomStatus();
 
   const [showBookingForm, setShowBookingForm] = useState(false);
@@ -213,7 +211,7 @@ export default function DashboardPage() {
   ), [dashboardTables]);
 
   const occupiedTables = useMemo(() => sortedTables.filter(
-    (t) => t.status !== 'available' && t.status !== 'free'
+    (t) => t.status === 'occupied'
   ).length, [sortedTables]);
   const totalTables = useMemo(() => sortedTables.length, [sortedTables]);
 
@@ -359,19 +357,11 @@ export default function DashboardPage() {
 
   const executeCheckOut = useCallback(async () => {
     if (!confirmAction?.booking || !user) return;
-    try {
-      await checkOut.mutateAsync({
-        p_booking_id: confirmAction.booking.id,
-        p_user_id: user.id,
-        p_idempotency_key: `checkout:${confirmAction.booking.id}:${getTimestamp()}`,
-      });
-      setPostCheckoutRoom(confirmAction.room ?? null);
-      setPostCheckoutBooking(confirmAction.booking);
-      setConfirmAction(null);
-    } catch (err) {
-      showError((err as Error)?.message || 'Check-out failed');
-    }
-  }, [confirmAction, user, checkOut]);
+    // Use the full checkout workflow with payment via RoomCheckoutDialog.
+    // Navigate to the Operations page which has the proper checkout flow.
+    navigate(`/operations?room=${confirmAction.room?.id}`);
+    setConfirmAction(null);
+  }, [confirmAction, navigate]);
 
   const executePostCheckout = useCallback(async (target: 'available' | 'cleaning' | 'maintenance') => {
     if (!postCheckoutRoom) return;

@@ -23,6 +23,8 @@ import { createPaymentInDb } from "@/lib/services/payment-service"
 import { logActivitySafe } from "@/lib/services/activity-log-service"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { toPaymentMethodKey } from "@/lib/payment-methods"
+import { savePendingPayment, completePendingPayment } from "@/lib/services/pending-payment-store"
+import { trackPaymentEvent } from "@/lib/services/payment-monitoring"
 import type { Room } from "@/types"
 import type { Booking } from "@/lib/services/booking-service"
 import {
@@ -222,6 +224,34 @@ export function RoomCheckoutDialog({
   // ── Process Checkout ─────────────────────────────────
   const handleCheckout = useCallback(async () => {
     setIsProcessing(true)
+
+    // ═══ Recovery persistence: save pending payment context ═══
+    // This ensures that if the browser crashes or network fails during checkout,
+    // the payment can be recovered automatically on next startup.
+    const paymentRef = `CHK-${crypto.randomUUID()}`
+    try {
+      await savePendingPayment({
+        invoiceNumber: undefined,
+        customerName: guestName,
+        tableId: '',
+        subtotal,
+        discount: discountAmount,
+        total: grandTotal,
+        invoiceStatus: 'paid',
+        paymentMethod: toPaymentMethodKey(paymentMethod),
+        paidAmount: grandTotal,
+        paymentReference: paymentRef,
+        userId: null,
+        paidItemIds: [],
+        itemPaidStatus: 'paid',
+        batchIds: orderBatches.map(b => b.id),
+        orderBatchIds: orderBatches.map(b => b.id),
+        notes: `Room checkout ${roomNum} via ${paymentMethod}`,
+      }, 'room_checkout')
+    } catch {
+      // Persistence failure is non-critical for room checkout
+    }
+
     try {
       // 1. Generate invoice number
       const invNumber = await getNextInvoiceNumber()
@@ -314,8 +344,11 @@ export function RoomCheckoutDialog({
         await insforge.database
           .from("order_batch_items")
           .update({ status: "paid" })
-          .in("batch_id", batchIds)
-          .not("status", "in", "(cancelled,voided)")
+        .in("batch_id", batchIds)
+        .not("status", "in", "(cancelled,voided)")
+
+      // ── Recovery cleanup ────────────────────────────────
+      await completePendingPayment(paymentRef).catch(() => {})
       }
 
       // 7. Update booking to checked_out

@@ -38,6 +38,8 @@ export interface Booking {
   specialRequests: string;
   adults: number;
   children: number;
+  idType?: string;
+  idNumber?: string;
   createdAt: string;
 }
 
@@ -63,6 +65,8 @@ function rowToBooking(row: BookingRow): Booking {
     specialRequests: row.special_requests ?? '',
     adults: row.adults ?? 1,
     children: row.children ?? 0,
+    idType: row.id_type ?? undefined,
+    idNumber: row.id_number ?? undefined,
     createdAt: row.created_at,
   };
 }
@@ -82,6 +86,8 @@ export interface NewBookingData {
   specialRequests?: string;
   adults?: number;
   children?: number;
+  idType?: string;
+  idNumber?: string;
 }
 
 /* ─── Business rules ──────────────────────────────────────── */
@@ -138,6 +144,8 @@ async function createBookingInDb(data: NewBookingData): Promise<Booking> {
         special_requests: data.specialRequests ?? null,
         adults: data.adults ?? 1,
         children: data.children ?? 0,
+        id_type: data.idType ?? null,
+        id_number: data.idNumber ?? null,
         payment_status: data.paidAmount && data.paidAmount > 0 ? 'partial' : 'pending',
       },
     ])
@@ -242,6 +250,8 @@ async function updateBookingInDb(id: string, data: Partial<NewBookingData>): Pro
   if (data.specialRequests !== undefined) payload.special_requests = data.specialRequests;
   if (data.adults !== undefined) payload.adults = data.adults;
   if (data.children !== undefined) payload.children = data.children;
+  if (data.idType !== undefined) payload.id_type = data.idType;
+  if (data.idNumber !== undefined) payload.id_number = data.idNumber;
 
   const { data: updated, error } = await insforge.database
     .from('bookings')

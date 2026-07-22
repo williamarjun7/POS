@@ -76,7 +76,7 @@ async function createExpenseInDb(data: NewExpenseData): Promise<Expense> {
         description: data.description,
         category: data.category,
         amount: data.amount,
-        // date is NOT sent — database uses DEFAULT CURRENT_DATE
+        date: new Date().toISOString().slice(0, 10), // Explicit date — avoid relying on DB DEFAULT
         payment_method: data.paymentMethod,
         notes: data.notes ?? null,
         recorded_by: data.recordedBy ?? null,

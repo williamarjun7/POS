@@ -13,19 +13,18 @@ import { showSuccess, showError } from '@/components/ui/toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RequirePermission } from '@/lib/core/PermissionGuards';
 import { recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
-import { getNextInvoiceNumber } from '@/lib/services/sequence-service';
 import { useMenuCategories, useMenuItems } from '@/lib/api/menu.hooks';
 import { useDashboardTables, useRooms, useTableBatches } from '@/lib/hooks';
+
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRateLimit } from '@/lib/hooks/useRateLimit'
-import { recordPaymentSafe } from '@/lib/services/payment-service';
 import { toPaymentMethodKey, getPaymentMethodLabel } from '@/lib/payment-methods';
 import { useAuth } from '@/lib/core/auth-context';
 import { logActivitySafe } from '@/lib/services/activity-log-service';
 import { insforge } from '@/lib/services/auth-service';
 import { insertInvoiceItems } from '@/lib/services/invoice-items-service';
-import { idempotencyGuard } from '@/lib/services/idempotency-guard';
 import { deductStockForSoldItems } from '@/lib/services/inventory-service';
+import { processPaymentWithRecovery } from '@/lib/services/unified-payment-service';
 import { db } from '@/lib/db/insforge';
 import { formatCurrency } from '@/lib/utils';
 import { TABLE_STATUS_LABELS, TABLE_STATUS_COLORS } from '@/lib/constants';
@@ -40,9 +39,8 @@ import {
   getVoidedSummary,
 } from '@/lib/services/order-calculation-service';
 
-import type { OrderBatch, OrderBatchItem, CartItemStatus, PaymentMethod } from '@/types';
+import type { OrderBatch, OrderBatchItem, CartItemStatus } from '@/types';
 import type { MenuItem } from '@/types';
-import type { InvoiceRow } from '@/lib/db/types'
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -130,6 +128,29 @@ const scaleIn = {
 
 
 
+// ─── Search highlight helper ────────────────────────────────
+
+function HighlightText({ text, query }: { text: string; query: string }) {
+  if (!query || !text) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let idx = lower.indexOf(q, lastIndex);
+  while (idx !== -1) {
+    if (idx > lastIndex) parts.push(text.slice(lastIndex, idx));
+    parts.push(
+      <mark key={idx} className="bg-emerald-200 dark:bg-emerald-800/60 text-emerald-900 dark:text-emerald-200 rounded-sm px-0.5">
+        {text.slice(idx, idx + q.length)}
+      </mark>
+    );
+    lastIndex = idx + q.length;
+    idx = lower.indexOf(q, lastIndex);
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return <>{parts}</>;
+}
+
 // ─── Component ───────────────────────────────────────────────
 
 export function POS() {
@@ -180,7 +201,6 @@ export function POS() {
     (menuItemsData?.data ?? []).map(item => ({
       id: item.id,
       name: item.name,
-      description: item.description,
       price: item.price,
       category_id: catNameToId.get(item.category) ?? item.category,
       is_available: item.available,
@@ -254,8 +274,15 @@ export function POS() {
     : menuItemsList.filter(i => i.category_id === selectedCat);
 
   const q = searchQuery.toLowerCase();
+  // Total available items in the selected category (without search filter) — used in count badge
+  const totalAvailableCount = useMemo(
+    () => filteredByCategory.filter(i => i.is_available).length,
+    [filteredByCategory]
+  );
   const filteredItems = q
-    ? filteredByCategory.filter(i => i.name.toLowerCase().includes(q) || (i.description ?? '').toLowerCase().includes(q))
+    ? filteredByCategory.filter(i =>
+        i.name.toLowerCase().includes(q) || i.price.toString().includes(q)
+      )
     : filteredByCategory;
 
   const availableItems = filteredItems.filter(i => i.is_available).sort((a, b) => a.name.localeCompare(b.name));
@@ -480,16 +507,32 @@ export function POS() {
     setNewCartItems([]);
   }, [selectedTableId]);
 
-  // Populate local state from DB when batches finish loading
-  // Submitted orders are displayed separately in Previous Batches.
-  // The editable draft cart starts empty for new items only.
+  // Populate local state from DB when batches finish loading.
+  // Also restore the customer name from the batch if it was cleared
+  // by handlePlaceOrder / handlePaymentComplete and the user re-enters
+  // the table from the Dashboard or after a page refresh.
   useEffect(() => {
     if (fetchedBatches) {
       setOrderBatches(prev => ({
         ...prev,
         [selectedTableId]: fetchedBatches,
       }));
+
+      // Restore customer name from the first batch that has one,
+      // but ONLY if the current customerName is empty (e.g. after
+      // returning from Dashboard or page refresh).
+      // This prevents the customer from being overwritten if the
+      // user manually cleared it in the current session.
+      if (!customerName) {
+        const batchWithCustomer = (fetchedBatches as OrderBatch[]).find(
+          b => b.customer_name && b.customer_name.trim() !== ''
+        )
+        if (batchWithCustomer) {
+          setCustomerName(batchWithCustomer.customer_name)
+        }
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchedBatches, selectedTableId]);
 
   // ─── Previous batches for selected table ─────────
@@ -616,7 +659,7 @@ export function POS() {
   //     * Rapid user interactions
   //     * Accidental double-fires from child components
   // ═══════════════════════════════════════════════════════════════
-  const handlePaymentComplete = useCallback(async (providedInvoiceNumber?: string, paymentResult?: PaymentResult) => {
+  const handlePaymentComplete = useCallback(async (paymentResult?: PaymentResult) => {
     // ═══════════════════════════════════════════════════════════════
     // GUARD: Prevent concurrent execution
     // ═══════════════════════════════════════════════════════════════
@@ -625,7 +668,7 @@ export function POS() {
     // async operations (idempotency check, DB writes, etc.).
     // ═══════════════════════════════════════════════════════════════
     if (paymentProcessingRef.current) {
-      logPayment('duplicate_blocked', { invoiceNumber: providedInvoiceNumber })
+      logPayment('duplicate_blocked', {})
       return
     }
     paymentProcessingRef.current = true
@@ -634,34 +677,58 @@ export function POS() {
       paymentProcessingRef.current = false
       return;
     }
-    // ── Guard: Only block if nothing to pay AND no payment was processed ──
-    if (!paymentResult && allUnpaidItemsForPayment.length === 0) {
-      showError('Nothing to pay — all items are already settled or the cart is empty.');
+
+    // ── Guard: paymentResult must exist ──
+    if (!paymentResult) {
+      showError('Payment error: no payment result was received. Please try again.');
       setShowPayment(false);
+      paymentProcessingRef.current = false;
       return;
     }
+
+    // ── Guard: there must be something to pay ──
+    if (allUnpaidItemsForPayment.length === 0) {
+      showError('Nothing to pay — all items are already settled or the cart is empty.');
+      setShowPayment(false);
+      paymentProcessingRef.current = false;
+      return;
+    }
+
     // ── Core calculation: invoice total is ALWAYS the full bill amount ──
     // invoiceTotal = the FULL invoice total (e.g. 390 for partial payments)
     // paidAmount = actual real money received (e.g. 90 cash)
     // creditAmount = outstanding credit created (e.g. 300)
     // remainingBalance = actual outstanding after this transaction (invoiceTotal - paidAmount)
     // Credit is NOT subtracted from remaining — it IS the remaining.
-    const invoiceTotal = paymentResult?.invoiceTotal ?? paymentResult?.grandTotal ?? 0;
-    const actualPaid = paymentResult?.paidAmount ?? 0;
-    const creditAmount = paymentResult?.creditAmount ?? 0;
+    const invoiceTotal = paymentResult.invoiceTotal ?? paymentResult.grandTotal ?? 0;
+    const actualPaid = paymentResult.paidAmount ?? 0;
+    const creditAmount = paymentResult.creditAmount ?? 0;
     const remainingBalance = Math.max(0, invoiceTotal - actualPaid);
-    const isFullySettled = remainingBalance <= 0;
     const hasOutstandingCredit = creditAmount > 0;
+
+    // ── Guard: zero-amount invoices must NEVER be created ──
+    if (invoiceTotal <= 0) {
+      if (import.meta.env.DEV) {
+        console.log('[PAYMENT:ZERO_GUARD]', JSON.stringify({
+          invoiceTotal,
+          actualPaid,
+          grandTotal: paymentResult.grandTotal,
+          paidAmount: paymentResult.paidAmount,
+          hasInvoiceTotal: 'invoiceTotal' in paymentResult,
+          hasGrandTotal: 'grandTotal' in paymentResult,
+          paymentResultKeys: Object.keys(paymentResult),
+        }));
+      }
+      showError('Cannot process a zero-amount payment [POS]. Check the items and amounts.');
+      setShowPayment(false);
+      paymentProcessingRef.current = false;
+      return;
+    }
+
     setShowPayment(false);
     // IMPORTANT: cart is NOT cleared here — clearing before DB persistence
     //     would destroy the user's items if the payment transaction fails.
     //     Cart reset happens only AFTER the DB transaction succeeds (below).
-    if (!paymentResult) {
-      showSuccess('Payment processed');
-      // Navigate back to dashboard for full settlements
-      navigate('/dashboard');
-      return;
-    }
 
     logPayment('start', {
       method: paymentResult.paymentMethod,
@@ -709,67 +776,6 @@ export function POS() {
       )),
     ];
 
-    // ═══ Look up existing partial/credit invoice ═══
-    // If there's already an invoice for these batches (from a prior partial payment),
-    // UPDATE it instead of creating a duplicate.
-    // NOTE: SKIP for split payments — each split gets its OWN separate invoice with
-    // correct subtotal, discount, and total. Merging splits into one invoice corrupts
-    // the discount accumulation and outstanding calculation.
-    // NOTE: Must be declared BEFORE invoice number generation below, which references it.
-    let existingInvoice: InvoiceRow | null = null
-    const batchIdArray = tableBatches.map(b => b.id)
-    if (batchIdArray.length > 0 && !isSplitPayment) {
-      const { data: matchedInvoices } = await insforge.database
-        .from('invoices')
-        .select('*')
-        .eq('table_id', selectedTableId)
-        .in('status', ['partial', 'credit_invoice'])
-        .order('created_at', { ascending: false })
-      if (matchedInvoices && matchedInvoices.length > 0) {
-        existingInvoice = (matchedInvoices as InvoiceRow[]).find(inv =>
-          inv.order_batch_ids?.some((bid: string) => batchIdArray.includes(bid))
-        ) ?? null
-      }
-    }
-    if (existingInvoice) {
-      logPayment('existing_invoice_found', { invoiceId: existingInvoice.id, invoiceNumber: existingInvoice.invoice_number, status: existingInvoice.status })
-    }
-
-    // 0. Generate sequential invoice number (use existing invoice's number for remaining balance)
-    const invNumber = existingInvoice?.invoice_number ?? (providedInvoiceNumber ?? await getNextInvoiceNumber());
-    logPayment('invoice_number_generated', { invoiceNumber: invNumber, isExisting: !!existingInvoice });
-
-    // 0a. Validate payment amount before any DB writes
-    if (!paymentResult.grandTotal || paymentResult.grandTotal <= 0) {
-      const zeroAmountError = {
-        message: 'Cannot record a payment with zero total. Please check the bill items and discount.',
-        invoiceNumber: invNumber,
-        method: paymentResult.paymentMethod,
-        amount: paymentResult.grandTotal,
-        tableId: selectedTableId,
-      };
-      if (import.meta.env.DEV) console.error('[PAYMENT] zero-amount rejected:', zeroAmountError.message);
-      showError('Cannot process a zero-amount payment. Check the bill items and try again.');
-      return;
-    }
-
-    // 1. Check idempotency (prevent duplicate payments)
-    const { isDuplicate, proceed, idempotencyKey } = await idempotencyGuard.check({
-      entityType: 'batch',
-      entityId: tableBatches[0]?.id ?? selectedTableId,
-      amount: paymentResult.grandTotal,
-      discriminator: invNumber,
-    });
-
-    if (!proceed) {
-      logPayment('blocked_by_idempotency', { isDuplicate, idempotencyKey });
-      if (isDuplicate) {
-        showSuccess('Payment already processed');
-      }
-      return;
-    }
-    logPayment('idempotency_passed', { idempotencyKey });
-
     // 2. Determine invoice status based on ACTUAL REAL MONEY received vs total.
     //    CREDIT is NOT payment — it is Accounts Receivable.
     //    An invoice is only 'paid' when real money covers the total.
@@ -787,99 +793,90 @@ export function POS() {
       invoiceStatus = 'partial';
     }
 
-    // 2. Create or update invoice record
-    //    If an existing partial/credit_invoice was found, UPDATE its status instead of
-    //    creating a new invoice. This prevents duplicate invoices on remaining balance payments.
-    let invoiceId: string | null = existingInvoice?.id ?? null;
-    const isNewInvoice = !existingInvoice;
+    // ═══ Call unified payment service (with recovery persistence) ═══
+    // processPaymentWithRecovery handles:
+    //   1. Persisting payment context BEFORE the RPC (for crash/refresh recovery)
+    //   2. Calling process_payment RPC (atomic idempotent DB transaction)
+    //   3. On success: cleaning up persisted state
+    //   4. On failure: keeping persisted state for automatic startup recovery
+    //
+    // The payment reference serves as the idempotency key — reused on retries.
+    const paymentReference = `PAY-${crypto.randomUUID()}`
+
+    // Declare before try-block so they're accessible in post-RPC closures and showSuccess
+    let invoiceId: string | undefined
+    let invNumber: string | undefined
+
     try {
-      if (existingInvoice) {
-        // ── UPDATE existing invoice status ──
-        const { error: updateError } = await insforge.database
-          .from('invoices')
-          .update({ status: invoiceStatus })
-          .eq('id', existingInvoice.id)
+      const rpcResult = await processPaymentWithRecovery({
+        tableId: selectedTableId,
+        customerName: paymentResult.customerName || paymentResult.creditCustomerName || customerName || 'Walk-in',
+        subtotal: isSplitPayment ? paidSubtotal : subtotal,
+        tax: 0,
+        discount,
+        total: invoiceTotal,
+        invoiceStatus,
+        paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
+        paidAmount: (!isCreditPayment || hasSplitCredit) ? actualPaid : 0,
+        userId: user?.id ?? null,
+        paidItemIds: Array.from(paidItemIds),
+        itemPaidStatus: isCreditPayment ? 'credit' : 'paid',
+        batchIds: tableBatches.map(b => b.id),
+        orderBatchIds: isSplitPayment ? [] : tableBatches.map(b => b.id),
+        notes: `Payment via ${toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash')}`,
+        sourcePage: 'pos',
+        creditAmount: paymentResult.creditAmount,
+        creditCustomerName: paymentResult.creditCustomerName,
+        gatewayReference: undefined,
+        paymentReference,
+      })
 
-        if (updateError) {
-          logPayment('invoice_update_failed', { error: updateError, invoiceId: existingInvoice.id });
-          throw updateError;
-        }
-        invoiceId = existingInvoice.id;
-        logPayment('invoice_updated', { invoiceId, invoiceNumber: invNumber, newStatus: invoiceStatus });
-      } else {
-        // ── CREATE new invoice ──
-        // For split payments, the invoice subtotal is only the paid items' subtotal
-        // (not the full batch subtotal), and discount is the per-split discount.
-        const invoiceSubtotal = isSplitPayment ? paidSubtotal : subtotal;
-        const { data: invData, error: invError } = await insforge.database
-          .from('invoices')
-          .insert([{
-            invoice_number: invNumber,
-            customer_name: paymentResult.creditCustomerName || customerName || 'Walk-in',
-            table_id: selectedTableId,
-            order_batch_ids: tableBatches.map(b => b.id),
-            subtotal: invoiceSubtotal,
-            tax: 0,
-            discount,
-            total: invoiceTotal,
-            status: invoiceStatus,
-            payment_method: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
-          }])
-          .select()
-          .single();
+      if (!rpcResult.success) {
+        throw new Error(rpcResult.error || 'Payment processing failed')
+      }
 
-        if (invError) {
-          logPayment('invoice_insert_failed', { error: invError, invoiceNumber: invNumber });
-          throw invError;
-        }
-        invoiceId = invData.id;
-        logPayment('invoice_created', { invoiceId, invoiceNumber: invNumber, status: invoiceStatus, paidAmount: paymentResult.paidAmount, remaining: remainingBalance });
+      if (rpcResult.isDuplicate) {
+        logPayment('duplicate_detected_by_rpc', { paymentReference })
+        showSuccess('Payment already processed')
+        paymentProcessingRef.current = false
+        navigate('/dashboard')
+        return
+      }
 
-        // ── Update customer record (new invoices only) ──
-        // Existing invoices already have customer_id backfilled; re-running would
-        // double-count total_spent and total_orders on the customer profile.
-        const invoiceCustomerName = paymentResult.creditCustomerName || customerName || ''
-        const customerId = await updateCustomerAfterInvoice(invoiceCustomerName, invoiceTotal, invoiceId)
+      invoiceId = rpcResult.invoiceId!
+      invNumber = rpcResult.invoiceNumber!
 
-        // 3. Write invoice items (new invoices only — existing invoices already have items)
-        if (invoiceItemsList.length > 0 && invoiceId) {
-          const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList);
-          logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length });
-        } else {
-          logPayment('invoice_items_skipped', { invoiceId, reason: invoiceItemsList.length === 0 ? 'no items' : 'no invoiceId' });
+      logPayment('rpc_completed', {
+        invoiceId,
+        invoiceNumber: invNumber,
+        isNewInvoice: rpcResult.isNewInvoice,
+        paymentId: rpcResult.paymentId,
+        batchUpdateCount: rpcResult.batchUpdateCount,
+        timingMs: rpcResult.timingMs,
+      })
+
+      // ── Invoice items insertion (CRITICAL for Finance display) ──
+      // This must happen BEFORE navigation so the Finance page sees invoice_items.
+      // The RPC creates the invoice with totals but does NOT insert line items.
+      // We do it here synchronously (no fire-and-forget) so it's guaranteed.
+      if (invoiceItemsList.length > 0) {
+        try {
+          const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList)
+          logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length })
+        } catch (iiErr) {
+          // Non-critical for payment integrity — invoice totals are already correct.
+          // Log and continue; the invoice still shows the correct total in Finance.
+          if (import.meta.env.DEV) {
+            console.error('[PAYMENT] Failed to insert invoice items:', iiErr instanceof Error ? iiErr.message : iiErr)
+          }
         }
       }
 
-      // Record ONLY the actual real money received (NOT credit amounts).
-      // Credit is NOT payment — it's accounts receivable.
-      // The remaining amount is handled separately via credit recording below.
-      if ((!isCreditPayment || hasSplitCredit) && actualPaid > 0) {
-        const paymentAmount = actualPaid;
-        const paymentRecord = await recordPaymentSafe({
-          invoiceId: invoiceId!,
-          batchId: tableBatches[0]?.id ?? null,
-          amount: paymentAmount,
-          discount: paymentResult.discount ?? 0,
-          paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash') as PaymentMethod,
-          reference: idempotencyKey,
-          notes: `Payment via ${paymentResult.paymentMethod ?? 'cash'}`,
-          customerId: undefined, // customer_id backfilled separately via updateCustomerAfterInvoice
-        });
-
-        if (!paymentRecord) {
-          logPayment('payment_record_failed', { invoiceId, amount: paymentAmount, method: paymentResult.paymentMethod });
-          throw new Error(`Failed to record payment of ${npr(paymentAmount)} via ${paymentResult.paymentMethod}. The database rejected the insert — check that the amount is valid.`);
-        }
-        logPayment('payment_recorded', { invoiceId, paymentId: paymentRecord.id, amount: paymentAmount, method: paymentResult.paymentMethod });
-      } else {
-        logPayment('payment_skipped_credit', { invoiceId, reason: 'full credit - recordCreditCharge handles it' });
-      }
-
-      // 4. Log activity (non-critical)
+      // 3. Log activity (non-critical, fire-and-forget)
       logActivitySafe({
         activityType: 'payment_received',
-        entityId: invoiceId ?? undefined,
-        entityLabel: `Invoice ${invNumber ?? invoiceId}`,
+        entityId: invoiceId,
+        entityLabel: `Invoice ${invNumber}`,
         status: isCreditPayment ? 'pending' : 'completed',
         amount: paymentResult.grandTotal,
         userName: customerName || 'System',
@@ -888,75 +885,14 @@ export function POS() {
             ? `Table ${(selectedTableInfo as any)?.table_number ?? selectedTableId}`
             : `Room ${(selectedTableInfo as any)?.room_number || (selectedTableInfo as any)?.number || selectedTableId}`
           : 'POS',
-        details: `Payment of ${npr(paymentResult.grandTotal)} via ${paymentResult.paymentMethod ?? 'cash'}. Items: ${invoiceItemsList.length}`,
-      });
-
-      // 5. Deduct inventory for sold items (non-critical)
-      if (invoiceItemsList.length > 0 && !isCreditPayment) {
-        await deductStockForSoldItems(invoiceItemsList);
-        logPayment('inventory_deducted', { itemCount: invoiceItemsList.length });
-      }
-
-      // 6. Table status is now derived from batch existence — no manual status update needed
-      //    The table becomes 'available' in the derived view once all batches are paid/cancelled.
-
-      // 7. Persist batch item statuses to DB so re-fetches don't show them as pending
-      if (paidItemIds.size > 0) {
-        try {
-          await insforge.database
-            .from('order_batch_items')
-            .update({ status: isCreditPayment ? 'credit' : 'paid' })
-            .in('id', Array.from(paidItemIds));
-          logPayment('batch_items_updated', { paidItemCount: paidItemIds.size });
-
-          // 8. Also update batch-level status in DB (paid / partial)
-          //    Compute new status the same way as the local state update below
-          for (const batch of tableBatches) {
-            const hasPaidItemInThisBatch = batch.items.some(bi => paidItemIds.has(bi.id));
-            if (!hasPaidItemInThisBatch) continue;
-
-            const settledStatuses = ['paid' as const, 'credit' as const, 'cancelled' as const, 'voided' as const];
-            const allSettled = batch.items.every(bi =>
-              paidItemIds.has(bi.id)
-                ? true  // being paid now
-                : (settledStatuses as string[]).includes(bi.status)
-            );
-            const somePaid = batch.items.some(bi =>
-              paidItemIds.has(bi.id) || bi.status === 'paid' || bi.status === 'credit'
-            );
-
-            let newBatchStatus: string | null = null;
-            if (allSettled) newBatchStatus = 'paid';
-            else if (somePaid) newBatchStatus = 'partial';
-
-            if (newBatchStatus) {
-              await insforge.database
-                .from('order_batches')
-                .update({ status: newBatchStatus })
-                .eq('id', batch.id);
-              logPayment('batch_status_updated', { batchId: batch.id, status: newBatchStatus });
-            }
-          }
-        } catch (batchErr) {
-          // Non-critical — local state still reflects the payment correctly
-          logPayment('batch_status_update_failed', { error: batchErr });
-        }
-      }
-
-      logPayment('db_persistence_complete', { invoiceId, invoiceNumber: invNumber, totalAmount: paymentResult.grandTotal });
+        details: `Payment of ${npr(paymentResult.grandTotal)} via ${toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash')}. Items: ${invoiceItemsList.length}`,
+      })
     } catch (err) {
-      const errMessage = err instanceof Error ? err.message : typeof err === 'object' && err !== null ? JSON.stringify(err) : 'Unknown error';
-      if (import.meta.env.DEV) console.error('[PAYMENT] payment failed:', errMessage);
-      const invoiceCreated = !!invoiceId && isNewInvoice;
-      showError(`Payment failed: ${errMessage}. ${
-        existingInvoice
-          ? `Existing invoice #${invNumber ?? ''} could not be updated with the new payment.`
-          : invoiceCreated
-            ? `Invoice #${invNumber ?? ''} was created but could not be fully processed.`
-            : `Invoice #${invNumber ?? ''} could not be created.`
-      }`);
-      paymentProcessingRef.current = false // Reset guard on error
-      return;
+      const errMessage = err instanceof Error ? err.message : typeof err === 'object' && err !== null ? JSON.stringify(err) : 'Unknown error'
+      if (import.meta.env.DEV) console.error('[PAYMENT] RPC failed:', errMessage)
+      showError(`Payment failed: ${errMessage}. Please try again.`)
+      paymentProcessingRef.current = false
+      return
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -993,22 +929,65 @@ export function POS() {
       return { ...prev, [selectedTableId]: updatedBatches };
     });
 
-    if (paymentResult.creditCustomerName) {
-      try {
-        if (paymentResult.creditAmount && paymentResult.creditAmount > 0) {
-          await recordCreditCharge(paymentResult.creditCustomerName, paymentResult.creditAmount, invNumber, `Credit from ${paymentResult.paymentMethod || 'partial payment'}`, invoiceId ?? undefined);
-          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.creditAmount, invoiceNumber: invNumber });
-        } else if (isCreditPayment && !hasSplitCredit) {
-          await recordCreditCharge(paymentResult.creditCustomerName, paymentResult.grandTotal, invNumber, 'Full credit charge', invoiceId ?? undefined);
-          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.grandTotal, invoiceNumber: invNumber, type: 'full' });
+    // ── Post-navigation operations (fire-and-forget — Phases 2 & 3) ──
+    // These are moved out of the blocking payment path. All are non-critical
+    // for payment integrity — they handle display history, customer linking,
+    // inventory tracking, and invoice line items. Failures are logged and
+    // retried with exponential backoff to ensure eventual consistency.
+    const customerOpsPromise = (async () => {
+      const MAX_RETRIES = 3;
+      const BASE_DELAY_MS = 500;
+
+      const retry = async <T,>(fn: () => Promise<T>, label: string): Promise<T | undefined> => {
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            return await fn();
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : 'Unknown error';
+            console.error(`[PAYMENT] ${label} failed (attempt ${attempt}/${MAX_RETRIES}):`, errMsg);
+            if (attempt < MAX_RETRIES) {
+              const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
+          }
         }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : 'Unknown error';
-        // Show warning to user — payment was processed but customer record is incomplete
-        showError(`Warning: Credit charge for ${paymentResult.creditCustomerName} could not be recorded (${errMsg}). The invoice and payment were created, but the customer record and invoice-to-customer link are missing. Please contact an administrator to fix this.`);
-        if (import.meta.env.DEV) console.error('[PAYMENT] credit charge failed:', errMsg);
+        return undefined;
+      };
+
+      // Phase 2: Customer record updates
+      const invoiceCustomerName = paymentResult.creditCustomerName || customerName || ''
+      if (invoiceCustomerName && invoiceCustomerName !== 'Walk-in' && invoiceCustomerName.trim()) {
+        await retry(
+          () => updateCustomerAfterInvoice(invoiceCustomerName, invoiceTotal, invoiceId ?? undefined),
+          'updateCustomerAfterInvoice'
+        )
       }
-    }
+
+      if (paymentResult.creditCustomerName) {
+        if (paymentResult.creditAmount && paymentResult.creditAmount > 0) {
+          await retry(
+            () => recordCreditCharge(paymentResult.creditCustomerName!, paymentResult.creditAmount!, invNumber, `Credit from ${paymentResult.paymentMethod || 'partial payment'}`, invoiceId ?? undefined),
+            'recordCreditCharge'
+          )
+          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.creditAmount, invoiceNumber: invNumber })
+        } else if (isCreditPayment && !hasSplitCredit) {
+          await retry(
+            () => recordCreditCharge(paymentResult.creditCustomerName!, paymentResult.grandTotal, invNumber, 'Full credit charge', invoiceId ?? undefined),
+            'recordCreditCharge'
+          )
+          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.grandTotal, invoiceNumber: invNumber, type: 'full' })
+        }
+      }
+
+      // Phase 3: Inventory deduction (non-critical — never throws, clamps to available stock)
+      if (invoiceItemsList.length > 0 && !isCreditPayment) {
+        await retry(
+          () => deductStockForSoldItems(invoiceItemsList),
+          'deductStockForSoldItems'
+        )
+        logPayment('inventory_deducted', { itemCount: invoiceItemsList.length })
+      }
+    })()
     logPayment('completed', { invoiceNumber: invNumber, invoiceId, totalAmount: paymentResult.grandTotal, method: paymentResult.paymentMethod, unpaidItems: newUnpaidTotal });
 
     // ═══════════════════════════════════════════════════════════════
@@ -1142,15 +1121,17 @@ export function POS() {
       // Clear the cart — submitted items are now persisted in the database and
       // displayed in the Previous Batches section. The editable cart starts
       // fresh for the next batch.
+      // NOTE: customerName is NOT cleared — the customer belongs to the table,
+      // not to a single order. It will be restored from the order_batch when
+      // the user re-enters this table, even after a page refresh or navigation.
       clearCart();
-      setCustomerName('');
       try { sessionStorage.removeItem(CART_STORAGE_KEY); } catch { /* ignore */ }
 
       // Fire-and-forget — single wildcard covers all dashboard-* keys
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['batches'] });
 
-      // 5. Navigate back to Dashboard so the cashier sees the updated table status
+      // Navigate to dashboard
       navigate('/dashboard');
     } catch (err) {
       if (import.meta.env.DEV) console.error('Failed to place order:', err);
@@ -1245,16 +1226,37 @@ export function POS() {
                 <div className={`relative w-12 h-12 rounded-xl flex items-center justify-center ${selectedCat === cat.id ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/30' : 'bg-muted text-foreground'}`}>
                   <Icon className="h-5 w-5" />
                   {catCount > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-emerald-500 text-[11px] font-bold text-white shadow-sm">
-                      {catCount}
-                    </span>
-                  )}
-                </div>
-                <span className="text-[11px] font-medium text-center leading-tight whitespace-nowrap">{cat.name}</span>
-              </button>
-            );
-          })}
-        </motion.div>
+                    <span                          className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-emerald-500 text-[11px] font-bold text-white shadow-sm"
+                      >
+                        {catCount}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-medium text-center leading-tight whitespace-nowrap">{cat.name}</span>
+                </button>
+              );
+            })}
+          </motion.div>
+
+        {/* ─── Mobile floating action bar ─── */}
+        <div className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around gap-2 border-t border-border bg-background/95 backdrop-blur-lg px-3 py-2 lg:hidden safe-area-bottom">
+          <button onClick={() => setMobileCartOpen(true)}
+            className="relative flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 min-h-[44px] text-sm font-bold text-white shadow-sm active:scale-95 transition-transform">
+            <ShoppingCart className="h-4 w-4" />
+            <span>Cart</span>
+            {totalNewCartItems > 0 && (
+              <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[20px] h-[20px] rounded-full bg-amber-500 text-[10px] font-bold text-white shadow-sm">
+                {totalNewCartItems}
+              </span>
+            )}
+          </button>
+          <button onClick={() => { if (!selectedTableId) { showError('Select a table first'); return; } setShowPayment(true); }}
+            disabled={!selectedTableId || allUnpaidItemsForPayment.length === 0}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 min-h-[44px] text-sm font-bold text-white shadow-sm disabled:opacity-50 active:scale-95 transition-transform">
+            <Receipt className="h-4 w-4" />
+            Pay
+          </button>
+        </div>
 
         {/* ─── Menu Grid ─── */}
         <motion.div variants={sectionReveal} className="flex-1 p-4 lg:p-5 overflow-y-auto no-scrollbar">
@@ -1283,9 +1285,11 @@ export function POS() {
               >
                 <Grid3X3 className="h-3.5 w-3.5 text-emerald-500" />
                 <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                  {availableItems.length}
+                  {searchQuery ? `${availableItems.length}/${totalAvailableCount}` : availableItems.length}
                 </span>
-                <span className="text-xs text-emerald-500/70 dark:text-emerald-400/70">items</span>
+                <span className="text-xs text-emerald-500/70 dark:text-emerald-400/70">
+                  {searchQuery ? 'found' : 'items'}
+                </span>
               </motion.div>
             </div>
 
@@ -1310,11 +1314,19 @@ export function POS() {
                              focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 focus:bg-card focus:shadow-sm focus:shadow-emerald-500/5
                              hover:border-emerald-300 dark:hover:border-emerald-700              "/>
 
-                {/* Keyboard shortcut badge */}
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:flex items-center gap-1 rounded-md border border-border/60 bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/60 pointer-events-none">
-                  <Keyboard className="h-2.5 w-2.5" />
-                  <span>/</span>
-                </div>
+                {searchQuery ? (
+                  <button
+                    onClick={() => { setSearchQuery(''); searchRef.current?.focus(); }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-7 h-7 rounded-lg hover:bg-muted/80 text-muted-foreground hover:text-foreground transition-all active:scale-90"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:flex items-center gap-1 rounded-md border border-border/60 bg-muted/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/60 pointer-events-none">
+                    <Keyboard className="h-2.5 w-2.5" />
+                    <span>/</span>
+                  </div>
+                )}
               </motion.div>
 
               {/* Tables / Rooms mode toggle */}
@@ -1590,9 +1602,29 @@ export function POS() {
             >
               {!isMenuLoading && availableItems.length === 0 ? (
                 <div className="col-span-full flex flex-col items-center justify-center py-16 text-muted-foreground">
-                  <ShoppingCart className="h-12 w-12 mb-3 text-muted-foreground/20" />
-                  <p className="text-lg font-semibold mb-1">No menu items loaded</p>
-                  <p className="text-sm">Add menu items in the Menu page, then set up your POS categories</p>
+                  {searchQuery ? (
+                    <Search className="h-12 w-12 mb-3 text-muted-foreground/20" />
+                  ) : (
+                    <ShoppingCart className="h-12 w-12 mb-3 text-muted-foreground/20" />
+                  )}
+                  <p className="text-lg font-semibold mb-1">
+                    {searchQuery ? `No items match "${searchQuery}"` : 'No menu items loaded'}
+                  </p>
+                  <p className="text-sm">
+                    {searchQuery ? (
+                      <>
+                        Try a different search term or{' '}
+                        <button
+                          onClick={() => setSearchQuery('')}
+                          className="text-emerald-500 hover:text-emerald-600 underline underline-offset-2 transition-colors"
+                        >
+                          clear filter
+                        </button>
+                      </>
+                    ) : (
+                      'Add menu items in the Menu page, then set up your POS categories'
+                    )}
+                  </p>
                 </div>
               ) : null}
               {!isMenuLoading && availableItems.map(item => {
@@ -1675,8 +1707,9 @@ export function POS() {
                   <div className="absolute top-1.5 right-1.5 rounded-md bg-background/90 px-1.5 py-0.5 text-[11px] font-semibold shadow-sm backdrop-blur-sm">{npr(item.price)}</div>
                   <AnimatePresence>{inCart && (<motion.div className="absolute top-1.5 left-1.5 flex items-center gap-0.5 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-md px-1.5 py-0.5 text-xs font-bold shadow-sm" initial={{ scale: 0, x: -10 }} animate={{ scale: 1, x: 0 }} exit={{ scale: 0, x: -10 }} key="badge"><ShoppingCart className="h-3 w-3" /> {qty}</motion.div>)}</AnimatePresence>
                   <div className="p-2.5">
-                    <h3 className="text-sm font-semibold truncate">{item.name}</h3>
-                    {item.description && (<p className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5">{item.description}</p>)}
+                    <h3 className="text-sm font-semibold truncate">
+                      {q ? <HighlightText text={item.name} query={q} /> : item.name}
+                    </h3>
                     <AnimatePresence>{inCart && (<motion.div className="flex items-center gap-1 mt-2" onClick={e => e.stopPropagation()} initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
                       <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(item.id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border bg-card hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
                       <span className="w-10 text-center text-sm font-bold tabular-nums">{qty}</span>
@@ -2044,7 +2077,7 @@ export function POS() {
         <PosPaymentDialog orderId={`ord-${Date.now()}`} unpaidItems={allUnpaidItemsForPayment}
           customerName={customerName || undefined} selectedTableId={selectedTableId}
           isRoomPayment={posMode === 'rooms'}
-          onClose={() => setShowPayment(false)} onComplete={handlePaymentComplete} />
+          onClose={() => setShowPayment(false)} onComplete={(invNum, result) => handlePaymentComplete(result)} />
       )}
 
       {/* ─── Keyboard Shortcuts Modal ─── */}

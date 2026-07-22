@@ -127,6 +127,8 @@ export interface BookingRow {
   special_requests: string | null
   adults: number
   children: number
+  id_type: string | null
+  id_number: string | null
   user_id: string | null
   created_at: string
   updated_at: string
