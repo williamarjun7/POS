@@ -49,5 +49,8 @@ secrets.*
 *.local
 opencode.json
 
+# Scripts (setup/utility scripts that shouldn't contain secrets)
+scripts/
+
 # Windows artifacts
 nul
