@@ -48,8 +48,8 @@ export function DashboardLayout() {
         )}
       </AnimatePresence>
 
-      {/* Desktop sidebar */}
-      <div className="hidden lg:block">
+      {/* Desktop sidebar — fixed to the left, taken out of flow so main content can shift right */}
+      <div className="hidden lg:block fixed top-0 left-0 z-40 h-screen">
         <Sidebar collapsed={collapsed} onToggle={toggleCollapse} />
       </div>
 
