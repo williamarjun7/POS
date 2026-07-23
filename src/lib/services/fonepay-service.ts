@@ -55,12 +55,6 @@ export interface QRStatusResponse {
   prn: string
 }
 
-export interface TaxRefundResponse {
-  fonepayTraceId: number
-  message: string
-  success: boolean
-}
-
 export interface ParsedTransactionStatus {
   remarks1?: string
   remarks2?: string
@@ -106,16 +100,12 @@ export async function generateFonepayQR(params: {
   prn: string
   remarks1?: string
   remarks2?: string
-  taxAmount?: number
-  taxRefund?: number
 }): Promise<QRGenerateResponse> {
   return invokeFonepay<QRGenerateResponse>('fonepay-qr-generate', {
     amount: params.amount,
     prn: params.prn,
     remarks1: params.remarks1 ?? 'POS Payment',
     remarks2: params.remarks2 ?? '',
-    taxAmount: params.taxAmount,
-    taxRefund: params.taxRefund,
   })
 }
 
@@ -125,20 +115,6 @@ export async function generateFonepayQR(params: {
  */
 export async function checkQRStatus(prn: string): Promise<QRStatusResponse> {
   return invokeFonepay<QRStatusResponse>('fonepay-qr-status', { prn })
-}
-
-/**
- * Submit tax refund / IRD data after successful payment.
- * Server handles HMAC-SHA512 signing and API call.
- */
-export async function submitTaxRefund(params: {
-  fonepayTraceId: number
-  merchantPRN: string
-  invoiceNumber: string
-  invoiceDate: string
-  transactionAmount: number
-}): Promise<TaxRefundResponse> {
-  return invokeFonepay<TaxRefundResponse>('fonepay-tax-refund', params)
 }
 
 // ─── WebSocket (direct to Fonepay — no secret needed) ───────

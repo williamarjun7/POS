@@ -9,7 +9,7 @@ import {
   CheckCheck,
   MoreHorizontal, ArrowRightFromLine,
   Eye, Edit, Paintbrush, History, PowerOff,
-  Hotel, Clock, Sofa, LogOut, XCircle, Printer,
+  Hotel, Clock, Sofa, LogOut, XCircle, Printer, Receipt,
   IndianRupee, CalendarDays,
 } from "lucide-react"
 
@@ -255,7 +255,7 @@ export function RoomCard({
       ]
     }
     if (isOccupied) {
-      return [
+      return [          { action: "folio", label: "View Folio", icon: Receipt },
         { action: "details", label: "View Booking", icon: Calendar },
         { action: "editbooking", label: "Edit Guest", icon: Edit },
         { action: "extend", label: "Extend Stay", icon: Clock },
@@ -503,6 +503,7 @@ export function RoomCard({
           {/* ── Row 4: Action Buttons ── */}
           <div className="flex items-center gap-2 pt-3 border-t border-border/40">
             <PrimaryBtn icon={Sofa} label="Open POS" onClick={() => handle("openpos")} variant="primary" />
+            <PrimaryBtn icon={Receipt} label="Folio" onClick={() => handle("folio")} variant="primary" />
             <PrimaryBtn
               icon={LogOut}
               label="Checkout"

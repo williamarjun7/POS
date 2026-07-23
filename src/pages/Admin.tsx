@@ -225,7 +225,6 @@ export function Admin() {
     address: bizSettings.address,
     phone: bizSettings.phone,
     email: bizSettings.email,
-    taxId: bizSettings.taxId,
   })
 
   // Sync edit form fields when DB data loads
@@ -235,9 +234,8 @@ export function Admin() {
       address: bizSettings.address,
       phone: bizSettings.phone,
       email: bizSettings.email,
-      taxId: bizSettings.taxId,
     })
-  }, [bizSettings.name, bizSettings.address, bizSettings.phone, bizSettings.email, bizSettings.taxId])
+  }, [bizSettings.name, bizSettings.address, bizSettings.phone, bizSettings.email])
 
   // Receipt settings state (Admin-specific fields only; shared print settings come from PrintSettingsProvider)
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(initialReceiptSettings)
@@ -444,17 +442,6 @@ export function Admin() {
       showError("Failed to save business settings")
     }
   }
-
-  const handleSaveTax = async () => {
-    try {
-      await saveBizSettings()
-      showSuccess("Tax settings saved")
-    } catch {
-      showError("Failed to save tax settings")
-    }
-  }
-
-
 
   const toggleFeatureFlag = async (id: string) => {
     const flag = featureFlags.find(f => f.id === id)
@@ -739,7 +726,7 @@ export function Admin() {
             <SectionCard title="Business Information" icon="Building2" index={0}>
               <div className="flex items-center justify-between mb-4">
                 <p className="text-sm text-muted-foreground">Manage your business details</p>
-                <button onClick={() => { setEditBizData({ name: bizSettings.name, address: bizSettings.address, phone: bizSettings.phone, email: bizSettings.email, taxId: bizSettings.taxId }); setEditBusiness(!editBusiness) }} className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+                <button onClick={() => { setEditBizData({ name: bizSettings.name, address: bizSettings.address, phone: bizSettings.phone, email: bizSettings.email }); setEditBusiness(!editBusiness) }} className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
                   {editBusiness ? "Cancel" : "Edit"}
                 </button>
               </div>
@@ -783,44 +770,8 @@ export function Admin() {
                     <p className="text-xs text-muted-foreground">Email</p>
                     <p className="text-sm font-medium text-foreground">{bizSettings.email}</p>
                   </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Tax ID</p>
-                    <p className="text-sm font-medium text-foreground">{bizSettings.taxId}</p>
-                  </div>
                 </div>
               )}
-            </SectionCard>
-
-            {/* Tax Settings */}
-            <SectionCard title="Tax Settings" icon="FileText" index={1}>
-              <div className="max-w-lg space-y-4">
-                {isBizLoading ? (
-                  <div className="flex items-center gap-3 py-4 text-sm text-muted-foreground">
-                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Loading settings…
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 gap-4">
-                      <FormInput label="VAT Rate (%)" type="number" value={String(bizSettings.vatRate)} onChange={(e) => updateBizSettings({ vatRate: Number(e.target.value) })} />
-                      <FormInput label="Service Charge (%)" type="number" value={String(bizSettings.serviceCharge)} onChange={(e) => updateBizSettings({ serviceCharge: Number(e.target.value) })} />
-                    </div>
-                    <FormToggle label="Tax Inclusive Pricing" description="Include tax in displayed prices" checked={bizSettings.taxInclusive} onChange={(v) => updateBizSettings({ taxInclusive: v })} />
-                    <FormToggle label="Apply VAT on Room Service" checked={bizSettings.applyVatRoomService} onChange={(v) => updateBizSettings({ applyVatRoomService: v })} />
-                    <FormSelect label="Apply Service Charge" value={bizSettings.applyServiceCharge} onChange={(e) => updateBizSettings({ applyServiceCharge: e.target.value as any })}>
-                      <option value="all">All orders</option>
-                      <option value="dine-in only">Dine-in only</option>
-                      <option value="disabled">Disabled</option>
-                    </FormSelect>
-                    <button onClick={handleSaveTax} disabled={isBizSaving} className="rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
-                      {isBizSaving ? "Saving…" : "Save Tax Settings"}
-                    </button>
-                  </>
-                )}
-              </div>
             </SectionCard>
 
             {/* Payment Methods */}

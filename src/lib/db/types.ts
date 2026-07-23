@@ -411,12 +411,6 @@ export interface BusinessSettingsRow {
   address: string
   phone: string
   email: string
-  tax_id: string
-  vat_rate: number
-  service_charge: number
-  tax_inclusive: boolean
-  apply_vat_room_service: boolean
-  apply_service_charge: 'all' | 'dine-in only' | 'disabled'
   created_at: string
   updated_at: string
 }

@@ -1,6 +1,7 @@
 import { type ReactNode, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes, useId } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
+import { Switch } from "@/components/ui/switch"
 
 interface FormFieldBaseProps {
   label: string
@@ -163,56 +164,14 @@ interface FormToggleProps {
 
 export function FormToggle({ label, description, checked, onChange, disabled }: FormToggleProps) {
   return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-foreground">{label}</p>
-        {description && <p className="text-xs text-muted-foreground">{description}</p>}
-      </div>
-      <motion.button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => { if (!disabled) onChange(!checked) }}
-        disabled={disabled}
-        whileTap={{ scale: 0.88 }}
-        className={cn(
-          "relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-          checked
-            ? "bg-primary shadow-[0_0_8px] shadow-primary/25"
-            : "bg-muted-foreground/15 hover:bg-muted-foreground/25",
-          disabled && "cursor-not-allowed opacity-40",
-        )}
-      >
-        {/* On-state indicator dot */}
-        <motion.span
-          initial={false}
-          animate={{ opacity: checked ? 1 : 0, scale: checked ? 1 : 0 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 25, mass: 0.5 }}
-          className="absolute left-1.5 top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-white/40"
-        />
-        <motion.span
-          animate={{ x: checked ? 20 : 0 }}
-          transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 0.8 }}
-          className={cn(
-            "absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow-md shadow-black/10",
-            disabled && "shadow-none",
-          )}
-        >
-          {/* Subtle inner decoration on knob */}
-          <motion.span
-            initial={false}
-            animate={{ opacity: checked ? 1 : 0, scale: checked ? 1 : 0.3 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 20, mass: 0.3 }}
-            className="absolute inset-0 flex items-center justify-center"
-          >
-            <svg width="10" height="8" viewBox="0 0 10 8" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-primary">
-              <path d="M1 4L3.5 6.5L9 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </motion.span>
-        </motion.span>
-      </motion.button>
-    </div>
+    <Switch
+      label={label}
+      description={description}
+      checked={checked}
+      onChange={onChange}
+      disabled={disabled}
+      size="lg"
+    />
   )
 }
 

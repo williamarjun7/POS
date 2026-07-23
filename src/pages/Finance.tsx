@@ -204,7 +204,6 @@ export function Finance() {
     customer: row.customer_name,
     items: [],
     subtotal: row.subtotal,
-    tax: row.tax,
     discount: row.discount,
     total: row.total,
     status: row.status as Invoice['status'],

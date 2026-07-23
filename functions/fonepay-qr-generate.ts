@@ -27,7 +27,7 @@ export default async function (req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
   try {
-    const { amount, prn, remarks1, remarks2, taxAmount, taxRefund } = await req.json();
+    const { amount, prn, remarks1, remarks2 } = await req.json();
 
     const merchantCode = Deno.env.get('FONEPAY_MERCHANT_CODE');
     const username = Deno.env.get('FONEPAY_USERNAME');
@@ -43,9 +43,6 @@ export default async function (req: Request): Promise<Response> {
 
     const amountStr = String(Math.round(amount));
     const parts = [amountStr, prn, merchantCode, remarks1 || 'POS Payment', remarks2 || ''];
-    if (taxAmount !== undefined && taxRefund !== undefined) {
-      parts.push(String(Math.round(taxAmount)), String(Math.round(taxRefund)));
-    }
     const dataValidation = await hmacSHA512(secretKey, parts.join(','));
 
     const body: Record<string, unknown> = {
@@ -58,10 +55,7 @@ export default async function (req: Request): Promise<Response> {
       username,
       password,
     };
-    if (taxAmount !== undefined && taxRefund !== undefined) {
-      body.taxAmount = String(Math.round(taxAmount));
-      body.taxRefund = String(Math.round(taxRefund));
-    }
+
 
     const resp = await fetch(
       `${apiBase}/merchant/merchantDetailsForThirdParty/thirdPartyDynamicQrDownload`,

@@ -173,7 +173,6 @@ export function Billing() {
   // NOT money received. They must be excluded from the paid total
   // and outstanding calculation. Separate tracking keeps them visible.
   const subtotal = useMemo(() => invoiceItems.reduce((s, i) => s + i.totalPrice, 0), [invoiceItems])
-  const taxAmount = invoice?.tax ?? 0
   const discountAmount = invoice?.discount ?? 0
   const total = invoice?.total ?? subtotal
   const realPayments = useMemo(() => payments.filter(p => p.method !== 'credit'), [payments])
@@ -607,12 +606,7 @@ export function Billing() {
                       <td colSpan={3} className="px-3 py-2.5 text-right text-sm font-medium text-muted-foreground">Subtotal</td>
                       <td className="px-3 py-2.5 text-right font-semibold text-foreground">{formatCurrency(subtotal)}</td>
                     </tr>
-                    {taxAmount > 0 && (
-                      <tr className="text-muted-foreground">
-                        <td colSpan={3} className="px-3 py-2.5 text-right text-sm">Tax</td>
-                        <td className="px-3 py-2.5 text-right">{formatCurrency(taxAmount)}</td>
-                      </tr>
-                    )}
+
                     {discountAmount > 0 && (
                       <tr className="text-muted-foreground">
                         <td colSpan={3} className="px-3 py-2.5 text-right text-sm">Discount</td>

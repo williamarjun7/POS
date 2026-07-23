@@ -227,7 +227,6 @@ export interface Invoice {
   customer: string
   items: { name: string; quantity: number; price: number }[]
   subtotal: number
-  tax: number
   discount: number
   total: number
   status: PaymentStatus

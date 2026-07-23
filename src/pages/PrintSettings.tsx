@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Printer, Phone, FileText, Ruler, Image, Copy, RefreshCw, Receipt, CheckCircle2, Cloud, AlertCircle } from 'lucide-react';
 import { PageTransition } from '@/components/ui/PageTransition';
+import { FormToggle } from '@/components/ui/form-field';
 import { usePrintSettings, type PaperSize } from '@/lib/services/print-settings';
 import { showSuccess, showError } from '@/components/ui/toast';
 import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
@@ -81,20 +82,7 @@ export function PrintSettingsPage() {
               />
             </div>
 
-            {/* PAN / VAT */}
-            <div>
-              <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
-                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-                PAN / VAT Number
-              </label>
-              <input
-                type="text"
-                value={settings.pan}
-                onChange={e => update({ pan: e.target.value })}
-                placeholder="VAT-XXXXXXXXX"
-                className="h-11 w-full rounded-xl border border-border bg-background px-4 text-sm outline-none transition-all focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
-              />
-            </div>
+
           </div>
         </motion.div>
 
@@ -176,7 +164,7 @@ export function PrintSettingsPage() {
 
           <div className="space-y-4">
             {/* Show Logo */}
-            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-border p-4 transition-all hover:bg-muted/50">
+            <div className="flex items-center justify-between rounded-xl border border-border p-4 transition-all hover:bg-muted/50">
               <div className="flex items-center gap-3">
                 <Image className="h-5 w-5 text-muted-foreground" />
                 <div>
@@ -184,26 +172,15 @@ export function PrintSettingsPage() {
                   <p className="text-xs text-muted-foreground">Display business logo at the top of printed invoices</p>
                 </div>
               </div>
-              <div
-                role="checkbox"
-                tabIndex={0}
-                aria-checked={settings.showLogo}
-                onClick={() => update({ showLogo: !settings.showLogo })}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); update({ showLogo: !settings.showLogo }); } }}
-                className={`relative h-6 w-11 rounded-full transition-colors ${
-                  settings.showLogo ? 'bg-emerald-500' : 'bg-muted-foreground/30'
-                }`}
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
-                    settings.showLogo ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </div>
-            </label>
+              <FormToggle
+                label=""
+                checked={settings.showLogo}
+                onChange={(v) => update({ showLogo: v })}
+              />
+            </div>
 
             {/* Auto-print */}
-            <label className="flex cursor-pointer items-center justify-between rounded-xl border border-border p-4 transition-all hover:bg-muted/50">
+            <div className="flex items-center justify-between rounded-xl border border-border p-4 transition-all hover:bg-muted/50">
               <div className="flex items-center gap-3">
                 <Printer className="h-5 w-5 text-muted-foreground" />
                 <div>
@@ -211,23 +188,12 @@ export function PrintSettingsPage() {
                   <p className="text-xs text-muted-foreground">Automatically print invoices after each payment</p>
                 </div>
               </div>
-              <div
-                role="checkbox"
-                tabIndex={0}
-                aria-checked={settings.autoPrint}
-                onClick={() => update({ autoPrint: !settings.autoPrint })}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); update({ autoPrint: !settings.autoPrint }); } }}
-                className={`relative h-6 w-11 rounded-full transition-colors ${
-                  settings.autoPrint ? 'bg-emerald-500' : 'bg-muted-foreground/30'
-                }`}
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
-                    settings.autoPrint ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </div>
-            </label>
+              <FormToggle
+                label=""
+                checked={settings.autoPrint}
+                onChange={(v) => update({ autoPrint: v })}
+              />
+            </div>
           </div>
         </motion.div>
 

@@ -11,7 +11,7 @@
  *   - Thank-you message, Google Review QR, website
  *
  * Does NOT display: table number, cashier, guest count, payment history,
- *   payment status, paid/remaining amounts, service charge, VAT, internal IDs.
+ *   payment status, paid/remaining amounts, internal IDs.
  */
 
 import { ThermalPrinterLayout } from './ThermalPrinterLayout';

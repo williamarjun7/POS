@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { Room } from '../../types';
 import type { Booking } from '@/lib/services/booking-service';
 import { BookingFormModal } from '../../components/rooms/BookingFormModal';
+import { RoomFolio } from '../../components/operations/RoomFolio';
 import { DashboardRoomTile } from '../../components/rooms/DashboardRoomTile';
 import { useBookings } from '@/lib/services/booking-service';
 
@@ -94,6 +95,8 @@ export default function DashboardPage() {
   } | null>(null);
   const [postCheckoutRoom, setPostCheckoutRoom] = useState<Room | null>(null);
   const [postCheckoutBooking, setPostCheckoutBooking] = useState<Booking | null>(null);
+  const [folioRoom, setFolioRoom] = useState<Room | null>(null);
+  const [folioBooking, setFolioBooking] = useState<Booking | null>(null);
 
   // Pending payments query — invoices with outstanding balances
   const { data: pendingPayments } = useQuery({
@@ -293,6 +296,12 @@ export default function DashboardPage() {
           setManagedBooking(booking);
           setBookingRoom(room);
           setShowBookingForm(true);
+        }
+        break;
+      case 'folio':
+        if (booking) {
+          setFolioRoom(room);
+          setFolioBooking(booking);
         }
         break;
       case 'checkout':
@@ -997,6 +1006,20 @@ export default function DashboardPage() {
           booking={managedBooking}
           mode={managedBooking ? 'manage' : bookingMode}
           onClose={() => { setShowBookingForm(false); setBookingRoom(null); setManagedBooking(null); setBookingMode('reserve'); }}
+        />
+      )}
+
+      {/* Room Folio Dialog */}
+      {folioRoom && folioBooking && (
+        <RoomFolio
+          room={folioRoom}
+          booking={folioBooking}
+          onClose={() => { setFolioRoom(null); setFolioBooking(null); }}
+          onCheckout={(room) => {
+            setFolioRoom(null);
+            setFolioBooking(null);
+            navigate(`/operations?room=${room.id}`);
+          }}
         />
       )}
 

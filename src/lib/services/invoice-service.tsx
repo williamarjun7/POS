@@ -27,7 +27,6 @@ function rowToInvoice(row: InvoiceRow): Invoice {
     customer: row.customer_name,
     items: [],
     subtotal: row.subtotal,
-    tax: row.tax,
     discount: row.discount,
     total: row.total,
     status: row.status as PaymentStatus,
@@ -42,7 +41,7 @@ function rowToInvoice(row: InvoiceRow): Invoice {
 export async function fetchInvoicesFromDb(): Promise<Invoice[]> {
   const { data, error } = await insforge.database
     .from('invoices')
-    .select('id, invoice_number, customer_name, subtotal, tax, discount, total, status, payment_method, created_at, due_date')
+    .select('id, invoice_number, customer_name, subtotal, discount, total, status, payment_method, created_at, due_date')
     .order('created_at', { ascending: false })
 
   if (error) throw error

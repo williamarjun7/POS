@@ -22,7 +22,7 @@
  *   - Customer ledger updates (Phase 2)
  *   - Activity logging (already fire-and-forget)
  *
- * @see migrations/20260801000100_process-payment-rpc.sql
+ * @see migrations/20260804000100_remove-tax-columns.sql
  */
 
 import { insforge } from '@/lib/services/auth-service'
@@ -59,7 +59,6 @@ export interface ProcessPaymentParams {
   tableId: string
   customerName: string
   invoiceSubtotal: number
-  invoiceTax?: number
   invoiceDiscount: number
   invoiceTotal: number
   invoiceStatus: string
@@ -123,7 +122,6 @@ export async function callProcessPayment(
       p_table_id: params.tableId,
       p_customer_name: params.customerName,
       p_invoice_subtotal: params.invoiceSubtotal,
-      p_invoice_tax: params.invoiceTax ?? 0,
       p_invoice_discount: params.invoiceDiscount,
       p_invoice_total: params.invoiceTotal,
       p_invoice_status: params.invoiceStatus,

@@ -39,6 +39,7 @@ import { SummaryDashboard } from "@/components/operations/SummaryDashboard"
 import type { RoomStats, TableStats, TabId } from "@/components/operations/SummaryDashboard"
 import { RoomCard } from "@/components/operations/RoomCard"
 import { RoomCheckoutDialog } from "@/components/operations/RoomCheckoutDialog"
+import { RoomFolio } from "@/components/operations/RoomFolio"
 import { TableCard } from "@/components/operations/TableCard"
 import {
   RoomFormModal, TableFormModal, MaintenanceFormModal, HousekeepingAssignModal,
@@ -209,6 +210,8 @@ function RoomsView({
   const [bookingRoom, setBookingRoom] = useState<Room | null>(null)
   const [checkoutRoom, setCheckoutRoom] = useState<Room | null>(null)
   const [checkoutBooking, setCheckoutBooking] = useState<Booking | null>(null)
+  const [folioRoom, setFolioRoom] = useState<Room | null>(null)
+  const [folioBooking, setFolioBooking] = useState<Booking | null>(null)
   const [releaseConfirmRoom, setReleaseConfirmRoom] = useState<Room | null>(null)
   const [showHKForm, setShowHKForm] = useState(false)
   const [showMTForm, setShowMTForm] = useState(false)
@@ -281,6 +284,12 @@ function RoomsView({
       case "reserve":
       case "checkin":
         setBookingRoom(room); break
+      case "folio":
+        // Show the room folio
+        const folioRoomBooking = activeBookings.find(b => b.roomId === room.id)
+        setFolioBooking(folioRoomBooking ?? null)
+        setFolioRoom(room)
+        break
       case "checkout":
         // Find the booking for this room to show in checkout dialog
         const checkoutRoomBooking = activeBookings.find(b => b.roomId === room.id)
@@ -515,6 +524,23 @@ function RoomsView({
       {/* Modals */}
       <RoomFormModal open={showRoomForm} room={editingRoom} roomTypeOptions={roomTypeOptions} onSave={handleSaveRoom} onClose={() => { setShowRoomForm(false); setEditingRoom(null) }} isSubmitting={isSavingRoom} existingRooms={rooms.map(r => ({ id: r.id, number: r.number || r.room_number || '' }))} />
       {bookingRoom && <BookingFormModal room={bookingRoom} onClose={() => setBookingRoom(null)} />}
+      {/* ── Folio Dialog ── */}
+      {folioRoom && (
+        <RoomFolio
+          room={folioRoom}
+          booking={folioBooking}
+          onClose={() => { setFolioRoom(null); setFolioBooking(null) }}
+          onCheckout={(room, booking) => {
+            // Transition from folio to checkout
+            setFolioRoom(null)
+            setFolioBooking(null)
+            setCheckoutBooking(booking ?? folioBooking)
+            setCheckoutRoom(room)
+          }}
+        />
+      )}
+
+      {/* ── Checkout Dialog ── */}
       {checkoutRoom && (
         <RoomCheckoutDialog
           room={checkoutRoom}

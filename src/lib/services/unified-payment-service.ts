@@ -42,12 +42,10 @@ export interface UnifiedPaymentInput {
   tableId: string
   /** Customer name */
   customerName: string
-  /** Invoice subtotal (before discount/tax) */
+  /** Invoice subtotal */
   subtotal: number
   /** Discount amount */
   discount: number
-  /** Tax amount */
-  tax?: number
   /** Grand total */
   total: number
   /** Invoice status to set ('paid', 'partial', 'credit_invoice') */
@@ -178,7 +176,6 @@ export async function processPaymentWithRecovery(
       gatewayReference: input.gatewayReference,
       creditAmount: input.creditAmount,
       creditCustomerName: input.creditCustomerName,
-      tax: input.tax ?? 0,
       notes: input.notes,
     }
 
@@ -217,7 +214,6 @@ export async function processPaymentWithRecovery(
       tableId: input.tableId,
       customerName: input.customerName,
       invoiceSubtotal: input.subtotal,
-      invoiceTax: input.tax ?? 0,
       invoiceDiscount: input.discount,
       invoiceTotal: input.total,
       invoiceStatus: input.invoiceStatus,
@@ -349,7 +345,6 @@ export async function retryPaymentProcess(
       tableId: payload.tableId || '',
       customerName: payload.customerName || 'Walk-in',
       invoiceSubtotal: payload.subtotal || 0,
-      invoiceTax: payload.tax || 0,
       invoiceDiscount: payload.discount || 0,
       invoiceTotal: payload.total || 0,
       invoiceStatus: payload.invoiceStatus || 'paid',

@@ -273,7 +273,6 @@ function ReceivePaymentModal({
             customerName: row.customer_name,
             items: [],
             subtotal: row.subtotal,
-            tax: row.tax,
             discount: row.discount,
             total: row.total,
             paid,  // Add paid amount for outstanding calculation

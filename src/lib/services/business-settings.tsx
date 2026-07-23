@@ -18,12 +18,6 @@ export interface BusinessSettings {
   address: string;
   phone: string;
   email: string;
-  taxId: string;
-  vatRate: number;
-  serviceCharge: number;
-  taxInclusive: boolean;
-  applyVatRoomService: boolean;
-  applyServiceCharge: 'all' | 'dine-in only' | 'disabled';
 }
 
 /* ─── Defaults ──────────────────────────────────────────────── */
@@ -33,12 +27,6 @@ const DEFAULT_SETTINGS: BusinessSettings = {
   address: '',
   phone: '',
   email: '',
-  taxId: '',
-  vatRate: 13,
-  serviceCharge: 10,
-  taxInclusive: false,
-  applyVatRoomService: true,
-  applyServiceCharge: 'dine-in only',
 };
 
 /* ─── Mapper helpers ────────────────────────────────────────── */
@@ -49,12 +37,6 @@ function rowToSettings(row: BusinessSettingsRow): BusinessSettings {
     address: row.address,
     phone: row.phone,
     email: row.email,
-    taxId: row.tax_id,
-    vatRate: Number(row.vat_rate),
-    serviceCharge: Number(row.service_charge),
-    taxInclusive: row.tax_inclusive,
-    applyVatRoomService: row.apply_vat_room_service,
-    applyServiceCharge: row.apply_service_charge,
   };
 }
 
@@ -68,12 +50,6 @@ function settingsToDb(
     address: s.address,
     phone: s.phone,
     email: s.email,
-    tax_id: s.taxId,
-    vat_rate: s.vatRate,
-    service_charge: s.serviceCharge,
-    tax_inclusive: s.taxInclusive,
-    apply_vat_room_service: s.applyVatRoomService,
-    apply_service_charge: s.applyServiceCharge,
   };
 }
 

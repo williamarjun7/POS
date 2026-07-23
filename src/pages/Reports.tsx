@@ -48,12 +48,12 @@ const reports: ReportCard[] = [
   { id: "4", title: "Category-wise Sales", description: "Sales performance broken down by menu categories", icon: "PieChart", category: "Sales Reports", formats: ["PDF", "Excel"], lastGenerated: "1 day ago" },
   { id: "5", title: "Profit & Loss Statement", description: "Revenue, expenses, and net profit for any period", icon: "DollarSign", category: "Financial Reports", formats: ["PDF", "Excel"], lastGenerated: "5 days ago" },
   { id: "6", title: "Cash Flow Report", description: "Cash inflows and outflows with running balance", icon: "Wallet", category: "Financial Reports", formats: ["PDF", "Excel", "CSV"], lastGenerated: "2 days ago" },
-  { id: "7", title: "Tax Summary Report", description: "VAT collected, service charges, and tax obligations", icon: "Calculator", category: "Financial Reports", formats: ["PDF", "Excel"], lastGenerated: "1 week ago" },
+
   { id: "8", title: "Stock Status Report", description: "Current inventory levels with reorder alerts", icon: "Package", category: "Inventory Reports", formats: ["PDF", "Excel", "CSV"], lastGenerated: "4 hours ago" },
   { id: "9", title: "Consumption Report", description: "Ingredient usage vs sales to track waste and efficiency", icon: "Warehouse", category: "Inventory Reports", formats: ["PDF", "Excel"], lastGenerated: "6 hours ago" },
   { id: "10", title: "Top Customers Report", description: "Ranked list of highest spending customers", icon: "Users", category: "Customer Reports", formats: ["PDF", "Excel"], lastGenerated: "3 days ago" },
   { id: "11", title: "Room Occupancy Report", description: "Occupancy rates, room types, and revenue by room", icon: "Bed", category: "Motel Reports", formats: ["PDF", "Excel", "CSV"], lastGenerated: "Today" },
-  { id: "12", title: "VAT Summary Report", description: "Detailed VAT breakdown by category for filing", icon: "Receipt", category: "Tax Reports", formats: ["PDF", "Excel"], lastGenerated: "1 week ago" },
+
 ]
 
 const formatIcons: Record<string, typeof FileText> = {

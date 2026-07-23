@@ -14,7 +14,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RequirePermission } from '@/lib/core/PermissionGuards';
 import { recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
 import { useMenuCategories, useMenuItems } from '@/lib/api/menu.hooks';
-import { useDashboardTables, useRooms, useTableBatches } from '@/lib/hooks';
+import { useDashboardTables, useRooms, useTableBatches, useRoomBatches } from '@/lib/hooks';
 
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRateLimit } from '@/lib/hooks/useRateLimit'
@@ -262,6 +262,10 @@ export function POS() {
     const targetId = tableId || roomId;
     if (targetId) {
       setSelectedTableId(targetId);
+      // Auto-switch to rooms mode when navigating from a room card on Dashboard
+      if (roomId) {
+        setPosMode('rooms');
+      }
       // Keep the URL params so a page refresh still restores the table selection.
       // Only clean up if there's no table/room in the URL (fresh page load with
       // leftover localStorage state or manual navigation).
@@ -483,11 +487,15 @@ export function POS() {
     };
   }, [selectedTableId, customerName]); // newCartItems removed — it's temporary UI
 
-  // ─── Load batches from DB when table is selected ─
+  // ─── Load batches from DB when table/room is selected ─
   // Always fetch batches whenever a table/room is selected — the hook handles
   // null internally.  We no longer gate on selectedTableInfo?.status to avoid
   // a race where useDashboardTables() hasn't loaded yet on first mount.
-  const { data: fetchedBatches } = useTableBatches(selectedTableId || null);
+  // Rooms use useRoomBatches (queries by room_id) while tables use useTableBatches.
+  const isTableMode = posMode === 'tables';
+  const { data: fetchedTableBatches } = useTableBatches(isTableMode ? selectedTableId || null : null);
+  const { data: fetchedRoomBatches } = useRoomBatches(!isTableMode ? selectedTableId || null : null);
+  const fetchedBatches = isTableMode ? fetchedTableBatches : fetchedRoomBatches;
 
   // Track initial mount so we don't unnecessarily clear on first load
   const isFirstTableSelection = useRef(true);
@@ -812,7 +820,6 @@ export function POS() {
         tableId: selectedTableId,
         customerName: paymentResult.customerName || paymentResult.creditCustomerName || customerName || 'Walk-in',
         subtotal: isSplitPayment ? paidSubtotal : subtotal,
-        tax: 0,
         discount,
         total: invoiceTotal,
         invoiceStatus,
@@ -1066,17 +1073,22 @@ export function POS() {
     const batch: OrderBatch = { id: batchId, table_id: selectedTableId, customer_name: customerName || undefined, items: batchItems, status: 'pending', created_at: new Date().toISOString(), is_locked: true, subtotal: newSubtotalForThisBatch, paid_amount: 0 };
 
     try {
-      // 1. Persist to database — insert batch and items
-      await db.insertOne('order_batches', {
+      // 1. Persist to database — insert batch and items (room or table)
+      const batchPayload: Record<string, any> = {
         id: batchId,
-        table_id: selectedTableId,
         customer_name: customerName || null,
         status: 'pending',
         is_locked: true,
         subtotal: newSubtotalForThisBatch,
         discount: 0,
         paid_amount: 0,
-      });
+      };
+      if (posMode === 'rooms') {
+        batchPayload.room_id = selectedTableId;
+      } else {
+        batchPayload.table_id = selectedTableId;
+      }
+      await db.insertOne('order_batches', batchPayload);
 
       if (batchItems.length > 0) {
         await db.insertMany('order_batch_items', batchItems.map(item => ({

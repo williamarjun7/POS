@@ -45,9 +45,8 @@ const mockInvoiceRow = {
   invoice_number: 'INV-2026-0001',
   customer_name: 'John Doe',
   subtotal: 2000,
-  tax: 260,
   discount: 100,
-  total: 2160,
+  total: 1900,
   status: 'paid',
   payment_method: 'cash',
   created_at: '2026-07-14T10:00:00Z',
@@ -80,9 +79,8 @@ describe('InvoiceService — fetchInvoicesFromDb', () => {
       customer: 'John Doe',
       items: [],
       subtotal: 2000,
-      tax: 260,
       discount: 100,
-      total: 2160,
+      total: 1900,
       status: 'paid',
       paymentMethod: 'cash',
       createdAt: '2026-07-14T10:00:00Z',
@@ -117,7 +115,6 @@ describe('InvoiceService — fetchInvoicesFromDb', () => {
         invoice_number: 'INV-MIN',
         customer_name: 'Minimal',
         subtotal: 100,
-        tax: 0,
         discount: 0,
         total: 100,
         status: 'pending',
@@ -135,7 +132,7 @@ describe('InvoiceService — fetchInvoicesFromDb', () => {
 
   it('selects specific columns for list view (not *)', async () => {
     const { select, order } = mockDb()
-    const expectedColumns = 'id, invoice_number, customer_name, subtotal, tax, discount, total, status, payment_method, created_at, due_date'
+    const expectedColumns = 'id, invoice_number, customer_name, subtotal, discount, total, status, payment_method, created_at, due_date'
     order.mockResolvedValue({ data: [], error: null })
 
     await fetchInvoicesFromDb()
@@ -162,7 +159,6 @@ describe('InvoiceService — DB row mapping edge cases', () => {
       data: [{
         ...mockInvoiceRow,
         subtotal: 0,
-        tax: 0,
         discount: 0,
         total: 0,
       }],
@@ -171,7 +167,6 @@ describe('InvoiceService — DB row mapping edge cases', () => {
 
     const result = await fetchInvoicesFromDb()
     expect(result[0].subtotal).toBe(0)
-    expect(result[0].tax).toBe(0)
     expect(result[0].total).toBe(0)
   })
 

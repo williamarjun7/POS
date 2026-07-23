@@ -8,6 +8,7 @@ import {
   LogOut, Eye, Edit, XCircle,
   Wrench, Sparkles, MoreHorizontal,
   Hotel, ArrowRightFromLine, Sofa,
+  Receipt,
 } from 'lucide-react'
 
 // ── Status config ────────────────────────────────────────────
@@ -358,8 +359,10 @@ export function DashboardRoomTile({ room, booking, onAction }: DashboardRoomTile
           {isOccupied && (
             <div className="flex items-center justify-center gap-1.5">
               <Btn icon={Sofa} label="POS" onClick={() => act('pos')} variant="primary" />
+              <Btn icon={Receipt} label="Folio" onClick={() => act('folio')} />
               <Btn icon={LogOut} label="Checkout" onClick={() => act('checkout')} />
               <MoreMenu items={[
+                { action: 'folio', label: 'View Folio', icon: Receipt },
                 { action: 'view', label: 'View', icon: Eye },
                 { action: 'extend', label: 'Extend', icon: CalendarDays },
                 { action: 'edit', label: 'Edit', icon: Edit },

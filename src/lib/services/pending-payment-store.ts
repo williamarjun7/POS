@@ -117,8 +117,6 @@ export interface PendingPaymentPayload {
   creditAmount?: number
   /** Credit customer name if applicable */
   creditCustomerName?: string
-  /** Tax amount */
-  tax?: number
   /** Notes */
   notes?: string
 }

@@ -87,34 +87,35 @@ const batchKeys = {
 }
 
 /**
- * Fetch all order batches and their items for a specific table.
- * Used to restore previous orders when selecting an occupied table.
+ * Fetch all order batches and their items for a specific entity (table or room).
+ * Used to restore previous orders when selecting an occupied table or room.
  *
  * NOTE: This now filters out cancelled batches on the server side to match
  * the behavior of fetchDashboardTables() — cancelled batches must not
  * contribute to running totals or be displayed as active Previous Batches.
  */
-export function useTableBatches(tableId: string | null) {
+function useEntityBatches(entityId: string | null, entityType: 'table_id' | 'room_id' = 'table_id') {
   return useQuery<FrontendOrderBatch[]>({
-    queryKey: batchKeys.byTable(tableId ?? '__none__'),
+    queryKey: ['batches', entityType, entityId ?? '__none__'],
     queryFn: async () => {
-      if (!tableId) return []
+      if (!entityId) return []
 
-      // Only fetch non-paid, non-cancelled batches — matches Dashboard logic
+      const filter = { [entityType]: entityId }
+
       const { data: batchRows, error: batchError } = await db.findMany<OrderBatchRow>(
         'order_batches',
-        { table_id: tableId },
+        filter,
         { orderBy: 'created_at', orderDir: 'asc' },
       )
 
       if (batchError) throw batchError
       if (!batchRows || batchRows.length === 0) return []
 
-      // Filter out cancelled batches server-side to match Dashboard behavior
+      // Filter out cancelled & fully paid batches
       const activeBatches = batchRows.filter(b => b.status !== 'cancelled' && b.status !== 'paid')
       if (activeBatches.length === 0) return []
 
-      // Fetch all items for these batches, filtered server-side via .in()
+      // Fetch all items for these batches
       const batchIds = activeBatches.map(b => b.id)
 
       const { data: allItems, error: itemsError } = await insforge.database
@@ -136,9 +137,17 @@ export function useTableBatches(tableId: string | null) {
         rowToFrontendBatch(batch, itemsByBatch.get(batch.id) ?? []),
       )
     },
-    enabled: !!tableId,
+    enabled: !!entityId,
     staleTime: 60_000,
   })
+}
+
+export function useTableBatches(tableId: string | null) {
+  return useEntityBatches(tableId, 'table_id')
+}
+
+export function useRoomBatches(roomId: string | null) {
+  return useEntityBatches(roomId, 'room_id')
 }
 
 // ===== Dashboard Hooks =====

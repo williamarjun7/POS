@@ -261,27 +261,7 @@ async function cashFlowReport(params: GenerateParams) {
   )
 }
 
-async function taxSummaryReport(params: GenerateParams) {
-  const from = params.startDate ? `${params.startDate}T00:00:00Z` : startOfMonth()
-  const { data } = await insforge.database
-    .from('invoices')
-    .select('*')
-    .gte('created_at', from)
-  const invoices = (data ?? []) as InvoiceRow[]
-  const rows = invoices.map((inv) => [
-    inv.invoice_number,
-    inv.customer_name,
-    fmtCurrency(inv.subtotal),
-    fmtCurrency(inv.tax),
-    fmtCurrency(inv.total),
-    inv.status,
-  ])
-  triggerDownload(
-    { title: params.reportTitle, headers: ['Invoice', 'Customer', 'Subtotal', 'Tax', 'Total', 'Status'], rows },
-    'tax-summary',
-    params.format,
-  )
-}
+
 
 async function stockStatusReport(params: GenerateParams) {
   const invRes = await db.findMany<InventoryItemRow>('inventory_items')
@@ -347,29 +327,7 @@ async function roomOccupancyReport(params: GenerateParams) {
   )
 }
 
-async function vatSummaryReport(params: GenerateParams) {
-  const from = params.startDate ? `${params.startDate}T00:00:00Z` : startOfMonth()
-  const { data } = await insforge.database
-    .from('invoices')
-    .select('*')
-    .gte('created_at', from)
-  const invoices = (data ?? []) as InvoiceRow[]
-  const totalTax = invoices.reduce((s, i) => s + i.tax, 0)
-  const totalRevenue = invoices.reduce((s, i) => s + i.total, 0)
-  const rows = invoices.map((inv) => [
-    inv.invoice_number,
-    inv.customer_name,
-    fmtCurrency(inv.subtotal),
-    fmtCurrency(inv.tax),
-    fmtCurrency(inv.total),
-  ])
-  rows.push(['TOTAL', '', fmtCurrency(invoices.reduce((s, i) => s + i.subtotal, 0)), fmtCurrency(totalTax), fmtCurrency(totalRevenue)])
-  triggerDownload(
-    { title: params.reportTitle, headers: ['Invoice', 'Customer', 'Subtotal', 'VAT', 'Total'], rows },
-    'vat-summary',
-    params.format,
-  )
-}
+
 
 // ─── Handler Map ────────────────────────────────────────────
 
@@ -380,12 +338,10 @@ const handlers: Record<string, (p: GenerateParams) => Promise<void>> = {
   '4': categoryWiseSales,
   '5': profitLossStatement,
   '6': cashFlowReport,
-  '7': taxSummaryReport,
   '8': stockStatusReport,
   '9': consumptionReport,
   '10': topCustomersReport,
   '11': roomOccupancyReport,
-  '12': vatSummaryReport,
 }
 
 export async function generateReport(params: GenerateParams): Promise<void> {

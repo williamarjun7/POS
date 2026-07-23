@@ -7,6 +7,7 @@ import { BaseModal } from "@/components/ui/modal"
 import {
   FormInput, FormSelect, FormActions, FormToggle,
 } from "@/components/ui/form-field"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
@@ -44,26 +45,11 @@ const MAX_IMAGE_SIZE_MB = 5
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void }) {
   return (
-    <motion.button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={onChange}
-      whileTap={{ scale: 0.88 }}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-all duration-200",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        checked
-          ? "bg-emerald-500 shadow-[0_0_6px] shadow-emerald-500/30"
-          : "bg-muted-foreground/15 hover:bg-muted-foreground/25",
-      )}
-    >
-      <motion.span
-        animate={{ x: checked ? 17 : 3 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 0.8 }}
-        className="inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm shadow-black/10 ring-0"
-      />
-    </motion.button>
+    <Switch
+      checked={checked}
+      onChange={onChange}
+      size="sm"
+    />
   )
 }
 
