@@ -2,7 +2,6 @@ CREATE OR REPLACE FUNCTION public.process_payment(
   p_table_id                UUID,
   p_customer_name           TEXT,
   p_invoice_subtotal        DECIMAL(14,2),
-  p_invoice_tax             DECIMAL(12,2),
   p_invoice_discount        DECIMAL(12,2),
   p_invoice_total           DECIMAL(14,2),
   p_invoice_status          TEXT,
@@ -127,8 +126,8 @@ BEGIN
     v_is_new_invoice := false;
   ELSE
     v_invoice_number := format('INV-%s-%s', TO_CHAR(NOW(), 'YYYY'), NEXTVAL('invoice_number_seq'));
-    INSERT INTO invoices (invoice_number, customer_name, table_id, order_batch_ids, subtotal, tax, discount, total, status, payment_method, user_id)
-    VALUES (v_invoice_number, COALESCE(p_customer_name, 'Walk-in'), p_table_id, p_order_batch_ids, p_invoice_subtotal, p_invoice_tax, p_invoice_discount, p_invoice_total, p_invoice_status, p_payment_method, p_user_id)
+    INSERT INTO invoices (invoice_number, customer_name, table_id, order_batch_ids, subtotal, discount, total, status, payment_method, user_id)
+    VALUES (v_invoice_number, COALESCE(p_customer_name, 'Walk-in'), p_table_id, p_order_batch_ids, p_invoice_subtotal, p_invoice_discount, p_invoice_total, p_invoice_status, p_payment_method, p_user_id)
     RETURNING id INTO v_invoice_id;
   END IF;
   v_step2_time := clock_timestamp();
