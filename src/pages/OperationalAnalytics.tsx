@@ -250,7 +250,7 @@ export default function OperationalAnalytics() {
             <StatCard label="Queue Size" value={String(queueHealth?.queueSize ?? 0)} icon="Timer" color="text-amber-500" trend="neutral" trendValue={`Avg wait ${queueHealth?.averageWaitTime ?? '—'}m`} index={5} />
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <ChartCard title="Revenue Trend">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={monthlyRevenue}>
@@ -278,7 +278,7 @@ export default function OperationalAnalytics() {
               </ChartCard>
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               {topProducts.length > 0 ? (
                 <div className="rounded-xl border border-border bg-card p-5">
                   <h3 className="mb-4 text-base font-semibold">Top Products</h3>
@@ -336,7 +336,7 @@ export default function OperationalAnalytics() {
         {/* ── Sales ── */}
         {activeTab === 'sales' && (
           <motion.div variants={pageTransitionFast} className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <ChartCard title="Revenue Trend">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={monthlyRevenue}>
@@ -387,7 +387,7 @@ export default function OperationalAnalytics() {
         {/* ── Financial ── */}
         {activeTab === 'financial' && (
           <motion.div variants={pageTransitionFast} className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <ChartCard title="Revenue Breakdown">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={monthlyRevenue}>
@@ -450,7 +450,7 @@ export default function OperationalAnalytics() {
         {/* ── Payments ── */}
         {activeTab === 'payments' && (
           <motion.div variants={pageTransitionFast} className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <ChartCard title="Payment Method Distribution">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -491,13 +491,13 @@ export default function OperationalAnalytics() {
             </div>
 
             {/* System Telemetry */}
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <div className="rounded-xl border border-border bg-card p-5">
                 <h3 className="mb-4 text-base font-semibold flex items-center gap-2">
                   <BarChart3 className="h-4 w-4 text-cyan-500" />
                   System Telemetry
                 </h3>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="rounded-lg bg-muted p-3">
                     <p className="text-[10px] text-muted-foreground uppercase">Queue Size</p>
                     <p className="text-lg font-bold">{queueHealth?.queueSize ?? 0}</p>
@@ -550,7 +550,7 @@ export default function OperationalAnalytics() {
         {/* ── Inventory ── */}
         {activeTab === 'inventory' && (
           <motion.div variants={pageTransitionFast} className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <div className="rounded-xl border border-border bg-card p-5">
                 <h3 className="mb-4 text-base font-semibold flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-amber-500" />
@@ -648,7 +648,7 @@ export default function OperationalAnalytics() {
               ))}
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <ChartCard title="Occupancy Forecast (7 Days)">
                 {occupancyForecast ? (
                   <ResponsiveContainer width="100%" height="100%">
@@ -698,7 +698,7 @@ export default function OperationalAnalytics() {
         {/* ── Staff ── */}
         {activeTab === 'staff' && (
           <motion.div variants={pageTransitionFast} className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
               <div className="rounded-xl border border-border bg-card p-5">
                 <h3 className="mb-4 text-base font-semibold">Staff Performance</h3>
                 {activeStaff && activeStaff.length > 0 ? (

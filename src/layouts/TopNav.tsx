@@ -58,51 +58,54 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
   }, [])
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="flex w-full items-center gap-4 px-4 lg:px-6">
+    <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center border-b border-border bg-background/80 backdrop-blur-md">
+      <div className="flex w-full items-center gap-2 sm:gap-4 px-responsive">
+        {/* Mobile hamburger */}
         <button
           onClick={onMobileMenuToggle}
-          className="flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+          aria-label="Toggle menu"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
 
-        <div className="flex items-center gap-2">
-          <button onClick={() => navigate('/dashboard')} aria-label="Navigate to dashboard" className="flex lg:hidden h-6 w-6 items-center justify-center rounded-md shrink-0 animate-pulse cursor-pointer overflow-hidden">
+        {/* Page title */}
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <button onClick={() => navigate('/dashboard')} aria-label="Navigate to dashboard" className="flex lg:hidden h-8 w-8 shrink-0 items-center justify-center rounded-md cursor-pointer overflow-hidden">
             <img src={logo} alt="Highlands Cafe & Motel Inn" className="h-full w-full rounded-full object-cover" />
           </button>
-          <span className="text-lg font-semibold">{currentPageName}</span>
+          <span className="text-base sm:text-lg font-semibold text-truncate">{currentPageName}</span>
         </div>
 
-
-
-        <div className="ml-auto flex items-center gap-2">
+        {/* Right actions */}
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleTheme}
-            className="h-10 w-10 text-muted-foreground hover:text-foreground"
+            className="h-9 w-9 sm:h-10 sm:w-10 text-muted-foreground hover:text-foreground"
           >
-            {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            {theme === 'dark' ? <Sun className="h-4 w-4 sm:h-5 sm:w-5" /> : <Moon className="h-4 w-4 sm:h-5 sm:w-5" />}
           </Button>
 
-          <div className="h-6 w-px bg-border" />
+          <div className="hidden sm:block h-6 w-px bg-border shrink-0" />
 
           {/* Avatar with Dropdown */}
           <div className="relative" ref={profileRef}>
             <button
               onClick={() => setProfileOpen((o) => !o)}
               className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground ring-2 ring-transparent transition-all hover:ring-primary/30"
+              aria-label="Profile menu"
             >
               {initials}
             </button>
 
             {profileOpen && (
-              <div className="absolute right-0 top-full mt-2 w-56 rounded-xl border bg-popover p-2 shadow-lg ring-1 ring-border/50 animate-in fade-in zoom-in-95 origin-top-right">
+              <div className="absolute right-0 top-full mt-2 w-56 max-w-[calc(100vw-2rem)] rounded-xl border bg-popover p-2 shadow-lg ring-1 ring-border/50 animate-in fade-in zoom-in-95 origin-top-right">
                 <div className="px-3 py-2.5">
-                  <p className="text-sm font-semibold">{user?.name ?? 'User'}</p>
+                  <p className="text-sm font-semibold text-truncate">{user?.name ?? 'User'}</p>
                   <p className="text-xs text-muted-foreground">{user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'User'}</p>
                 </div>
                 <div className="mx-2 h-px bg-border" />
@@ -110,14 +113,14 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
                   onClick={() => { navigate('/profile'); setProfileOpen(false); }}
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  <User className="h-4 w-4" />
+                  <User className="h-4 w-4 shrink-0" />
                   Profile
                 </button>
                 <button
                   onClick={() => { navigate('/admin'); setProfileOpen(false); }}
                   className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  <Settings className="h-4 w-4" />
+                  <Settings className="h-4 w-4 shrink-0" />
                   Settings
                 </button>
               </div>
@@ -126,9 +129,10 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
 
           {/* Logout */}
           <button
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            aria-label="Logout"
           >
-            <LogOut className="h-5 w-5" />
+            <LogOut className="h-4 w-4 sm:h-5 sm:w-5" />
           </button>
         </div>
       </div>

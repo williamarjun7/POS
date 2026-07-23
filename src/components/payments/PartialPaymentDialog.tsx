@@ -107,7 +107,7 @@ export function PartialPaymentDialog({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
         transition={{ type: 'spring', stiffness: 350, damping: 28 }}
-        className="relative w-full max-w-md rounded-2xl border bg-background shadow-2xl overflow-hidden"
+        className="relative w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-2xl border bg-background shadow-2xl overflow-hidden"
         role="dialog"
         aria-modal="true"
       >
@@ -178,7 +178,7 @@ export function PartialPaymentDialog({
               <button
                 key={qa.value}
                 onClick={() => setAmount(String(qa.value))}
-                className={`px-4 py-2 rounded-lg border text-sm font-semibold transition-all duration-150
+                className={`px-4 py-2.5 min-h-[44px] rounded-lg border text-sm font-semibold transition-all duration-150
                   ${amountNum === qa.value
                     ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 shadow-sm'
                     : 'border-border hover:border-emerald-300 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/10 text-muted-foreground hover:text-foreground'
@@ -239,7 +239,7 @@ export function PartialPaymentDialog({
           <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block mb-3">
             Select Payment Method
           </label>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {PAYMENT_METHODS.map(pm => {
               const Icon = pm.icon
               const isActive = method === pm.value

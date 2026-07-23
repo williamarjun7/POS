@@ -15,6 +15,7 @@ import { RequirePermission } from '@/lib/core/PermissionGuards';
 import { recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
 import { useMenuCategories, useMenuItems } from '@/lib/api/menu.hooks';
 import { useDashboardTables, useRooms, useTableBatches, useRoomBatches } from '@/lib/hooks';
+import { useMediaQuery } from '@/lib/hooks/useMediaQuery';
 
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRateLimit } from '@/lib/hooks/useRateLimit'
@@ -159,8 +160,9 @@ export function POS() {
   const [searchParams] = useSearchParams();
   const [selectedCat, setSelectedCat] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [cartPanelOpen, setCartPanelOpen] = useState(true);
+  const isDesktop = useMediaQuery("(min-width: 1024px)")
+  const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
+  const [cartPanelOpen, setCartPanelOpen] = useState(isDesktop);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [selectedTableId, setSelectedTableId] = useState('');
   const [customerName, setCustomerName] = useState('');

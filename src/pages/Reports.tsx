@@ -235,7 +235,7 @@ export function Reports() {
         {/* Filters */}
         <motion.div variants={pageTransitionFast} className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <div className="relative flex-1 w-full sm:min-w-0 sm:max-w-xs">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
                 type="text"
@@ -397,7 +397,7 @@ export function Reports() {
         </motion.div>
 
         {/* Quick Stats */}
-        <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-3">
+        <motion.div variants={pageTransitionFast} className="grid gap-4 grid-cols-1 sm:grid-cols-3">
           <motion.div 
             whileHover={{ y: -3, scale: 1.02 }}
             className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm"

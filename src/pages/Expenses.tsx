@@ -182,7 +182,7 @@ export function Expenses() {
         </motion.div>
 
         {/* KPI Cards */}
-        <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <motion.div variants={pageTransitionFast} className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="Today's Expenses" value={formatCurrency(todayExpenses)} icon="TrendingDown" color="text-destructive" index={0} />
           <StatCard label="This Month" value={formatCurrency(thisMonth)} icon="Calendar" color="text-primary" index={1} />
           <StatCard label="Total All Time" value={formatCurrency(totalExpenses)} icon="DollarSign" color="text-warning" index={2} />
@@ -231,13 +231,13 @@ export function Expenses() {
         <BaseModal open={modalOpen} onClose={() => { setModalOpen(false); setEditingExpense(null) }} title={editingExpense ? "Edit Expense" : "New Expense"} size="md">
           <div className="space-y-4">
             <FormInput label="Description" required placeholder="Enter expense description" value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <FormSelect label="Category" required value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value as ExpenseCategory }))}
                 options={categoryOptions.filter(c => c.id !== "all").map(c => ({ value: c.id, label: c.label }))}
               />
               <FormInput label="Amount (Rs.)" type="number" required min={1} value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} placeholder="0.00" />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <FormInput label="Vendor / Payee" placeholder="Optional vendor name" value={form.vendor} onChange={e => setForm(p => ({ ...p, vendor: e.target.value }))} />
               <FormInput label="Receipt #" placeholder="Optional receipt number" value={form.receiptNumber} onChange={e => setForm(p => ({ ...p, receiptNumber: e.target.value }))} />
             </div>

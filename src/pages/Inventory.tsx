@@ -159,7 +159,7 @@ function LowStockAlert({ items }: { items: InventoryItem[] }) {
           </motion.div>
           <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-400">Stock Alerts</h3>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
           {outOfStockItems.map((item) => (
             <motion.div 
               key={item.id} 
@@ -278,11 +278,11 @@ function ItemFormModal({
       <form onSubmit={handleSubmit} className="space-y-4">
         <FormInput label="Item Name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Coffee Beans" />
         <FormSelect label="Category" value={category} onChange={(e) => setCategory(e.target.value)} options={categoryOptions} />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput label="Current Stock" type="number" min={0} value={currentStock} onChange={(e) => setCurrentStock(e.target.value)} placeholder="0" />
           <FormInput label="Min Stock" type="number" min={0} value={minStock} onChange={(e) => setMinStock(e.target.value)} placeholder="0" />
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput label="Unit" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="kg, liters, pieces" />
           <FormInput label="Cost per Unit (Rs.)" type="number" min={0} value={costPerUnit} onChange={(e) => setCostPerUnit(e.target.value)} placeholder="0" />
         </div>
@@ -629,7 +629,7 @@ export function Inventory() {
       <LowStockAlert items={items} />
 
       <motion.div 
-        className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+        className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
         initial="hidden"
         animate="visible"
         variants={staggerContainerFast}
@@ -657,27 +657,27 @@ export function Inventory() {
         transition={{ delay: 0.3 }}
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
+          <div className="relative w-full sm:flex-1 sm:w-auto">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search items or suppliers..."
               className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-4 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary" />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}
-              className="h-10 rounded-lg border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary">
+              className="h-10 w-full sm:w-auto rounded-lg border border-border bg-background px-3 text-sm outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary">
               <option value="all">All Categories</option>
               {categoryOptions.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
-            <div className="relative">
+            <div className="relative flex-1 sm:flex-none min-w-0">
               <ArrowUpDown className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}
-                className="h-10 rounded-lg border border-border bg-background pl-9 pr-8 text-sm outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary">
+                className="h-10 w-full sm:w-auto rounded-lg border border-border bg-background pl-9 pr-8 text-sm outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary">
                 {SORT_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </div>
             <button onClick={() => setShowHistory(!showHistory)}
-              className={cn("h-10 rounded-lg px-3 text-sm font-medium transition-colors flex items-center gap-1.5", showHistory ? "bg-primary text-primary-foreground" : "border border-border bg-background text-muted-foreground hover:text-foreground")}>
-              <History className="h-4 w-4" />
+              className={cn("h-10 rounded-lg px-3 text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0", showHistory ? "bg-primary text-primary-foreground" : "border border-border bg-background text-muted-foreground hover:text-foreground")}>
+              <History className="h-4 w-4 shrink-0" />
               History
             </button>
           </div>

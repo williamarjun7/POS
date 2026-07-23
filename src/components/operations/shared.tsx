@@ -17,13 +17,13 @@ export function QuickActionButton({
       role="menuitem"
       tabIndex={-1}
       className={cn(
-        "flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors w-full",
+        "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-xs font-semibold transition-colors w-full whitespace-nowrap min-h-[36px]",
         variant === "default" && "text-muted-foreground hover:bg-muted hover:text-foreground",
         variant === "danger" && "text-red-500 hover:bg-red-500/10",
         variant === "success" && "text-emerald-500 hover:bg-emerald-500/10",
       )}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="h-4 w-4 shrink-0" />
       {label}
     </motion.button>
   )

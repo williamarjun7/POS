@@ -3,21 +3,22 @@ import { motion, useReducedMotion, type Variants } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { SmartDropdown } from "@/components/ui/SmartDropdown"
 import { QuickActionButton } from "./shared"
+import { SmallButton } from "@/components/ui/ButtonVariants"
 import type { Room, RoomStatus, HousekeepingTask, MaintenanceRequest } from "@/types"
 import {
   Calendar, Sparkles, Wrench,
   CheckCheck,
   MoreHorizontal, ArrowRightFromLine,
-  Eye, Edit, Paintbrush, History, PowerOff,
+  Eye, Edit, History, PowerOff,
   Hotel, Clock, Sofa, LogOut, XCircle, Printer, Receipt,
-  IndianRupee, CalendarDays,
+  IndianRupee, CalendarDays, Moon, Sun,
 } from "lucide-react"
 
 // ── Animation Variants ───────────────────────────────────────
 
 const staggerItem: Variants = {
-  hidden: { opacity: 0, y: 12 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: "easeOut" } },
+  hidden: { opacity: 0, y: 16 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.25, 0.1, 0.25, 1] } },
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -31,39 +32,101 @@ function pluralize(count: number, singular: string, plural?: string): string {
   return count === 1 ? singular : (plural ?? `${singular}s`)
 }
 
-// ── Status config ────────────────────────────────────────────
+function formatCurrency(amount: number): string {
+  return `Rs. ${amount.toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+}
 
-const STATUS_CFG: Record<string, { label: string; dot: string; bg: string; text: string; border: string }> = {
-  occupied:    { label: "Occupied",    dot: "bg-primary",        bg: "bg-primary/10",        text: "text-primary",             border: "border-primary/20" },
-  vacant:      { label: "Available",   dot: "bg-emerald-500",    bg: "bg-emerald-500/10",     text: "text-emerald-600",          border: "border-emerald-500/20" },
-  available:   { label: "Available",   dot: "bg-emerald-500",    bg: "bg-emerald-500/10",     text: "text-emerald-600",          border: "border-emerald-500/20" },
-  reserved:    { label: "Reserved",    dot: "bg-amber-500",      bg: "bg-amber-500/10",       text: "text-amber-600",            border: "border-amber-500/20" },
-  cleaning:    { label: "Cleaning",    dot: "bg-cyan-500",       bg: "bg-cyan-500/10",        text: "text-cyan-600",             border: "border-cyan-500/20" },
-  dirty:       { label: "Dirty",       dot: "bg-amber-500",      bg: "bg-amber-500/10",       text: "text-amber-600",            border: "border-amber-500/20" },
-  maintenance: { label: "Maintenance", dot: "bg-orange-500",     bg: "bg-orange-500/10",      text: "text-orange-600",           border: "border-orange-500/20" },
-  out_of_order:{ label: "Disabled",    dot: "bg-red-500",        bg: "bg-red-500/10",         text: "text-red-600",              border: "border-red-500/20" },
+// ── Status config with gradient colors ───────────────────────
+
+const STATUS_CFG: Record<string, {
+  label: string; dot: string; bg: string; text: string; border: string;
+  gradient: string; glow: string; icon: React.ElementType
+}> = {
+  occupied: {
+    label: "Occupied", dot: "bg-primary",
+    bg: "bg-gradient-to-br from-primary/[0.08] to-primary/[0.02]",
+    text: "text-primary", border: "border-primary/25",
+    gradient: "from-primary/20 via-primary/10 to-transparent",
+    glow: "shadow-primary/5", icon: Moon,
+  },
+  vacant: {
+    label: "Available", dot: "bg-emerald-500",
+    bg: "bg-gradient-to-br from-emerald-500/[0.08] to-emerald-500/[0.02]",
+    text: "text-emerald-600", border: "border-emerald-500/25",
+    gradient: "from-emerald-500/20 via-emerald-500/10 to-transparent",
+    glow: "shadow-emerald-500/5", icon: Sun,
+  },
+  available: {
+    label: "Available", dot: "bg-emerald-500",
+    bg: "bg-gradient-to-br from-emerald-500/[0.08] to-emerald-500/[0.02]",
+    text: "text-emerald-600", border: "border-emerald-500/25",
+    gradient: "from-emerald-500/20 via-emerald-500/10 to-transparent",
+    glow: "shadow-emerald-500/5", icon: Sun,
+  },
+  reserved: {
+    label: "Reserved", dot: "bg-amber-500",
+    bg: "bg-gradient-to-br from-amber-500/[0.08] to-amber-500/[0.02]",
+    text: "text-amber-600", border: "border-amber-500/25",
+    gradient: "from-amber-500/20 via-amber-500/10 to-transparent",
+    glow: "shadow-amber-500/5", icon: Calendar,
+  },
+  cleaning: {
+    label: "Cleaning", dot: "bg-cyan-500",
+    bg: "bg-gradient-to-br from-cyan-500/[0.08] to-cyan-500/[0.02]",
+    text: "text-cyan-600", border: "border-cyan-500/25",
+    gradient: "from-cyan-500/20 via-cyan-500/10 to-transparent",
+    glow: "shadow-cyan-500/5", icon: Sparkles,
+  },
+  dirty: {
+    label: "Dirty", dot: "bg-amber-500",
+    bg: "bg-gradient-to-br from-amber-500/[0.08] to-amber-500/[0.02]",
+    text: "text-amber-600", border: "border-amber-500/25",
+    gradient: "from-amber-500/20 via-amber-500/10 to-transparent",
+    glow: "shadow-amber-500/5", icon: Sparkles,
+  },
+  maintenance: {
+    label: "Maintenance", dot: "bg-orange-500",
+    bg: "bg-gradient-to-br from-orange-500/[0.08] to-orange-500/[0.02]",
+    text: "text-orange-600", border: "border-orange-500/25",
+    gradient: "from-orange-500/20 via-orange-500/10 to-transparent",
+    glow: "shadow-orange-500/5", icon: Wrench,
+  },
+  out_of_order: {
+    label: "Disabled", dot: "bg-red-500",
+    bg: "bg-gradient-to-br from-red-500/[0.08] to-red-500/[0.02]",
+    text: "text-red-600", border: "border-red-500/25",
+    gradient: "from-red-500/20 via-red-500/10 to-transparent",
+    glow: "shadow-red-500/5", icon: PowerOff,
+  },
 }
 
 function getCfg(status: string) {
   return STATUS_CFG[status] ?? {
-    label: status.replace(/_/g, " "), dot: "bg-gray-400", bg: "bg-muted",
-    text: "text-muted-foreground", border: "border-border",
+    label: status.replace(/_/g, " "), dot: "bg-gray-400",
+    bg: "bg-muted/30", text: "text-muted-foreground",
+    border: "border-border", gradient: "from-muted/20 via-transparent to-transparent",
+    glow: "", icon: Sun,
   }
 }
 
-// ── Status Badge (shared, smaller for non-occupied states) ──
+// ── Status Badge ─────────────────────────────────────────────
 
-function StatusBadge({ status, large }: { status: string; large?: boolean }) {
+function StatusBadge({ status }: { status: string }) {
   const c = getCfg(status)
+  const Icon = c.icon
   return (
-    <span className={cn(
-      "inline-flex items-center gap-1.5 rounded-lg border font-semibold uppercase tracking-wider",
-      large ? "px-3 py-1.5 text-xs" : "px-2 py-1 text-[9px]",
-      c.bg, c.text, c.border,
-    )}>
-      <span className={cn("rounded-full", large ? "h-2 w-2" : "h-1.5 w-1.5", c.dot)} />
+    <motion.span
+      initial={{ opacity: 0, scale: 0.8 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.2 }}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest",
+        c.bg, c.text, c.border,
+      )}
+    >
+      <Icon className="h-3 w-3" />
       {c.label}
-    </span>
+    </motion.span>
   )
 }
 
@@ -71,71 +134,47 @@ function StatusBadge({ status, large }: { status: string; large?: boolean }) {
 
 function GuestAvatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
   const initial = name.charAt(0).toUpperCase()
-  const dims = size === "md" ? "h-10 w-10 text-sm" : "h-9 w-9 text-xs"
+  const colors = [
+    "bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300",
+    "bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-300",
+    "bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300",
+    "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300",
+    "bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300",
+    "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300",
+  ]
+  const colorIndex = name.length % colors.length
+  const dims = size === "md" ? "h-11 w-11 text-sm" : "h-9 w-9 text-xs"
   return (
-    <div className={cn(
-      "flex items-center justify-center rounded-full bg-primary/10 shrink-0",
-      dims,
-    )}>
-      <span className="font-bold text-primary">{initial}</span>
-    </div>
-  )
-}
-
-// ── HK/MT badge helpers ──────────────────────────────────────
-
-const HK_STYLES: Record<string, string> = {
-  pending: "bg-amber-500/15 text-amber-500 border-amber-500/20",
-  in_progress: "bg-blue-500/15 text-blue-500 border-blue-500/20",
-  completed: "bg-emerald-500/15 text-emerald-500 border-emerald-500/20",
-}
-const MT_STYLES: Record<string, string> = {
-  open: "bg-red-500/15 text-red-500 border-red-500/20",
-  assigned: "bg-orange-500/15 text-orange-500 border-orange-500/20",
-  in_progress: "bg-blue-500/15 text-blue-500 border-blue-500/20",
-  resolved: "bg-emerald-500/15 text-emerald-500 border-emerald-500/20",
-  closed: "bg-muted text-muted-foreground border-border",
-}
-
-function MiniBadge({ label, variant }: { label: string; variant: "hk" | "mt" }) {
-  return (
-    <span className={cn(
-      "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium leading-none",
-      variant === "hk" ? HK_STYLES[label.toLowerCase()] ?? "bg-muted text-muted-foreground border-border"
-        : MT_STYLES[label.toLowerCase()] ?? "bg-muted text-muted-foreground border-border",
-    )}>
-      <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {label}
-    </span>
-  )
-}
-
-// ── Primary Action Button ────────────────────────────────────
-
-function PrimaryBtn({ icon: Icon, label, onClick, variant = "primary", disabled }: {
-  icon: React.ElementType; label: string; onClick: () => void
-  variant?: "primary" | "success" | "danger" | "ghost"
-  disabled?: boolean
-}) {
-  const styles = {
-    primary:  "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm",
-    success:  "bg-emerald-500 text-white hover:bg-emerald-500/90 shadow-sm",
-    danger:   "bg-red-500 text-white hover:bg-red-500/90 shadow-sm",
-    ghost:    "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
-  }
-  return (
-    <motion.button
-      whileTap={{ scale: 0.97 }}
-      onClick={onClick}
-      disabled={disabled}
+    <motion.div
+      initial={{ scale: 0 }}
+      animate={{ scale: 1 }}
+      transition={{ type: "spring", stiffness: 300, damping: 15 }}
       className={cn(
-        "flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed",
-        styles[variant],
+        "flex items-center justify-center rounded-xl font-bold shrink-0 shadow-sm",
+        dims, colors[colorIndex],
       )}
     >
-      <Icon className="h-4 w-4" />
-      {label}
-    </motion.button>
+      <span>{initial}</span>
+    </motion.div>
+  )
+}
+
+// ── Mini Stat Chip ───────────────────────────────────────────
+
+function StatChip({ icon: Icon, label, value, color }: {
+  icon: React.ElementType; label: string; value: string; color?: string
+}) {
+  return (
+    <div className={cn(
+      "flex items-center gap-2 rounded-lg border px-2.5 py-1.5",
+      "bg-background/60 border-border/50",
+    )}>
+      <Icon className={cn("h-3.5 w-3.5 shrink-0", color ?? "text-muted-foreground/50")} />
+      <div className="min-w-0">
+        <p className="text-[10px] font-medium text-muted-foreground/60 leading-none">{label}</p>
+        <p className="text-xs font-semibold text-foreground leading-tight mt-0.5">{value}</p>
+      </div>
+    </div>
   )
 }
 
@@ -152,7 +191,12 @@ function MoreMenu({ items, triggerRef, open, onToggle, onAction }: {
         whileTap={{ scale: 0.9 }}
         ref={triggerRef}
         onClick={(e) => { e.stopPropagation(); onToggle() }}
-        className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+        className={cn(
+          "flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-150",
+          open
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+        )}
         aria-label="More actions"
       >
         <MoreHorizontal className="h-4 w-4" />
@@ -181,7 +225,7 @@ function MoreMenu({ items, triggerRef, open, onToggle, onAction }: {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//   ROOM CARD — State-Aware Mini Control Panel
+//   ROOM CARD — Premium State-Aware Control Panel
 // ═══════════════════════════════════════════════════════════════
 
 export function RoomCard({
@@ -206,7 +250,7 @@ export function RoomCard({
   const nightlyRate = room.pricePerNight || room.price || 0
   const guestName = room.guest || ""
 
-  // Stay computation (occupied)
+  // Stay computation
   const checkIn = room.checkIn ? new Date(room.checkIn) : null
   const checkOut = room.checkOut ? new Date(room.checkOut) : null
   const today = new Date()
@@ -223,22 +267,12 @@ export function RoomCard({
     ? `From ${formatShortDate(room.checkIn)}`
     : ""
 
-  // Arrival display (reserved)
-  const checkInDate = room.checkIn ? new Date(room.checkIn) : null
-  const arrivalIsToday = checkInDate ? new Date().toDateString() === checkInDate.toDateString() : false
-  const arrivalLabel = arrivalIsToday ? "Today" : checkInDate ? formatShortDate(room.checkIn) : ""
-
-  // Occupied-specific status flags
-  const showLastNight = isLastNight && !isOverdue
-  const showOverdue = isOverdue
+  const arrivalIsToday = checkIn ? new Date().toDateString() === checkIn.toDateString() : false
+  const arrivalLabel = arrivalIsToday ? "Today" : checkIn ? formatShortDate(room.checkIn) : ""
   const estimatedCharges = nightlyRate * nightsElapsed
 
   // ── Contextual More Menu Items ──────────────────────────
   const menuItems = (() => {
-    const common: { action: string; label: string; icon: React.ElementType; variant?: "default" | "danger" | "success" }[] = [
-      { action: "details", label: "View Details", icon: Eye },
-      { action: "edit", label: "Edit Room", icon: Edit },
-    ]
     if (isAvailable) {
       return [
         { action: "details", label: "View Details", icon: Eye },
@@ -249,13 +283,15 @@ export function RoomCard({
     }
     if (isReserved) {
       return [
-        ...common,
         { action: "editbooking", label: "Edit Reservation", icon: Calendar },
+        { action: "details", label: "View Details", icon: Eye },
         { action: "history", label: "View History", icon: History },
+        { action: "edit", label: "Edit Room", icon: Edit },
       ]
     }
     if (isOccupied) {
-      return [          { action: "folio", label: "View Folio", icon: Receipt },
+      return [
+        { action: "folio", label: "View Folio", icon: Receipt },
         { action: "details", label: "View Booking", icon: Calendar },
         { action: "editbooking", label: "Edit Guest", icon: Edit },
         { action: "extend", label: "Extend Stay", icon: Clock },
@@ -284,7 +320,8 @@ export function RoomCard({
       ]
     }
     return [
-      ...common,
+      { action: "details", label: "View Details", icon: Eye },
+      { action: "edit", label: "Edit Room", icon: Edit },
       { action: "history", label: "View History", icon: History },
     ]
   })()
@@ -296,23 +333,27 @@ export function RoomCard({
       variants={shouldReduceMotion ? undefined : staggerItem}
       layout={!shouldReduceMotion}
       className={cn(
-        "relative flex flex-col rounded-xl border bg-card shadow-sm transition-all duration-200",
-        "min-h-[340px]",
+        "group relative flex flex-col rounded-2xl border bg-card transition-all duration-200",
+        "min-h-[320px]",
         isOutOfOrder
-          ? "border-red-200/40 dark:border-red-900/20 opacity-65"
-          : "border-border hover:shadow-md hover:border-foreground/15",
-        "border-l-[3px]",
-        isOccupied && "border-l-primary",
-        isAvailable && "border-l-emerald-500",
-        isReserved && "border-l-amber-500",
-        isCleaning && "border-l-cyan-500",
-        (room.status === "dirty") && "border-l-amber-500",
-        (room.status === "maintenance") && "border-l-orange-500",
-        isOutOfOrder && "border-l-red-400",
+          ? "border-red-200/30 dark:border-red-900/20 opacity-60"
+          : "border-border/60 hover:shadow-lg hover:border-foreground/20",
+        cfg.glow,
       )}
     >
+      {/* Hover Shimmer Effect */}
+      {!isOutOfOrder && (
+        <div className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500">
+          <div className={cn(
+            "absolute inset-0 rounded-2xl bg-gradient-to-br",
+            cfg.gradient,
+          )} />
+        </div>
+      )}
+
+      {/* Disabled Badge */}
       {isOutOfOrder && (
-        <div className="absolute -top-1.5 -right-1.5 z-10 flex items-center gap-1 rounded-full bg-red-500 px-2.5 py-1 text-[10px] font-bold text-white shadow-sm">
+        <div className="absolute -top-2 -right-2 z-10 flex items-center gap-1 rounded-full bg-red-500 px-3 py-1 text-[10px] font-bold text-white shadow-lg shadow-red-500/30">
           <Clock className="h-3 w-3" />
           Disabled
         </div>
@@ -320,35 +361,56 @@ export function RoomCard({
 
       {/* ===== AVAILABLE ===== */}
       {isAvailable && (
-        <div className="flex flex-col gap-3 p-4 flex-1">
+        <div className="relative z-[1] flex flex-col gap-2.5 p-5 flex-1">
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-2xl font-black text-foreground tracking-tight">{roomNum}</span>
+              <motion.span
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="text-3xl font-black text-foreground tracking-tight"
+              >
+                {roomNum}
+              </motion.span>
               {roomTypeName && (
-                <p className="text-xs text-muted-foreground/70 mt-0.5">{roomTypeName}</p>
+                <p className="text-xs text-muted-foreground/60 mt-0.5 font-medium">{roomTypeName}</p>
               )}
             </div>
             <StatusBadge status={room.status} />
           </div>
 
           {nightlyRate > 0 && (
-            <div className="flex items-center gap-1 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-              <IndianRupee className="h-3.5 w-3.5" />
-              {nightlyRate.toLocaleString()}
-              <span className="text-xs font-normal text-muted-foreground/60">/ night</span>
-            </div>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.1 }}
+              className="flex items-center gap-1.5 mt-1"
+            >
+              <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                {formatCurrency(nightlyRate)}
+              </span>
+              <span className="text-xs text-muted-foreground/50 font-medium">/ night</span>
+            </motion.div>
           )}
 
           <div className="flex-1" />
 
-          <div className="flex items-center gap-1.5 text-[10px] text-emerald-600/60 dark:text-emerald-400/60">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.2 }}
+            className="flex items-center gap-2 text-[11px] text-emerald-600/70 dark:text-emerald-400/70 font-medium"
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
             Ready for check-in
-          </div>
+          </motion.div>
 
-          <div className="flex items-center gap-1.5">
-            <PrimaryBtn icon={CalendarDays} label="Reserve" onClick={() => handle("reserve")} variant="ghost" />
-            <PrimaryBtn icon={Hotel} label="Check In" onClick={() => handle("checkin")} />
+          {/* Action Buttons Container */}
+          <div className="flex items-center gap-1.5 pt-2">
+            <SmallButton icon={CalendarDays} label="Reserve" onClick={() => handle("reserve")} variant="ghost" />
+            <SmallButton icon={Hotel} label="Check In" onClick={() => handle("checkin")} />
             <div className="ml-auto">
               <MoreMenu
                 items={menuItems}
@@ -364,44 +426,55 @@ export function RoomCard({
 
       {/* ===== RESERVED ===== */}
       {isReserved && (
-        <div className="flex flex-col gap-3 p-4 flex-1">
+        <div className="relative z-[1] flex flex-col gap-2.5 p-5 flex-1">
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-2xl font-black text-foreground tracking-tight">{roomNum}</span>
+              <motion.span
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="text-3xl font-black text-foreground tracking-tight"
+              >
+                {roomNum}
+              </motion.span>
               {roomTypeName && (
-                <p className="text-xs text-muted-foreground/70 mt-0.5">{roomTypeName}</p>
+                <p className="text-xs text-muted-foreground/60 mt-0.5 font-medium">{roomTypeName}</p>
               )}
             </div>
             <StatusBadge status={room.status} />
           </div>
 
           {guestName && (
-            <div className="flex items-center gap-2.5 mt-1">
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.08 }}
+              className="flex items-center gap-3 mt-1"
+            >
               <GuestAvatar name={guestName} />
-              <div>
-                <p className="text-sm font-semibold text-foreground">{guestName}</p>
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-foreground truncate">{guestName}</p>
                 {arrivalLabel && (
                   <p className="text-xs text-amber-600/80 dark:text-amber-400/80 flex items-center gap-1 mt-0.5">
-                    <Calendar className="h-3.5 w-3.5" />
-                    Arrival: {arrivalLabel}
+                    <Calendar className="h-3 w-3" />
+                    Arrival: <span className="font-semibold">{arrivalLabel}</span>
                   </p>
                 )}
               </div>
-            </div>
+            </motion.div>
           )}
 
           <div className="flex-1" />
 
           {(hkTask || mtReq) && (
             <div className="flex flex-wrap items-center gap-1">
-              {hkTask && <MiniBadge label={hkTask.status.replace(/_/g, " ")} variant="hk" />}
-              {mtReq && <MiniBadge label={mtReq.status} variant="mt" />}
+              {hkTask && <BadgeSmall label={hkTask.status.replace(/_/g, " ")} variant="hk" />}
+              {mtReq && <BadgeSmall label={mtReq.status} variant="mt" />}
             </div>
           )}
 
-          <div className="flex items-center gap-1.5">
-            <PrimaryBtn icon={ArrowRightFromLine} label="Check In" onClick={() => handle("checkin")} />
-            <PrimaryBtn icon={XCircle} label="Cancel" onClick={() => handle("cancelreservation")} variant="ghost" />
+          <div className="flex items-center gap-1.5 pt-1">
+            <SmallButton icon={ArrowRightFromLine} label="Check In" onClick={() => handle("checkin")} />
+            <SmallButton icon={XCircle} label="Cancel" onClick={() => handle("cancelreservation")} variant="ghost" />
             <div className="ml-auto">
               <MoreMenu
                 items={menuItems}
@@ -417,98 +490,108 @@ export function RoomCard({
 
       {/* ===== OCCUPIED ===== */}
       {isOccupied && (
-        <div className="flex flex-col p-5 flex-1">
-          {/* ── Row 1: Room Number + Status Badge ── */}
-          <div className="flex items-start justify-between mb-4">
+        <div className="relative z-[1] flex flex-col p-5 flex-1">
+          {/* Top Section */}
+          <div className="flex items-start justify-between mb-3">
             <div>
-              <span className="text-[30px] font-black text-foreground tracking-tight leading-none">{roomNum}</span>
+              <motion.span
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="text-[32px] font-black text-foreground tracking-tight leading-none"
+              >
+                {roomNum}
+              </motion.span>
               {roomTypeName && (
-                <p className="text-xs text-muted-foreground/60 mt-1">{roomTypeName}</p>
+                <p className="text-xs text-muted-foreground/60 mt-0.5 font-medium">{roomTypeName}</p>
               )}
             </div>
             <div className="flex items-center gap-2">
-              {showOverdue && (
-                <span className="rounded-md bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-600 dark:text-red-400">
+              {isOverdue && (
+                <span className="rounded-lg bg-red-500/10 px-2.5 py-1 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase tracking-wider animate-pulse">
                   Overdue
                 </span>
               )}
-              {showLastNight && (
-                <span className="rounded-md bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-600 dark:text-amber-400">
+              {isLastNight && !isOverdue && (
+                <span className="rounded-lg bg-amber-500/10 px-2.5 py-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
                   Last Night
                 </span>
               )}
-              <StatusBadge status={room.status} large />
+              <StatusBadge status={room.status} />
             </div>
           </div>
 
-          {/* ── Row 2: Guest Info ── */}
+          {/* Guest + Stay Info */}
           {guestName && (
-            <div className="mb-4">
-              <div className="flex items-center gap-3">
-                <GuestAvatar name={guestName} size="md" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[15px] font-semibold text-foreground leading-snug">{guestName}</p>
-                  <p className="text-sm text-muted-foreground/70 mt-1">
-                    {dateRange && <span>{dateRange}</span>}
-                    {hasOpenEndedStay && <span>Open-ended stay</span>}
-                    {(dateRange || hasOpenEndedStay) && (totalNights > 0 || nightsElapsed > 0) && (
-                      <span className="text-muted-foreground/30 mx-1.5">\u00b7</span>
-                    )}
-                    {totalNights > 0 && <span className="font-medium text-foreground/60">{totalNights} {pluralize(totalNights, "Night")}</span>}
-                  </p>
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className="flex items-start gap-3 mb-3"
+            >
+              <GuestAvatar name={guestName} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[15px] font-bold text-foreground leading-snug truncate">{guestName}</p>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-xs text-muted-foreground/70">
+                  <span className="flex items-center gap-1">
+                    <CalendarDays className="h-3 w-3" />
+                    {dateRange || (hasOpenEndedStay ? "Open-ended stay" : "")}
+                  </span>
+                  {totalNights > 0 && (
+                    <>
+                      <span className="text-muted-foreground/30">\u00b7</span>
+                      <span className="font-semibold text-foreground/70">{totalNights} {pluralize(totalNights, "Night")}</span>
+                    </>
+                  )}
                 </div>
               </div>
-            </div>
+            </motion.div>
           )}
 
-          {/* ── Row 3: Payment / Charges Status ── */}
-          {nightlyRate > 0 && (
-            <div className="mb-4">
-              <div className="inline-flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-1.5">
-                <span className="h-2 w-2 rounded-full bg-amber-500" />
-                <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">Outstanding</span>
-              </div>
-              <span className="ml-2 text-xs text-muted-foreground/60">
-                Rs. {estimatedCharges.toLocaleString()}
-              </span>
-              <p className="text-xs text-muted-foreground/40 mt-1 ml-1">
-                Est. room charges only ({nightlyRate.toLocaleString()} \u00d7 {nightsElapsed} {pluralize(nightsElapsed, "night")})
-              </p>
-            </div>
-          )}
+          {/* Stats Row */}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <StatChip
+              icon={IndianRupee}
+              label="Est. Charges"
+              value={formatCurrency(estimatedCharges)}
+              color="text-amber-500"
+            />
+            <StatChip
+              icon={Clock}
+              label={totalNights > 0 ? "Nights Remaining" : "Nights Stayed"}
+              value={totalNights > 0 ? `${nightsLeft} of ${totalNights}` : `${nightsElapsed} night${nightsElapsed !== 1 ? 's' : ''}`}
+              color="text-primary"
+            />
+          </div>
 
-          {/* ── HK/MT Badges ── */}
+          {/* HK/MT Badges */}
           {(hkTask || mtReq) && (
-            <div className="mb-4">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {hkTask && (
-                  <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
-                    <Sparkles className="h-3 w-3" />
-                    {hkTask.status.replace(/_/g, " ")}
-                  </span>
-                )}
-                {mtReq && (
-                  <span className="inline-flex items-center gap-1.5 rounded-md bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400">
-                    <Wrench className="h-3 w-3" />
-                    {mtReq.status}
-                  </span>
-                )}
-              </div>
+            <div className="flex flex-wrap items-center gap-1.5 mb-3">
+              {hkTask && (
+                <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/10 px-2.5 py-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                  <Sparkles className="h-3 w-3" />
+                  {hkTask.status.replace(/_/g, " ")}
+                </span>
+              )}
+              {mtReq && (
+                <span className="inline-flex items-center gap-1 rounded-lg bg-red-500/10 px-2.5 py-1 text-[10px] font-medium text-red-600 dark:text-red-400">
+                  <Wrench className="h-3 w-3" />
+                  {mtReq.status}
+                </span>
+              )}
             </div>
           )}
 
-          {/* ── Spacer ── */}
           <div className="flex-1" />
 
-          {/* ── Row 4: Action Buttons ── */}
-          <div className="flex items-center gap-2 pt-3 border-t border-border/40">
-            <PrimaryBtn icon={Sofa} label="Open POS" onClick={() => handle("openpos")} variant="primary" />
-            <PrimaryBtn icon={Receipt} label="Folio" onClick={() => handle("folio")} variant="primary" />
-            <PrimaryBtn
+          {/* Action Buttons */}
+          <div className="flex items-center gap-1.5 pt-3 border-t border-border/30">
+            <SmallButton icon={Sofa} label="Open POS" onClick={() => handle("openpos")} variant="primary" />
+            <SmallButton icon={Receipt} label="Folio" onClick={() => handle("folio")} variant="ghost" />
+            <SmallButton
               icon={LogOut}
               label="Checkout"
               onClick={() => handle("checkout")}
-              variant={showOverdue || showLastNight ? "danger" : "ghost"}
+              variant={isOverdue ? "danger" : "ghost"}
             />
             <div className="ml-auto">
               <MoreMenu
@@ -525,33 +608,32 @@ export function RoomCard({
 
       {/* ===== CLEANING ===== */}
       {isCleaning && (
-        <div className="flex flex-col gap-3 p-4 flex-1">
+        <div className="relative z-[1] flex flex-col gap-3 p-5 flex-1">
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-2xl font-black text-foreground tracking-tight">{roomNum}</span>
+              <motion.span
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="text-3xl font-black text-foreground tracking-tight"
+              >
+                {roomNum}
+              </motion.span>
               {roomTypeName && (
-                <p className="text-xs text-muted-foreground/70 mt-0.5">{roomTypeName}</p>
+                <p className="text-xs text-muted-foreground/60 mt-0.5 font-medium">{roomTypeName}</p>
               )}
             </div>
             <StatusBadge status={room.status} />
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-muted-foreground/60">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground/60 font-medium">
             <Sparkles className="h-3.5 w-3.5 text-cyan-500" />
             Waiting for housekeeping
           </div>
 
-          {(hkTask || mtReq) && (
-            <div className="flex flex-wrap items-center gap-1">
-              {hkTask && <MiniBadge label={hkTask.status.replace(/_/g, " ")} variant="hk" />}
-              {mtReq && <MiniBadge label={mtReq.status} variant="mt" />}
-            </div>
-          )}
-
           <div className="flex-1" />
 
           <div className="flex items-center gap-1.5">
-            <PrimaryBtn icon={CheckCheck} label="Mark Clean" onClick={() => handle("markclean")} variant="success" />
+            <SmallButton icon={CheckCheck} label="Mark Clean" onClick={() => handle("markclean")} variant="success" />
             <MoreMenu
               items={menuItems}
               triggerRef={menuRef}
@@ -565,20 +647,22 @@ export function RoomCard({
 
       {/* ===== MAINTENANCE / OUT OF ORDER ===== */}
       {isOutOfOrder && (
-        <div className="flex flex-col gap-3 p-4 flex-1 opacity-65">
+        <div className="relative z-[1] flex flex-col gap-3 p-5 flex-1">
           <div className="flex items-start justify-between">
             <div>
-              <span className="text-2xl font-black text-muted-foreground tracking-tight line-through decoration-muted-foreground/30">
+              <span className="text-3xl font-black text-muted-foreground/50 tracking-tight line-through decoration-muted-foreground/20">
                 {roomNum}
               </span>
               {roomTypeName && (
-                <p className="text-xs text-muted-foreground/40 mt-0.5 line-through decoration-muted-foreground/20">{roomTypeName}</p>
+                <p className="text-xs text-muted-foreground/30 mt-0.5 line-through decoration-muted-foreground/10 font-medium">
+                  {roomTypeName}
+                </p>
               )}
             </div>
             <StatusBadge status={room.status} />
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-muted-foreground/50">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground/50 font-medium">
             <Wrench className="h-3.5 w-3.5" />
             {room.status === "maintenance" ? "Under maintenance" : "Room is disabled"}
           </div>
@@ -586,9 +670,9 @@ export function RoomCard({
           <div className="flex-1" />
 
           <div className="flex items-center gap-1.5">
-            <PrimaryBtn
+            <SmallButton
               icon={CheckCheck}
-              label="Mark Available"
+              label={room.status === "maintenance" ? "Mark Available" : "Enable Room"}
               onClick={() => handle("markclean")}
               variant="primary"
             />
@@ -603,5 +687,32 @@ export function RoomCard({
         </div>
       )}
     </motion.div>
+  )
+}
+
+// ── HK/MT Badge Helper ───────────────────────────────────────
+
+function BadgeSmall({ label, variant }: { label: string; variant: "hk" | "mt" }) {
+  const HK_STYLES: Record<string, string> = {
+    pending: "bg-amber-500/15 text-amber-500 border-amber-500/20",
+    in_progress: "bg-blue-500/15 text-blue-500 border-blue-500/20",
+    completed: "bg-emerald-500/15 text-emerald-500 border-emerald-500/20",
+  }
+  const MT_STYLES: Record<string, string> = {
+    open: "bg-red-500/15 text-red-500 border-red-500/20",
+    assigned: "bg-orange-500/15 text-orange-500 border-orange-500/20",
+    in_progress: "bg-blue-500/15 text-blue-500 border-blue-500/20",
+    resolved: "bg-emerald-500/15 text-emerald-500 border-emerald-500/20",
+    closed: "bg-muted text-muted-foreground border-border",
+  }
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium leading-none",
+      variant === "hk" ? HK_STYLES[label.toLowerCase()] ?? "bg-muted text-muted-foreground border-border"
+        : MT_STYLES[label.toLowerCase()] ?? "bg-muted text-muted-foreground border-border",
+    )}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      {label}
+    </span>
   )
 }

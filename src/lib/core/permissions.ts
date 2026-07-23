@@ -36,6 +36,7 @@ export type AppRole =
   | 'cashier'      // POS operations (orders, payments, receipts)
   | 'housekeeping' // Housekeeping operations only
   | 'receptionist' // Front desk (bookings, rooms, customers)
+  | 'owner'        // Read-only oversight (dashboard, customers, finance)
   | 'viewer'       // Read-only access (future)
 
 // ─── Permission Keys ───────────────────────────────────────────
@@ -205,6 +206,12 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'profile.view', 'profile.edit',
     'menu.view',
   ],
+  owner: [
+    'customers.view',
+    'finance.view',
+    'menu.view',
+    'profile.view', 'profile.edit',
+  ],
   viewer: [
     'users.view',
     'settings.view',
@@ -234,6 +241,7 @@ const DB_ROLE_TO_APP_ROLE: Record<string, AppRole> = {
   waiter: 'cashier',       // Waiters have cashier-level access
   housekeeper: 'housekeeping',
   receptionist: 'receptionist',
+  owner: 'owner',
 }
 
 /**

@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { motion, AnimatePresence } from "framer-motion"
+import { insforge } from "@/lib/services/auth-service"
 import { PageTransition } from "@/components/ui/PageTransition"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -44,6 +45,7 @@ import { TableCard } from "@/components/operations/TableCard"
 import {
   RoomFormModal, TableFormModal, MaintenanceFormModal, HousekeepingAssignModal,
 } from "@/components/operations/ModalForms"
+import { ExtendStayModal, RoomHistoryDialog, TransferRoomDialog } from "@/components/operations/RoomDialogs"
 
 // ═══════════════════════════════════════════════════════════════
 //  1. TYPES & CONSTANTS
@@ -136,7 +138,7 @@ function OperationsHeader({ lastUpdated, onRefresh, refreshing }: {
               whileTap={{ scale: 0.97 }}
               onClick={() => setSearchOpen(!searchOpen)}
               className={cn(
-                "flex items-center gap-2 rounded-xl border bg-background px-3.5 py-2 text-sm transition-all",
+                "inline-flex items-center justify-center gap-2 rounded-xl border bg-background px-3.5 py-2.5 text-sm font-semibold whitespace-nowrap min-h-[44px] transition-all",
                 searchOpen
                   ? "border-primary shadow-[0_0_0_3px] shadow-primary/10"
                   : "border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground",
@@ -175,7 +177,7 @@ function OperationsHeader({ lastUpdated, onRefresh, refreshing }: {
             whileTap={{ scale: 0.92 }}
             onClick={onRefresh}
             disabled={refreshing}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground disabled:opacity-50"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground disabled:opacity-50"
             title="Refresh data"
           >
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
@@ -216,6 +218,13 @@ function RoomsView({
   const [showHKForm, setShowHKForm] = useState(false)
   const [showMTForm, setShowMTForm] = useState(false)
   const [,setMtFormRoom] = useState<Room | null>(null)
+  const [extendRoom, setExtendRoom] = useState<Room | null>(null)
+  const [extendBooking, setExtendBooking] = useState<Booking | null>(null)
+  const [historyRoom, setHistoryRoom] = useState<Room | null>(null)
+  const [transferRoom, setTransferRoom] = useState<Room | null>(null)
+  const [transferBooking, setTransferBooking] = useState<Booking | null>(null)
+  const [editBookingRoom, setEditBookingRoom] = useState<Room | null>(null)
+  const [editBookingData, setEditBookingData] = useState<Booking | null>(null)
 
   const createRoom = useCreateRoom()
   const updateRoom = useUpdateRoom()
@@ -344,11 +353,52 @@ function RoomsView({
           showSuccess(`Room ${room.room_number || room.number} ${newStatus === "out_of_order" ? "disabled" : "enabled"}`)
         } catch (err) { showError((err as Error)?.message || "Failed to update status") }
         break
-      case "bookings":
-      case "history":
       case "editbooking":
+        const ebBooking = activeBookings.find(b => b.roomId === room.id)
+        setEditBookingData(ebBooking ?? null)
+        setEditBookingRoom(room)
+        break
       case "extend":
-        showSuccess(`${action.replace(/_/g, " ")} feature coming soon`); break
+        const extBooking = activeBookings.find(b => b.roomId === room.id)
+        setExtendBooking(extBooking ?? null)
+        setExtendRoom(room)
+        break
+      case "history":
+        setHistoryRoom(room)
+        break
+      case "transfer":
+        const trBooking = activeBookings.find(b => b.roomId === room.id)
+        setTransferBooking(trBooking ?? null)
+        setTransferRoom(room)
+        break
+      case "print":
+        try {
+          const { data: invoices } = await insforge.database
+            .from("invoices")
+            .select("id, invoice_number")
+            .eq("room_id", room.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+          if (invoices && invoices.length > 0) {
+            navigate2(`/billing/${invoices[0].id}`)
+          } else {
+            showError("No invoices found for this room yet. Complete a checkout to generate an invoice.")
+          }
+        } catch {
+          showError("Failed to find invoices for this room")
+        }
+        break
+      case "markcleaning":
+        try {
+          await updateRoomStatus.mutateAsync({ id: room.id, status: "cleaning" })
+          logActivitySafe({ activityType: "room_status_change", entityId: room.id, entityLabel: `Room ${room.room_number || room.number}`, status: "cleaning" })
+          showSuccess(`Room ${room.room_number || room.number} marked for cleaning`)
+        } catch (err) { showError((err as Error)?.message || "Failed to update status") }
+        break
+      case "maintenance":
+        setMtFormRoom(room)
+        setShowMTForm(true)
+        break
     }
   }, [updateRoomStatus, logActivitySafe, navigate2, activeBookings, cancelBooking])
 
@@ -399,14 +449,14 @@ function RoomsView({
       {/* Toolbar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-1 flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[180px] max-w-xs">
+          <div className="relative flex-1 min-w-0 max-w-xs w-full">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/40" />
             <input type="text" placeholder="Search room or guest..." value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="h-9 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm text-foreground outline-none transition-all placeholder:text-muted-foreground/40 focus:border-primary/50 focus:shadow-[0_0_0_3px] focus:shadow-primary/5" />
           </div>
-          <div className="flex items-center gap-1.5">
-            <SlidersHorizontal className="h-3 w-3 text-muted-foreground/40" />
+          <div className="flex flex-wrap items-center gap-1.5">
+            <SlidersHorizontal className="h-3 w-3 text-muted-foreground/40 shrink-0" />
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
               className="h-9 rounded-xl border border-border bg-background px-2.5 text-xs outline-none transition-colors focus:border-primary/50 text-muted-foreground">
               <option value="all">All Status</option>
@@ -446,7 +496,7 @@ function RoomsView({
           {isFiltered && (
             <motion.button initial={{ scale: 0.8 }} animate={{ scale: 1 }}
               onClick={() => { setSearchQuery(""); setStatusFilter("all"); setFloorFilter("all"); setHkFilter("all"); setMtFilter("all") }}
-              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors">
+              className="inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-[10px] font-semibold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap min-h-[36px]">
               <X className="h-3 w-3" /> Clear
             </motion.button>
           )}
@@ -494,29 +544,43 @@ function RoomsView({
           </motion.div>
         ) : (
           <motion.div key="table" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="overflow-hidden rounded-xl border border-border/60">
-            <div className="grid grid-cols-[70px_1fr_100px_80px_100px_100px_80px] gap-2 border-b border-border bg-muted/30 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-              <span>Room</span><span>Type / Guest</span><span>Status</span><span>Floor</span><span>HK Status</span><span>MT Status</span><span className="text-right">Price</span>
+            className="overflow-x-auto rounded-xl border border-border/60">
+            <div className="table-responsive">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Room</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Type / Guest</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Status</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Floor</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">HK Status</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">MT Status</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-right">Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRooms.length === 0 ? (
+                    <tr><td colSpan={7} className="py-12 text-center text-sm text-muted-foreground/50">No rooms found</td></tr>
+                  ) : (
+                    filteredRooms.map((room, idx) => (
+                      <motion.tr key={room.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: idx * 0.015 }}
+                        className="border-b border-border last:border-0 transition-colors hover:bg-muted/20">
+                        <td className="px-4 py-3 text-sm font-semibold text-foreground whitespace-nowrap">{room.room_number || room.number}</td>
+                        <td className="px-4 py-3 text-sm min-w-0">
+                          <span className="text-xs font-medium text-foreground">{room.type}</span>
+                          {room.guest && <p className="text-[10px] text-muted-foreground/60 truncate max-w-[200px]">{room.guest}</p>}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap"><RoomStatusBadgeInline status={room.status} /></td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground/70 whitespace-nowrap">Floor {room.floor}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">{hkBadge(room)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">{mtBadge(room)}</td>
+                        <td className="px-4 py-3 text-right text-xs font-medium text-foreground/80 whitespace-nowrap">Rs.{room.pricePerNight?.toLocaleString() || "—"}</td>
+                      </motion.tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
-            {filteredRooms.length === 0 ? (
-              <div className="py-12 text-center text-sm text-muted-foreground/50">No rooms found</div>
-            ) : (
-              filteredRooms.map((room, idx) => (
-                <motion.div key={room.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: idx * 0.015 }}
-                  className="grid grid-cols-[70px_1fr_100px_80px_100px_100px_80px] gap-2 border-b border-border px-4 py-3 text-sm transition-colors last:border-0 hover:bg-muted/20 items-center">
-                  <span className="font-semibold text-foreground">{room.room_number || room.number}</span>
-                  <div className="min-w-0">
-                    <span className="text-foreground text-xs font-medium">{room.type}</span>
-                    {room.guest && <p className="text-[10px] text-muted-foreground/60 truncate">{room.guest}</p>}
-                  </div>
-                  <RoomStatusBadgeInline status={room.status} />
-                  <span className="text-xs text-muted-foreground/70">Floor {room.floor}</span>
-                  <div>{hkBadge(room)}</div>
-                  <div>{mtBadge(room)}</div>
-                  <span className="text-right text-xs font-medium text-foreground/80">Rs.{room.pricePerNight?.toLocaleString() || "—"}</span>
-                </motion.div>
-              ))
-            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -558,11 +622,51 @@ function RoomsView({
       }} onClose={() => setShowHKForm(false)} />
       <MaintenanceFormModal open={showMTForm} onSave={handleCreateMT} onClose={() => { setShowMTForm(false); setMtFormRoom(null) }} />
       <ConfirmDialog open={!!deletingRoom} title="Delete Room" message={`Delete Room ${deletingRoom?.room_number || deletingRoom?.number}?`} confirmLabel="Delete" variant="danger" onConfirm={handleDeleteRoom} onCancel={() => setDeletingRoom(null)} />
+
+      {/* ── Extend Stay Dialog ── */}
+      {extendRoom && (
+        <ExtendStayModal
+          room={extendRoom}
+          booking={extendBooking}
+          onClose={() => { setExtendRoom(null); setExtendBooking(null) }}
+          onExtended={() => invalidateOperationsData(queryClient)}
+        />
+      )}
+
+      {/* ── Room History Dialog ── */}
+      {historyRoom && (
+        <RoomHistoryDialog
+          room={historyRoom}
+          onClose={() => setHistoryRoom(null)}
+        />
+      )}
+
+      {/* ── Transfer Room Dialog ── */}
+      {transferRoom && (
+        <TransferRoomDialog
+          room={transferRoom}
+          booking={transferBooking}
+          rooms={rooms}
+          onClose={() => { setTransferRoom(null); setTransferBooking(null) }}
+          onTransferred={() => invalidateOperationsData(queryClient)}
+        />
+      )}
+
+      {/* ── Edit Booking Dialog ── */}
+      {editBookingRoom && (
+        <BookingFormModal
+          room={editBookingRoom}
+          booking={editBookingData}
+          mode="manage"
+          onClose={() => { setEditBookingRoom(null); setEditBookingData(null) }}
+        />
+      )}
+
       {/* Release confirmation — separate warning box + dialog because ConfirmDialog.message only accepts a string */}
       {releaseConfirmRoom && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
           onClick={() => setReleaseConfirmRoom(null)}>
-          <div className="w-full max-w-sm rounded-2xl border bg-card shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-[min(24rem,calc(100vw-2rem))] rounded-2xl border bg-card shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="p-5 space-y-4">
               <div>
                 <h3 className="text-base font-semibold text-foreground">Release Room — Are you sure?</h3>
@@ -591,7 +695,7 @@ function RoomsView({
                   Cancel
                 </button>
                 <button onClick={handleReleaseRoom}
-                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 transition-all shadow-sm active:scale-95">
+                  className="inline-flex items-center justify-center rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-500 transition-all shadow-sm active:scale-95 whitespace-nowrap min-h-[44px]">
                   Yes, Release Room
                 </button>
               </div>
@@ -801,7 +905,7 @@ function TablesView({ tables }: { tables: any[] }) {
     <motion.div variants={staggerContainer} initial="hidden" animate="visible" className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-1 flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[160px] max-w-xs">
+          <div className="relative flex-1 min-w-0 max-w-xs w-full">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/40" />
             <input type="text" placeholder="Search tables..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
               className="h-9 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm text-foreground outline-none transition-all placeholder:text-muted-foreground/40 focus:border-primary/50 focus:shadow-[0_0_0_3px] focus:shadow-primary/5" />
@@ -835,7 +939,7 @@ function TablesView({ tables }: { tables: any[] }) {
           {isFiltered && (
             <motion.button initial={{ scale: 0.8 }} animate={{ scale: 1 }}
               onClick={() => { setSearchQuery(""); setSectionFilter("all"); setStatusFilter("all"); setCapacityFilter("all") }}
-              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors">
+              className="inline-flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-[10px] font-semibold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap min-h-[36px]">
               <X className="h-3 w-3" /> Clear
             </motion.button>
           )}
@@ -902,32 +1006,48 @@ function TablesView({ tables }: { tables: any[] }) {
           </motion.div>
         ) : (
           <motion.div key="table-view" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="overflow-hidden rounded-xl border border-border/60">
-            <div className="grid grid-cols-[60px_1fr_70px_80px_80px_80px_80px] gap-2 border-b border-border bg-muted/30 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-              <span>#</span><span>Name</span><span>Seats</span><span>Section</span><span>Status</span><span>Orders</span><span className="text-right">Bill</span>
+            className="overflow-x-auto rounded-xl border border-border/60">
+            <div className="table-responsive">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">#</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Name</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Seats</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Section</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Status</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-left">Orders</th>
+                    <th className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 text-right">Bill</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTables.length === 0 ? (
+                    <tr><td colSpan={7} className="py-12 text-center text-sm text-muted-foreground/50">No tables found</td></tr>
+                  ) : (
+                    filteredTables.map((table: any, idx: number) => (
+                      <motion.tr key={table.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: idx * 0.01 }}
+                        className="border-b border-border last:border-0 transition-colors hover:bg-muted/20">
+                        <td className="px-4 py-3 text-sm font-semibold text-foreground whitespace-nowrap">{table.table_number || table.number}</td>
+                        <td className="px-4 py-3 text-xs text-foreground/80 truncate max-w-[200px]">{table.name || `Table ${table.table_number || table.number}`}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground/70 whitespace-nowrap">{table.capacity}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground/70 whitespace-nowrap">{table.area || table.section || "Main"}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium",
+                            table.status === "available" || table.status === "free" ? "bg-emerald-500/10 text-emerald-500"
+                            : table.status === "occupied" ? "bg-primary/10 text-primary"
+                            : table.status === "reserved" ? "bg-amber-500/10 text-amber-500"
+                            : "bg-muted text-muted-foreground")}>
+                            {table.status.charAt(0).toUpperCase() + table.status.slice(1)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground/70 whitespace-nowrap">{table.order_count || 0}</td>
+                        <td className="px-4 py-3 text-right text-xs font-medium text-foreground/80 whitespace-nowrap">{table.running_total ? formatCurrency(table.running_total) : "—"}</td>
+                      </motion.tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
-            {filteredTables.length === 0 ? (
-              <div className="py-12 text-center text-sm text-muted-foreground/50">No tables found</div>
-            ) : (
-              filteredTables.map((table: any, idx: number) => (
-                <motion.div key={table.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: idx * 0.01 }}
-                  className="grid grid-cols-[60px_1fr_70px_80px_80px_80px_80px] gap-2 border-b border-border px-4 py-3 text-sm transition-colors last:border-0 hover:bg-muted/20 items-center">
-                  <span className="font-semibold text-foreground">{table.table_number || table.number}</span>
-                  <span className="text-xs text-foreground/80 truncate">{table.name || `Table ${table.table_number || table.number}`}</span>
-                  <span className="text-xs text-muted-foreground/70">{table.capacity}</span>
-                  <span className="text-xs text-muted-foreground/70">{table.area || table.section || "Main"}</span>
-                  <span className={cn("inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium w-fit",
-                    table.status === "available" || table.status === "free" ? "bg-emerald-500/10 text-emerald-500"
-                    : table.status === "occupied" ? "bg-primary/10 text-primary"
-                    : table.status === "reserved" ? "bg-amber-500/10 text-amber-500"
-                    : "bg-muted text-muted-foreground")}>
-                    {table.status.charAt(0).toUpperCase() + table.status.slice(1)}
-                  </span>
-                  <span className="text-xs text-muted-foreground/70">{table.order_count || 0}</span>
-                  <span className="text-right text-xs font-medium text-foreground/80">{table.running_total ? formatCurrency(table.running_total) : "—"}</span>
-                </motion.div>
-              ))
-            )}
           </motion.div>
         )}
       </AnimatePresence>

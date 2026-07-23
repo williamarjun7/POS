@@ -33,6 +33,15 @@
     --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
     --card-shadow-hover: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.04);
     --popover-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+
+    /* ── Responsive Design System Variables ── */
+    --container-padding: clamp(1rem, 2vw, 1.5rem);
+    --card-grid-min-width: min(280px, 100%);
+    --card-grid-gap: clamp(0.75rem, 1.5vw, 1rem);
+    --header-height: 4rem;
+    --sidebar-width: 260px;
+    --sidebar-collapsed-width: 64px;
+    --content-max-width: 1600px;
   }
 
   .dark {
@@ -92,6 +101,111 @@
     transform: translateY(-2px);
   }
   .bg-popover { box-shadow: var(--popover-shadow); }
+}
+
+/* ── Responsive Grid Layouts ── */
+@layer utilities {
+  /* Auto-fill card grid — cards get min width and auto-expand */
+  .responsive-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--card-grid-min-width), 100%), 1fr));
+    gap: var(--card-grid-gap);
+  }
+  /* Auto-fit card grid — cards stretch to fill row */
+  .responsive-grid-fit {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+    gap: var(--card-grid-gap);
+  }
+  /* Fluid container - max-width constrained, no padding (padding comes from parent) */
+  .fluid-container {
+    width: 100%;
+    max-width: var(--content-max-width);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  /* Responsive table wrapper - horizontal scroll on small screens */
+  .table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .table-responsive > table {
+    width: 100%;
+    min-width: max(600px, 100%);
+  }
+  /* Truncate text gracefully in flex layouts — adds min-width:0 for flex child truncation */
+  .text-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  /* Stack items vertically on mobile, horizontal on desktop */
+  .flex-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  @media (min-width: 640px) {
+    .flex-stack {
+      flex-direction: row;
+      align-items: center;
+      gap: 1rem;
+    }
+  }
+  /* Responsive padding based on container */
+  .p-responsive {
+    padding: clamp(0.75rem, 2vw, 1.5rem);
+  }
+  .px-responsive {
+    padding-left: clamp(0.75rem, 2vw, 1.5rem);
+    padding-right: clamp(0.75rem, 2vw, 1.5rem);
+  }
+  .py-responsive {
+    padding-top: clamp(0.5rem, 1.5vw, 1.25rem);
+    padding-bottom: clamp(0.5rem, 1.5vw, 1.25rem);
+  }
+  /* Ensure inputs don't overflow on small screens */
+  .input-fluid {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  /* Responsive dialog - fills screen on mobile, caps on desktop */
+  .dialog-fluid {
+    width: calc(100% - 2rem);
+    max-width: min(42rem, calc(100vw - 2rem));
+    max-height: min(85vh, 100%);
+  }
+  /* Responsive dialog - small (for alerts, confirms, short forms) */
+  .dialog-sm {
+    width: 100%;
+    max-width: min(24rem, calc(100vw - 2rem));
+  }
+  /* Responsive dialog - medium (for most forms) */
+  .dialog-md {
+    width: 100%;
+    max-width: min(28rem, calc(100vw - 2rem));
+  }
+  /* Flex wrap with gap that works everywhere */
+  .flex-wrap-gap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .flex-wrap-gap-lg {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  /* Responsive hide/show utilities beyond Tailwind defaults */
+  @media (max-width: 639px) {
+    .hidden-mobile { display: none !important; }
+  }
+  @media (min-width: 640px) {
+    .hidden-desktop { display: none !important; }
+  }
 }
 
 /* ── Animations ── */
@@ -213,8 +327,12 @@ html.theme-transitioning *::after {
 
 button, a, [role="button"] {
   min-height: 44px;
-  min-width: 44px;
 }
+button > *, a > *, [role="button"] > * {
+  min-height: unset;
+}
+/* Inline small buttons (icon-only, badges, pills) should not be forced to 44px */
+.min-h-unset { min-height: unset !important; }
 
 .android-back-feedback:active {
   opacity: 0.7;

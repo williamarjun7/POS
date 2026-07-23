@@ -829,7 +829,7 @@ export function PosPaymentDialog({
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-        <div className="w-full max-w-sm rounded-2xl border bg-background shadow-2xl overflow-hidden">
+        <div className="w-full max-w-[min(24rem,calc(100vw-2rem))] rounded-2xl border bg-background shadow-2xl overflow-hidden">
           {/* Success Header */}
           <div className={`px-6 py-8 text-center text-white ${isPartialWithoutCredit ? 'bg-gradient-to-br from-amber-500 to-orange-600' : 'bg-gradient-to-br from-emerald-500 to-emerald-600'}`}>
             <div className="mx-auto w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mb-3">
@@ -958,8 +958,8 @@ export function PosPaymentDialog({
   // ─── View: Review ───
   if (view === 'review') {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border bg-background shadow-2xl flex flex-col">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-[min(32rem,calc(100vw-2rem))] max-h-[90vh] overflow-y-auto rounded-xl border bg-background shadow-2xl flex flex-col">
           <div className="flex items-center justify-between p-4 border-b shrink-0">
             <div className="flex items-center gap-2">
               <button onClick={() => {
@@ -996,8 +996,8 @@ export function PosPaymentDialog({
   // ─── View: Cash ───
   if (view === 'cash') {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
           <div className="flex items-center justify-between p-4 border-b shrink-0">
             <div className="flex items-center gap-2">
               <button onClick={() => setView('review')} className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-muted transition-colors"><ArrowLeft className="h-5 w-5" /></button>
@@ -1060,8 +1060,8 @@ export function PosPaymentDialog({
   // ─── View: Credit ───
   if (view === 'credit') {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
           <CreditAccountPayment grandTotal={grandTotal} onBack={() => setView('review')} onPay={handleCreditPay} submitting={submittingPayment} />
         </div>
       </div>
@@ -1087,7 +1087,7 @@ export function PosPaymentDialog({
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-        <div className="w-full max-w-md rounded-xl border bg-background shadow-lg overflow-hidden">
+        <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg overflow-hidden">
           <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 px-6 py-6 text-center text-white">
             <div className="mx-auto w-14 h-14 rounded-full bg-white/20 flex items-center justify-center mb-3">
               <User className="h-7 w-7" />
@@ -1190,8 +1190,8 @@ export function PosPaymentDialog({
   if (view === 'reception_qr') {
     const effectiveAmount = partialContext?.partialAmount ?? (isSplitMode ? effectiveGrandTotal : grandTotal)
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
           <ReceptionQRDialog
             amount={effectiveAmount}
             orderId={orderId}
@@ -1225,8 +1225,8 @@ export function PosPaymentDialog({
   // ─── View: Split ───
   if (view === 'split') {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-md rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
           <SplitPaymentDialog items={items} onBack={() => setView('review')} onContinue={handleSplitContinue} />
         </div>
       </div>

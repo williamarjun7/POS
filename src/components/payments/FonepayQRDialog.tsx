@@ -527,7 +527,7 @@ export function FonepayQRDialog({
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.9, y: 20 }}
           transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-          className="relative w-full max-w-sm rounded-xl border bg-background p-6 shadow-lg overflow-hidden"
+          className="relative w-full max-w-[min(24rem,calc(100vw-2rem))] rounded-xl border bg-background p-6 shadow-lg overflow-hidden"
         >
           {/* ─── Header ─────────────────────────────────── */}
           <div className="mb-4 flex items-center justify-between">

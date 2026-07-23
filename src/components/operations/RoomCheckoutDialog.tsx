@@ -22,6 +22,7 @@ import { getNextInvoiceNumber } from "@/lib/services/sequence-service"
 import { insertInvoiceItems } from "@/lib/services/invoice-items-service"
 import { logActivitySafe } from "@/lib/services/activity-log-service"
 import { showSuccess, showError } from "@/components/ui/toast"
+import { DialogButton } from "@/components/ui/ButtonVariants"
 import { toPaymentMethodKey } from "@/lib/payment-methods"
 import { processPaymentWithRecovery } from "@/lib/services/unified-payment-service"
 import { PosPaymentDialog, type PaymentResult } from "@/components/payments"
@@ -323,7 +324,7 @@ export function RoomCheckoutDialog({
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ type: "spring", stiffness: 300, damping: 25 }}
-        className="w-full max-w-lg rounded-2xl border bg-card shadow-2xl overflow-hidden"
+        className="w-full max-w-[min(32rem,calc(100vw-2rem))] rounded-2xl border bg-card shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <AnimatePresence mode="wait">
@@ -491,39 +492,15 @@ export function RoomCheckoutDialog({
 
               {/* Footer Actions */}
               <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-border bg-muted/20">
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={onClose}
-                  disabled={isProcessing}
-                  className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted transition-all disabled:opacity-50"
-                >
-                  Cancel
-                </motion.button>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+                <DialogButton label="Cancel" onClick={onClose} variant="secondary" disabled={isProcessing} />
+                <DialogButton
+                  label={`Complete Checkout — ${formatCurrency(totalAfterDiscount)}`}
                   onClick={() => setShowPayment(true)}
                   disabled={isProcessing || totalAfterDiscount <= 0}
-                  className={cn(
-                    "flex items-center gap-2 rounded-xl px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all active:scale-95",
-                    isProcessing
-                      ? "bg-muted-foreground/50 cursor-not-allowed"
-                      : "bg-primary hover:bg-primary/90",
-                  )}
-                >
-                  {isProcessing ? (
-                    <>
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <LogOut className="h-4 w-4" />
-                      Complete Checkout — {formatCurrency(totalAfterDiscount)}
-                    </>
-                  )}
-                </motion.button>
+                  loading={isProcessing}
+                  loadingText="Processing..."
+                  icon={LogOut}
+                />
               </div>
             </motion.div>
           )}

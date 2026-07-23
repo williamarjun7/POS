@@ -127,7 +127,7 @@ export type HousekeepingStatus = "pending" | "in_progress" | "completed"
 export type MaintenancePriority = "low" | "medium" | "high" | "urgent"
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked_in" | "completed"
 export type ExpenseCategory = "utilities" | "supplies" | "maintenance" | "staff" | "marketing" | "other"
-export type UserRole = "admin" | "manager" | "cashier" | "waiter" | "housekeeper" | "receptionist"
+export type UserRole = "admin" | "manager" | "cashier" | "waiter" | "housekeeper" | "receptionist" | "owner"
 
 export interface DiningTable {
   id: string

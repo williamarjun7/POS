@@ -229,7 +229,7 @@ export function PaymentRecovery() {
   // ─── Render ───────────────────────────────────────────────
   return (
     <PageTransition>
-      <div className="space-y-6 p-6">
+      <div className="space-y-6 p-3 sm:p-6">
         <PageHeader
           icon="Shield"
           title="Payment Recovery"
@@ -237,7 +237,7 @@ export function PaymentRecovery() {
         />
 
         {/* ─── Tabs ─── */}
-        <div className="flex border-b border-border gap-1">
+        <div className="flex border-b border-border gap-1 overflow-x-auto">
           {tabs.map(tab => (
             <button
               key={tab.id}
@@ -487,8 +487,8 @@ export function PaymentRecovery() {
             ════════════════════════════════════════════════════════ */}
         {activeTab === 'pending' && (
           <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="relative flex-1 max-w-sm">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
                 <input
                   type="text"
@@ -498,7 +498,7 @@ export function PaymentRecovery() {
                   className="w-full h-10 pl-10 pr-4 rounded-xl border border-border bg-card text-sm outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400"
                 />
               </div>
-              <span className="text-xs text-muted-foreground">{filteredPending.length} records</span>
+              <span className="text-xs text-muted-foreground shrink-0">{filteredPending.length} records</span>
             </div>
 
             <div className="space-y-2">
@@ -574,9 +574,9 @@ export function PaymentRecovery() {
             ════════════════════════════════════════════════════════ */}
         {activeTab === 'failed' && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="relative flex-1 max-w-sm">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
                   <input
                     type="text"
@@ -586,7 +586,7 @@ export function PaymentRecovery() {
                     className="w-full h-10 pl-10 pr-4 rounded-xl border border-border bg-card text-sm outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400"
                   />
                 </div>
-                <span className="text-xs text-muted-foreground">{filteredFailed.length} records</span>
+                <span className="text-xs text-muted-foreground shrink-0">{filteredFailed.length} records</span>
               </div>
             </div>
 
@@ -798,7 +798,7 @@ export function PaymentRecovery() {
                   </button>
                 </div>
                 <div className="p-4 space-y-4 max-h-[60vh] overflow-y-auto">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-xs text-muted-foreground">Payment Reference</p>
                       <p className="font-mono font-medium">{selectedRecord.paymentReference}</p>

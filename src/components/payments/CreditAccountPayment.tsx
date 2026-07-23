@@ -218,8 +218,8 @@ export function CreditAccountPayment({ grandTotal, onBack, onPay, submitting }: 
       </div>
 
       {showAddModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-sm rounded-xl border bg-background shadow-lg p-6">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-[min(24rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg p-6">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-lg font-semibold">Add Credit Customer</h3>
               <button onClick={() => setShowAddModal(false)} className="min-h-[44px] min-w-[44px] flex items-center justify-center">

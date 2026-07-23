@@ -85,7 +85,7 @@ function SupplierDetailModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="rounded-xl bg-muted/50 p-3 text-center">
             <p className="text-xs text-muted-foreground">Total Orders</p>
             <p className="text-lg font-bold text-foreground">{supplier.totalOrders}</p>
@@ -180,11 +180,11 @@ function SupplierFormModal({
   return (
     <BaseModal open={open} onClose={onClose} title={supplier?.id ? "Edit Supplier" : "Add Supplier"}>
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput label="Company Name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Himalayan Coffee Co." />
           <FormInput label="Contact Person" value={contact} onChange={(e) => setContact(e.target.value)} placeholder="John Doe" />
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+977-9841-234567" />
           <FormInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="contact@company.com" />
         </div>
@@ -347,7 +347,7 @@ function PaymentFormModal({
             <option key={s.id} value={s.id}>{s.name} ({formatCurrency(s.outstandingBalance)} due)</option>
           ))}
         </FormSelect>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput label="Amount" type="number" required min={1} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" />
           <FormSelect label="Payment Method" required value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
             {paymentMethodOptions.map((opt) => (
@@ -355,7 +355,7 @@ function PaymentFormModal({
             ))}
           </FormSelect>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput label="Reference Number" required value={reference} onChange={(e) => setReference(e.target.value)} placeholder="TRF-00000" />
           <FormInput label="Payment Date" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
         </div>
@@ -672,7 +672,7 @@ export function Suppliers() {
 
       {activeTab === "payments" && (
         <>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard label="Total Outstanding" value={formatCurrency(stats.outstandingBalance)} icon="AlertCircle" color="text-warning" index={0} />
             <StatCard label="Total Paid" value={formatCurrency(paymentStats.totalPaid)} icon="CheckCircle" color="text-success" index={1} />
             <StatCard label="Pending Suppliers" value={paymentStats.pendingSuppliers} icon="Clock" color="text-info" index={2} />

@@ -37,7 +37,7 @@ export function BookingPaymentModal({
         initial={{ opacity: 0, scale: 0.92, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ type: "spring", stiffness: 300, damping: 25 }}
-        className="w-full max-w-sm rounded-2xl border bg-card shadow-2xl overflow-hidden"
+        className="w-full max-w-[min(24rem,calc(100vw-2rem))] rounded-2xl border bg-card shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

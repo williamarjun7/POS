@@ -50,7 +50,7 @@ export function PageShell({
   errorBoundary = false,
   errorFallback,
   loadingSkeleton,
-  maxWidth = 'max-w-[1600px]',
+  maxWidth = 'fluid-container',
 }: PageShellProps) {
   const shouldReduceMotion = useReducedMotion()
 

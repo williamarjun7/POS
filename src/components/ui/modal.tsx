@@ -22,11 +22,11 @@ interface BaseModalProps {
 }
 
 const sizeClasses = {
-  xs: "max-w-sm",
-  sm: "max-w-sm",
-  md: "max-w-md",
-  lg: "max-w-lg",
-  xl: "max-w-2xl",
+  xs: "max-w-[min(20rem,calc(100vw-2rem))]",
+  sm: "max-w-[min(24rem,calc(100vw-2rem))]",
+  md: "max-w-[min(28rem,calc(100vw-2rem))]",
+  lg: "max-w-[min(32rem,calc(100vw-2rem))]",
+  xl: "max-w-[min(42rem,calc(100vw-2rem))]",
   full: "max-w-[90vw]",
 }
 

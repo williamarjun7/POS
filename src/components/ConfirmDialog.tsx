@@ -38,7 +38,7 @@ export function ConfirmDialog({
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="relative bg-background border rounded-lg shadow-lg p-6 max-w-md w-full"
+            className="relative bg-background border rounded-lg shadow-lg p-6 max-w-[min(28rem,calc(100vw-2rem))] w-full"
           >
             <div className="flex items-start gap-4">
               <div className={cn(

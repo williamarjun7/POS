@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils"
 import { insforge } from "@/lib/services/auth-service"
 import { useNavigate } from "react-router-dom"
 import { showSuccess, showError } from "@/components/ui/toast"
+import { DialogButton } from "@/components/ui/ButtonVariants"
 import { formatCurrency } from "@/lib/utils"
 import type { Room, Booking } from "@/types"
 import {
@@ -378,31 +379,20 @@ export function RoomFolio({ room, booking, onClose, onCheckout }: RoomFolioProps
 
         {/* ── Footer Actions ── */}
         <div className="flex items-center gap-2 px-6 py-4 border-t border-border bg-muted/20">
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+          <DialogButton
+            label="Open POS"
             onClick={handleOpenPos}
-            className="flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted transition-all flex-1 justify-center"
-          >
-            <Sofa className="h-4 w-4" />
-            Open POS
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+            variant="secondary"
+            icon={Sofa}
+            className="flex-1 text-foreground"
+          />
+          <DialogButton
+            label={`Checkout — ${formatCurrency(outstandingBalance || totalAfterDiscount)}`}
             onClick={handleCheckout}
             disabled={totalAfterDiscount <= 0}
-            className={cn(
-              "flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all active:scale-95 flex-1 justify-center",
-              totalAfterDiscount <= 0
-                ? "bg-muted-foreground/30 cursor-not-allowed"
-                : "bg-primary hover:bg-primary/90",
-            )}
-          >
-            <LogOut className="h-4 w-4" />
-            Checkout — {formatCurrency(outstandingBalance || totalAfterDiscount)}
-          </motion.button>
+            icon={LogOut}
+            className="flex-1"
+          />
         </div>
       </motion.div>
     </div>

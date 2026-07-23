@@ -198,7 +198,7 @@ export function PrintSettingsPage() {
         </motion.div>
 
         {/* Actions */}
-        <motion.div variants={pageTransitionFast} className="flex items-center justify-between gap-4 pb-8">
+        <motion.div variants={pageTransitionFast} className="flex items-center justify-between gap-4 pb-8 flex-wrap">
           <button
             onClick={reset}
             className="flex items-center gap-2 rounded-xl border border-border px-5 py-3 text-sm font-medium text-muted-foreground transition-all hover:bg-muted hover:text-foreground"

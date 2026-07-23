@@ -91,7 +91,7 @@ function OrderDetailModal({
         </div>
 
         {/* Info Grid */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="rounded-xl bg-muted/50 p-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
               <User className="h-3.5 w-3.5" />
@@ -228,7 +228,7 @@ function OrderActions({
       <button
         ref={triggerRef}
         onClick={handleToggle}
-        className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground shrink-0"
         aria-label="Order actions"
       >
         <MoreHorizontal className="h-4 w-4" />
@@ -250,7 +250,7 @@ function OrderActions({
           >
             <button
               onClick={() => { onView(); setOpen(false) }}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent whitespace-nowrap min-h-[44px]"
             >
               <Eye className="h-4 w-4 text-blue-500" />
               View Details
@@ -258,7 +258,7 @@ function OrderActions({
             {statusFlow[order.status] && (
               <button
                 onClick={() => { onAdvance(order.id); setOpen(false) }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent whitespace-nowrap min-h-[44px]"
               >
                 <RefreshCw className="h-4 w-4 text-emerald-500" />
                 {order.status === "pending" ? "Start Processing" : "Mark Completed"}
@@ -267,7 +267,7 @@ function OrderActions({
             {order.status !== "cancelled" && order.status !== "completed" && (
               <button
                 onClick={() => { onCancel(order.id); setOpen(false) }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent whitespace-nowrap min-h-[44px]"
               >
                 <XCircle className="h-4 w-4 text-amber-500" />
                 Cancel Order
@@ -276,7 +276,7 @@ function OrderActions({
             {order.status === "completed" && onPay && (
               <button
                 onClick={() => { onPay(order.id); setOpen(false) }}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent whitespace-nowrap min-h-[44px]"
               >
                 <Banknote className="h-4 w-4 text-emerald-500" />
                 Process Payment
@@ -284,7 +284,7 @@ function OrderActions({
             )}
             <button
               onClick={() => { onDelete(order.id); setOpen(false) }}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/10 whitespace-nowrap min-h-[44px]"
             >
               <Trash2 className="h-4 w-4" />
               Delete Order
@@ -496,10 +496,10 @@ export function Orders() {
           <div className="rounded-xl border border-border bg-card p-5">
             {/* Filter Bar */}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Filter className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Filters:</span>
-                <div className="flex gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Filter className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground shrink-0">Filters:</span>
+                <div className="flex flex-wrap gap-1.5">
                   {(["all", "dine_in", "takeaway", "room_service", "online"] as const).map((ch) => (
                     <button
                       key={ch}

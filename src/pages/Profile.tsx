@@ -230,7 +230,7 @@ export function Profile() {
           description="Manage your account settings and preferences"
         />
 
-        <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
+        <div className="grid gap-6 sm:grid-cols-1 lg:grid-cols-[300px_1fr]">
           {/* Sidebar */}
           <motion.div variants={pageTransitionFast} initial="hidden" animate="visible" className="space-y-4">
             <div className="rounded-xl border border-border bg-card p-6">
@@ -281,8 +281,8 @@ export function Profile() {
             {/* Profile Tab */}
             {activeTab === "profile" && (
               <motion.div variants={pageTransitionFast} initial="hidden" animate="visible" className="rounded-xl border border-border bg-card p-6 space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="min-w-0">
                     <h3 className="text-base font-semibold text-foreground">Personal Information</h3>
                     <p className="text-sm text-muted-foreground">Update your personal details</p>
                   </div>
@@ -420,19 +420,19 @@ export function Profile() {
 
                 {/* Two-Factor Authentication */}
                 <motion.div variants={pageTransitionFast} initial="hidden" animate="visible" className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
                         <Shield className="h-5 w-5 text-primary" />
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <h3 className="text-base font-semibold text-foreground">Two-Factor Authentication</h3>
                         <p className="text-sm text-muted-foreground">Add an extra layer of security to your account</p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <span className={cn(
-                        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
+                        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium shrink-0",
                         twoFactorEnabled ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
                       )}>
                         {twoFactorEnabled ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}

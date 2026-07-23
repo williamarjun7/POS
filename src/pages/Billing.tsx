@@ -490,7 +490,7 @@ export function Billing() {
         <div className="flex flex-col items-center justify-center py-20">
           <AlertCircle className="h-12 w-12 text-destructive mb-4" />
           <p className="text-lg font-semibold text-foreground">{errorMessage}</p>
-          <button onClick={() => navigate('/dashboard')} className="mt-4 rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
+          <button onClick={() => navigate('/dashboard')} className="mt-4 inline-flex items-center justify-center rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted transition-colors whitespace-nowrap min-h-[44px]">
             Back to Dashboard
           </button>
         </div>
@@ -513,10 +513,10 @@ export function Billing() {
               {splitMode && <span className="block text-xs mt-1">{formatCurrency(Math.max(0, outstanding - splitAmount))} remaining</span>}
             </p>
             <div className="flex flex-col gap-3">
-              <button onClick={handlePrintReceipt} className="flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              <button onClick={handlePrintReceipt} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 whitespace-nowrap min-h-[44px]">
                 <Printer className="h-4 w-4" /> Print Receipt
               </button>
-              <button onClick={() => navigate('/dashboard')} className="rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted">
+              <button onClick={() => navigate('/dashboard')} className="inline-flex items-center justify-center rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-muted transition-colors whitespace-nowrap min-h-[44px]">
                 Back to Dashboard
               </button>
             </div>
@@ -539,7 +539,7 @@ export function Billing() {
         </div>
       </AnimatedContainer>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid gap-6 grid-cols-1 lg:grid-cols-3">
         {/* Invoice Details */}
         <div className="lg:col-span-2 space-y-6">
           <AnimatedContainer>
@@ -558,11 +558,9 @@ export function Billing() {
                   )}
                   <span className="text-xs text-muted-foreground">{invoice.customer_name}</span>
                 </div>
-              </div>
-
-              <div className="mb-4 flex items-center gap-2 rounded-lg bg-muted/30 px-3 py-2 text-sm">
-                <span className="font-medium text-foreground">{invoice.customer_name}</span>
-                <span className="text-muted-foreground">@{invoice.created_at.split('T')[0]}</span>
+              </div>                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/30 px-3 py-2 text-sm">
+                <span className="font-medium text-foreground text-truncate max-w-[200px]">{invoice.customer_name}</span>
+                <span className="text-muted-foreground shrink-0">@{invoice.created_at.split('T')[0]}</span>
                 <span className={`ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                   isFullyPaid ? 'bg-success/10 text-success' :
                   invoice.status === 'partial' ? 'bg-warning/10 text-warning' :
@@ -649,12 +647,13 @@ export function Billing() {
                 </table>
               </div>
 
-              {splitMode && !isFullyPaid && (
-                <div className="mt-4 flex items-center gap-3 rounded-xl bg-muted/50 p-4">
+              {splitMode && !isFullyPaid && (                  <div className="flex flex-wrap items-center gap-3 rounded-xl bg-muted/50 p-4">
                   <label className="text-sm font-medium text-foreground whitespace-nowrap">Split Amount:</label>
-                  <input type="number" step="0.01" min="0" max={outstanding} value={splitAmount} readOnly
-                    className="h-10 w-32 rounded-xl border border-border bg-background px-3 text-sm text-center" />
-                  <span className="text-xs text-muted-foreground">of {formatCurrency(outstanding)}</span>
+                  <div className="flex items-center gap-2">
+                    <input type="number" step="0.01" min="0" max={outstanding} value={splitAmount} readOnly
+                      className="h-10 w-28 sm:w-32 rounded-xl border border-border bg-background px-3 text-sm text-center" />
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">of {formatCurrency(outstanding)}</span>
+                  </div>
                 </div>
               )}
 
@@ -888,7 +887,7 @@ export function Billing() {
                   <div className="flex justify-between"><span className="text-muted-foreground">Invoice Total</span><span className="font-semibold text-foreground">{formatCurrency(total)}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Total Paid</span><span className="font-semibold text-success">{formatCurrency(totalPaid)}</span></div>
                 </div>
-                <button onClick={handlePrintReceipt} className="flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 w-full">
+                <button onClick={handlePrintReceipt} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 w-full whitespace-nowrap min-h-[44px]">
                   <Printer className="h-4 w-4" /> Print Receipt
                 </button>
               </div>

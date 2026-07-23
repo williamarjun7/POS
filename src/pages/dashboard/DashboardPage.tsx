@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 
 type BookingMode = 'reserve' | 'book' | 'manage'
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../lib/core/auth-context';
 import { usePrefetchMenu } from '@/lib/api/menu.hooks';
 import { useNavigate } from 'react-router-dom';
@@ -19,6 +19,7 @@ import type { Room } from '../../types';
 import type { Booking } from '@/lib/services/booking-service';
 import { BookingFormModal } from '../../components/rooms/BookingFormModal';
 import { RoomFolio } from '../../components/operations/RoomFolio';
+import { RoomCheckoutDialog } from '../../components/operations/RoomCheckoutDialog';
 import { DashboardRoomTile } from '../../components/rooms/DashboardRoomTile';
 import { useBookings } from '@/lib/services/booking-service';
 
@@ -29,9 +30,10 @@ import { StatCard } from '@/components/ui/stat-card';
 
 import {
   TrendingUp, ChevronRight, Users,
-  ArrowRight, DollarSign, Timer, LogOut, Sparkles, Wrench,
+  ArrowRight, DollarSign, Timer,
   BedDouble, Clock, Banknote,
-  Smartphone, QrCode, CreditCard, CircleDollarSign
+  Smartphone, QrCode, CreditCard, CircleDollarSign,
+  LayoutGrid, List,
 } from 'lucide-react';
 import {
   useDashboardTables,
@@ -69,6 +71,7 @@ interface PendingPaymentItem {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   // Prefetch menu data so POS opens instantly
   usePrefetchMenu();
@@ -93,10 +96,11 @@ export default function DashboardPage() {
     room?: Room;
     status?: string;
   } | null>(null);
-  const [postCheckoutRoom, setPostCheckoutRoom] = useState<Room | null>(null);
-  const [postCheckoutBooking, setPostCheckoutBooking] = useState<Booking | null>(null);
+
   const [folioRoom, setFolioRoom] = useState<Room | null>(null);
   const [folioBooking, setFolioBooking] = useState<Booking | null>(null);
+  const [checkoutRoom, setCheckoutRoom] = useState<Room | null>(null);
+  const [checkoutBooking, setCheckoutBooking] = useState<Booking | null>(null);
 
   // Pending payments query — invoices with outstanding balances
   const { data: pendingPayments } = useQuery({
@@ -365,29 +369,12 @@ export default function DashboardPage() {
   }, [confirmAction, user, checkIn]);
 
   const executeCheckOut = useCallback(async () => {
-    if (!confirmAction?.booking || !user) return;
-    // Use the full checkout workflow with payment via RoomCheckoutDialog.
-    // Navigate to the Operations page which has the proper checkout flow.
-    navigate(`/operations?room=${confirmAction.room?.id}`);
+    if (!confirmAction?.booking || !confirmAction?.room) return;
+    // Open the full checkout workflow with payment via RoomCheckoutDialog right here on the dashboard.
+    setCheckoutRoom(confirmAction.room);
+    setCheckoutBooking(confirmAction.booking);
     setConfirmAction(null);
-  }, [confirmAction, navigate]);
-
-  const executePostCheckout = useCallback(async (target: 'available' | 'cleaning' | 'maintenance') => {
-    if (!postCheckoutRoom) return;
-    try {
-      const statusMap = { available: 'available', cleaning: 'cleaning', maintenance: 'maintenance' };
-      await updateStatus.mutateAsync({
-        id: postCheckoutRoom.id,
-        status: statusMap[target],
-        reason: `Post-checkout: set to ${target}`,
-      });
-      showSuccess(`Room ${postCheckoutRoom.room_number || postCheckoutRoom.number} → ${target}`);
-      setPostCheckoutRoom(null);
-      setPostCheckoutBooking(null);
-    } catch (err) {
-      showError((err as Error)?.message || 'Failed to update room');
-    }
-  }, [postCheckoutRoom, updateStatus]);
+  }, [confirmAction]);
 
 
   const executeStatusChange = useCallback(async () => {
@@ -428,41 +415,53 @@ export default function DashboardPage() {
         <div className="col-span-12 lg:col-span-8">
           <AnimatedContainer>
             <div className={`rounded-xl border bg-card p-5 transition-all duration-200 hover:shadow-md border-t-4 ${activeSection === 'tables' ? 'border-t-orange-500' : 'border-t-violet-500'}`}>
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-6 flex-wrap gap-2">
                 <div className="flex items-center gap-3">
-                  <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider ${activeSection === 'tables' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300' : 'bg-muted text-muted-foreground'}`}>
-                    <Users className="h-3.5 w-3.5" />{activeSection === 'tables' ? 'Tables' : 'Rooms'}
+                  <div className={`inline-flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider ${activeSection === 'tables' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300' : 'bg-muted text-muted-foreground'}`}>
+                    <Users className="h-3.5 w-3.5 shrink-0" />
+                    <span className="hidden sm:inline">{activeSection === 'tables' ? 'Tables' : 'Rooms'}</span>
                   </div>
                   <div className="flex rounded-lg border p-0.5 bg-muted/50">
                     <button
                       onClick={() => setActiveSection('tables')}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${activeSection === 'tables' ? 'bg-orange-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                      className={`inline-flex items-center justify-center rounded-md px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold transition-all cursor-pointer whitespace-nowrap min-h-[44px] ${activeSection === 'tables' ? 'bg-orange-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                     >
                       Tables
                     </button>
                     <button
                       onClick={() => setActiveSection('rooms')}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${activeSection === 'rooms' ? 'bg-violet-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                      className={`inline-flex items-center justify-center rounded-md px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold transition-all cursor-pointer whitespace-nowrap min-h-[44px] ${activeSection === 'rooms' ? 'bg-violet-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                     >
                       Rooms
                     </button>
                   </div>
                 </div>
-                {activeSection === 'tables' && (
-                  <div className="flex gap-2 text-xs">
-                    <button onClick={() => setViewMode('grid')} className={`rounded-md px-3 py-1.5 font-medium cursor-pointer transition-all ${viewMode === 'grid' ? 'bg-orange-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>Grid</button>
-                    <button onClick={() => setViewMode('list')} className={`rounded-md px-3 py-1.5 font-medium cursor-pointer transition-all ${viewMode === 'list' ? 'bg-orange-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>List</button>
-
-                  </div>
-                )}
-
-                {activeSection === 'rooms' && (
-                  <div className="flex gap-2 text-xs">
-                    <button onClick={() => setRoomViewMode('grid')} className={`rounded-md px-3 py-1.5 font-medium cursor-pointer transition-all ${roomViewMode === 'grid' ? 'bg-violet-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>Grid</button>
-                    <button onClick={() => setRoomViewMode('list')} className={`rounded-md px-3 py-1.5 font-medium cursor-pointer transition-all ${roomViewMode === 'list' ? 'bg-violet-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>List</button>
-                  </div>
-                )}
-
+                <div className="flex items-center gap-1.5">
+                  {activeSection === 'tables' && (
+                    <div className="flex rounded-lg border p-0.5 bg-muted/50">
+                      <button onClick={() => setViewMode('grid')} className={`inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer transition-all whitespace-nowrap min-h-[36px] ${viewMode === 'grid' ? 'bg-orange-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                        <LayoutGrid className="h-3.5 w-3.5 sm:hidden" />
+                        <span className="hidden sm:inline">Grid</span>
+                      </button>
+                      <button onClick={() => setViewMode('list')} className={`inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer transition-all whitespace-nowrap min-h-[36px] ${viewMode === 'list' ? 'bg-orange-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                        <List className="h-3.5 w-3.5 sm:hidden" />
+                        <span className="hidden sm:inline">List</span>
+                      </button>
+                    </div>
+                  )}
+                  {activeSection === 'rooms' && (
+                    <div className="flex rounded-lg border p-0.5 bg-muted/50">
+                      <button onClick={() => setRoomViewMode('grid')} className={`inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer transition-all whitespace-nowrap min-h-[36px] ${roomViewMode === 'grid' ? 'bg-violet-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                        <LayoutGrid className="h-3.5 w-3.5 sm:hidden" />
+                        <span className="hidden sm:inline">Grid</span>
+                      </button>
+                      <button onClick={() => setRoomViewMode('list')} className={`inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer transition-all whitespace-nowrap min-h-[36px] ${roomViewMode === 'list' ? 'bg-violet-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                        <List className="h-3.5 w-3.5 sm:hidden" />
+                        <span className="hidden sm:inline">List</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Tables Section */}
@@ -800,9 +799,9 @@ export default function DashboardPage() {
       {/* Payment Methods Strip — compact */}
       <AnimatedContainer>
         <div className="rounded-xl border bg-card p-0.5 transition-all duration-200 hover:shadow-md">
-          <div className="flex flex-wrap items-stretch divide-x divide-border/50">
+          <div className="flex flex-wrap items-stretch">
             {/* Cash */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px]">
+            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
                 <Banknote className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
               </div>
@@ -811,7 +810,7 @@ export default function DashboardPage() {
               <span className="text-[10px] text-muted-foreground/60">{paymentMethods.find(m => m.method === 'cash')?.count ?? 0} payments</span>
             </div>
             {/* Reception QR */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px]">
+            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-100 dark:bg-sky-900/30">
                 <Smartphone className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
               </div>
@@ -820,7 +819,7 @@ export default function DashboardPage() {
               <span className="text-[10px] text-muted-foreground/60">{paymentMethods.find(m => m.method === 'reception_qr')?.count ?? 0} payments</span>
             </div>
             {/* FonePay QR */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px]">
+            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
                 <QrCode className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
               </div>
@@ -829,7 +828,7 @@ export default function DashboardPage() {
               <span className="text-[10px] text-muted-foreground/60">{paymentMethods.find(m => m.method === 'fonepay')?.count ?? 0} payments</span>
             </div>
             {/* Outstanding Credit — from customers.credit_balance (NOT payments) */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px]">
+            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
                 <CreditCard className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
               </div>
@@ -838,7 +837,7 @@ export default function DashboardPage() {
               <span className="text-[10px] text-muted-foreground/60">Customer balances</span>
             </div>
             {/* Net Profit */}
-            <div className={`flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px]`}>
+            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
               <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${netSales - expensesToday >= 0 ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
                 <TrendingUp className={`h-3.5 w-3.5 ${netSales - expensesToday >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`} />
               </div>
@@ -847,7 +846,7 @@ export default function DashboardPage() {
               <span className="text-[10px] text-muted-foreground/60">{netSales - expensesToday >= 0 ? 'Positive margin' : 'Negative margin'}</span>
             </div>
             {/* Total Collected */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-[100px] rounded-r-xl bg-gradient-to-br from-amber-50 to-amber-50/50 dark:from-amber-950/20 dark:to-amber-950/10">
+            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50 rounded-r-xl bg-gradient-to-br from-amber-50 to-amber-50/50 dark:from-amber-950/20 dark:to-amber-950/10">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
                 <CircleDollarSign className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
               </div>
@@ -1015,10 +1014,27 @@ export default function DashboardPage() {
           room={folioRoom}
           booking={folioBooking}
           onClose={() => { setFolioRoom(null); setFolioBooking(null); }}
-          onCheckout={(room) => {
+          onCheckout={(room, booking) => {
             setFolioRoom(null);
             setFolioBooking(null);
-            navigate(`/operations?room=${room.id}`);
+            setCheckoutRoom(room);
+            setCheckoutBooking(booking ?? folioBooking);
+          }}
+        />
+      )}
+
+      {/* Room Checkout Dialog — full checkout + payment handled directly on dashboard */}
+      {checkoutRoom && (
+        <RoomCheckoutDialog
+          room={checkoutRoom}
+          booking={checkoutBooking}
+          onClose={() => { setCheckoutRoom(null); setCheckoutBooking(null); }}
+          onComplete={() => {
+            // Refresh dashboard data after successful checkout
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+            queryClient.invalidateQueries({ queryKey: ['rooms'] });
+            setCheckoutRoom(null);
+            setCheckoutBooking(null);
           }}
         />
       )}
@@ -1057,88 +1073,6 @@ export default function DashboardPage() {
         onConfirm={executeStatusChange}
         onCancel={() => setConfirmAction(null)}
       />
-
-      {/* Post-Checkout Dialog */}
-      <div
-        className={`fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm transition-opacity ${
-          postCheckoutRoom ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-        onClick={() => { setPostCheckoutRoom(null); setPostCheckoutBooking(null); }}
-      >
-        {postCheckoutRoom && (
-          <div
-            className="w-full max-w-sm rounded-2xl border bg-card shadow-2xl p-6 mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-center mb-5">
-              <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/30">
-                <LogOut className="h-7 w-7 text-emerald-600 dark:text-emerald-400" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground">Checkout Complete</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                Room {postCheckoutRoom.room_number || postCheckoutRoom.number}
-                {postCheckoutBooking && ` — ${postCheckoutBooking.guestName}`}
-              </p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Where should this room go?</p>
-            </div>
-            <div className="space-y-2.5">
-              <button
-                onClick={() => executePostCheckout('available')}
-                className="w-full flex items-center justify-between rounded-xl border-2 border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/50 dark:bg-emerald-950/10 px-4 py-3 text-left transition-all hover:border-emerald-400 hover:bg-emerald-100/50 dark:hover:bg-emerald-950/30 active:scale-[0.98]"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                    <Sparkles className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Mark Available</p>
-                    <p className="text-[10px] text-muted-foreground/60">Room ready for next guest</p>
-                  </div>
-                </div>
-                <div className="h-6 w-6 rounded-full border-2 border-emerald-400 flex items-center justify-center" />
-              </button>
-              <button
-                onClick={() => executePostCheckout('cleaning')}
-                className="w-full flex items-center justify-between rounded-xl border-2 border-orange-200 dark:border-orange-800/40 bg-orange-50/50 dark:bg-orange-950/10 px-4 py-3 text-left transition-all hover:border-orange-400 hover:bg-orange-100/50 dark:hover:bg-orange-950/30 active:scale-[0.98]"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-100 dark:bg-orange-900/30">
-                    <BedDouble className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Send to Housekeeping</p>
-                    <p className="text-[10px] text-muted-foreground/60">Needs cleaning before next guest</p>
-                  </div>
-                </div>
-                <div className="h-6 w-6 rounded-full border-2 border-orange-400 flex items-center justify-center" />
-              </button>
-              <button
-                onClick={() => executePostCheckout('maintenance')}
-                className="w-full flex items-center justify-between rounded-xl border-2 border-gray-200 dark:border-gray-800/40 bg-gray-50/50 dark:bg-gray-950/10 px-4 py-3 text-left transition-all hover:border-gray-400 hover:bg-gray-100/50 dark:hover:bg-gray-950/30 active:scale-[0.98]"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800/30">
-                    <Wrench className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Maintenance</p>
-                    <p className="text-[10px] text-muted-foreground/60">Room needs repairs or inspection</p>
-                  </div>
-                </div>
-                <div className="h-6 w-6 rounded-full border-2 border-gray-400 flex items-center justify-center" />
-              </button>
-            </div>
-            <div className="mt-5 flex gap-3">
-              <button
-                onClick={() => { setPostCheckoutRoom(null); setPostCheckoutBooking(null); }}
-                className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
 
       </div>
     </Skeleton>

@@ -20,7 +20,7 @@ export function SessionTimeoutModal({ show, timeLeft, onDismiss, onLogout }: Ses
         >
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onDismiss} />
           <motion.div
-            className="relative w-full max-w-sm rounded-2xl border border-border bg-card shadow-2xl p-6"
+            className="relative w-full max-w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-border bg-card shadow-2xl p-6"
             initial={{ scale: 0.9, y: 20, opacity: 0 }}
             animate={{ scale: 1, y: 0, opacity: 1 }}
             exit={{ scale: 0.9, y: 20, opacity: 0 }}

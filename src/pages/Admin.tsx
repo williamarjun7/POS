@@ -83,9 +83,10 @@ const initialReceiptSettings: ReceiptSettings = {
 
 const roleVariant: Record<UserRole, "default" | "success" | "warning" | "destructive" | "info" | "secondary"> = {
   admin: "destructive", manager: "info", cashier: "success", waiter: "warning", housekeeper: "secondary", receptionist: "default",
+  owner: "default",
 }
 
-const allRoles: UserRole[] = ["admin", "manager", "cashier", "waiter", "housekeeper", "receptionist"]
+const allRoles: UserRole[] = ["admin", "manager", "cashier", "waiter", "housekeeper", "receptionist", "owner"]
 
 // --- Animation Variants ---
 
@@ -619,7 +620,7 @@ export function Admin() {
           <motion.div variants={pageTransitionFast}>
             <div className="mb-4 flex justify-end">
               <RequirePermission permission="users.manage">
-                <button onClick={() => setUserForm({ open: true })} className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+                <button onClick={() => setUserForm({ open: true })} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground hover:bg-primary/90 whitespace-nowrap min-h-[40px]">
                   <Plus className="h-4 w-4" /> Add User
                 </button>
               </RequirePermission>
@@ -680,7 +681,7 @@ export function Admin() {
             ) : branchesError ? (
               <div className="flex flex-col items-center justify-center py-16 gap-4">
                 <p className="text-muted-foreground">{branchesError}</p>
-                <button onClick={refreshBranches} className="rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">Retry</button>
+                <button onClick={refreshBranches} className="inline-flex items-center justify-center rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-muted-foreground hover:bg-muted transition-colors whitespace-nowrap min-h-[40px]">Retry</button>
               </div>
             ) : branches.length === 0 ? (
               <EmptyState icon="Building2" title="No branches" description="Add your first branch to get started" />
@@ -724,7 +725,7 @@ export function Admin() {
           <motion.div variants={pageTransitionFast} className="space-y-6">
             {/* Business Information */}
             <SectionCard title="Business Information" icon="Building2" index={0}>
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                 <p className="text-sm text-muted-foreground">Manage your business details</p>
                 <button onClick={() => { setEditBizData({ name: bizSettings.name, address: bizSettings.address, phone: bizSettings.phone, email: bizSettings.email }); setEditBusiness(!editBusiness) }} className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
                   {editBusiness ? "Cancel" : "Edit"}
@@ -813,16 +814,16 @@ export function Admin() {
         {/* ===== AUDIT LOGS TAB ===== */}
         {activeTab === "audit" && (
           <motion.div variants={pageTransitionFast} className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">{filteredLogs.length} log entries</span>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
+                <span className="text-sm text-muted-foreground whitespace-nowrap">{filteredLogs.length} log entries</span>
               </div>
               <FormSelect
                 label=""
                 value={logFilter}
                 onChange={(e) => setLogFilter(e.target.value)}
-                className="w-48 h-9"
+                className="w-full sm:w-48 h-9"
               >
                 <option value="all">All Actions</option>
                 {uniqueLogActions.map((action) => (

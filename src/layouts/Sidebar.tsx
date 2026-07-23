@@ -58,30 +58,31 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }
 
   return (
-    <motion.aside
-      animate={{ width: collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH }}
-      transition={{ duration: 0.2, ease: "easeInOut" }}
+    <aside
+      style={{ width: collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH }}
       className={cn(
-        "fixed top-0 left-0 z-50 flex h-full flex-col bg-sidebar text-sidebar-foreground",
+        "flex h-full flex-col bg-sidebar text-sidebar-foreground",
         "border-r border-sidebar-border",
-        "max-lg:z-50 max-lg:shadow-xl"
+        "w-[260px]"
       )}
     >
-      <div className="flex h-16 items-center gap-3 border-b border-sidebar-border px-4">
+      {/* Header */}
+      <div className="flex h-16 shrink-0 items-center gap-3 border-b border-sidebar-border px-4">
         <img src={logo} alt="Highlands Cafe & Motel Inn" className="h-8 w-8 shrink-0 rounded-full object-cover" />
         {!collapsed && (
           <motion.span
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="truncate text-sm font-semibold"
+            className="text-truncate text-sm font-semibold"
           >
             Highlands Cafe & Motel Inn
           </motion.span>
         )}
       </div>
 
-      <nav className="flex-1 overflow-y-auto no-scrollbar px-2 py-3">
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto no-scrollbar px-2 py-3 min-h-0">
         <ul className="space-y-0.5">
           {visibleItems.map((item: SidebarItem) => {
             const isActive = location.pathname === item.href || (item.href !== '/' && location.pathname.startsWith(item.href))
@@ -99,10 +100,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 >
                   <Icon name={item.icon} className="h-5 w-5 shrink-0" />
                   {!collapsed && (
-                    <span className="truncate">{item.label}</span>
+                    <span className="text-truncate flex-1 text-left">{item.label}</span>
                   )}
                   {!collapsed && (badgeMap[item.href] ?? 0) > 0 && (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                    <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
                       {badgeMap[item.href]}
                     </span>
                   )}
@@ -113,7 +114,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </ul>
       </nav>
 
-      <div className="border-t border-sidebar-border p-2 space-y-1">
+      {/* Footer */}
+      <div className="shrink-0 border-t border-sidebar-border p-2">
         <button
           onClick={onToggle}
           className={cn(
@@ -129,6 +131,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           {!collapsed && <span>Collapse</span>}
         </button>
       </div>
-    </motion.aside>
+    </aside>
   )
 }

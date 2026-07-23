@@ -4,6 +4,7 @@ import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
 import { Icon } from "@/components/icon-mapper"
 import { BaseModal } from "@/components/ui/modal"
+import { useMediaQuery } from "@/lib/hooks/useMediaQuery"
 import {
   FormInput, FormSelect, FormActions, FormToggle,
 } from "@/components/ui/form-field"
@@ -251,7 +252,7 @@ function ItemFormModal({
         </div>
 
         <FormInput label="Item Name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Cappuccino" disabled={uploading} />
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <FormInput label="Price (Rs.)" required type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} placeholder="250" disabled={uploading} />
           <FormSelect label="Category" value={category} onChange={(e) => setCategory(e.target.value)} options={categories.map((c) => ({ value: c.id, label: c.name }))} disabled={uploading} />
         </div>
@@ -260,7 +261,7 @@ function ItemFormModal({
           <Button type="button" variant="outline" onClick={onClose} disabled={uploading}>Cancel</Button>
           <Button type="submit" disabled={uploading}>
             {uploading ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</>
+              <><Loader2 className="h-4 w-4 animate-spin" /> Uploading&hellip;</>
             ) : (
               item?.id ? "Update Item" : "Add Item"
             )}
@@ -468,6 +469,7 @@ export function Menu() {
   const [showCategoryForm, setShowCategoryForm] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "item" | "category"; id: string; name: string } | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const isDesktop = useMediaQuery("(min-width: 1024px)")
 
   // ── Data ──
   const { data: cats = [] } = useMenuCategories()
@@ -598,10 +600,14 @@ export function Menu() {
 
         {/* ─── Sidebar ─── */}
         <motion.aside
-          initial={{ opacity: 0, x: -16 }}
-          animate={{ opacity: 1, x: 0, transition: { duration: 0.2 } }}
+          initial={{ opacity: 0, ...(isDesktop ? { x: -16 } : {}) }}
+          animate={{
+            opacity: 1,
+            ...(isDesktop ? { x: 0 } : {}),
+            transition: { duration: 0.2 },
+          }}
           className={cn(
-            "fixed inset-y-0 left-0 z-50 w-80 shrink-0 border-r bg-background p-2.5 transition-transform duration-200 lg:static lg:translate-x-0 lg:rounded-xl lg:border lg:p-2",
+            "fixed inset-y-0 left-0 z-50 w-72 shrink-0 border-r bg-background p-2.5 transition-transform duration-200 lg:static lg:translate-x-0 lg:rounded-xl lg:border lg:p-2 lg:w-64 xl:w-72",
             sidebarOpen ? "translate-x-0" : "-translate-x-full",
           )}
         >
@@ -646,7 +652,7 @@ export function Menu() {
                 className="shrink-0 rounded-lg border border-border p-2.5 text-muted-foreground hover:bg-muted lg:hidden transition-colors">
                 <MenuIcon className="h-4 w-4" />
               </button>
-              <div className="relative flex-1 sm:min-w-[240px]">
+              <div className="relative flex-1 w-full sm:min-w-0 sm:max-w-xs">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/40" />
                 <input type="text" placeholder="Search items..."
                   value={searchQuery}
@@ -688,7 +694,7 @@ export function Menu() {
           <AnimatePresence mode="wait">
             {viewMode === "grid" && (
               <motion.div key="grid" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.15 } }}
-                className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
               >
                 {filteredItems.length === 0 ? (
                   <div className="col-span-full">
@@ -723,7 +729,7 @@ export function Menu() {
                 className="overflow-hidden rounded-xl border border-border"
               >
                 {/* Table header */}
-                <div className="grid grid-cols-[44px_1fr_1fr_100px_70px_80px] items-center gap-3 border-b border-border bg-muted/30 px-5 py-2.5">
+                <div className="hidden md:grid md:grid-cols-[44px_1fr_1fr_100px_70px_80px] items-center gap-3 border-b border-border bg-muted/30 px-5 py-2.5">
                   {["", "Item", "Category", "Price", "Status", ""].map((h) => (
                     <span key={h} className={cn("text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50", h === "Price" && "text-right", h === "Status" && "text-center")}>{h}</span>
                   ))}

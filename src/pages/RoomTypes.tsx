@@ -75,7 +75,7 @@ function RoomTypeFormModal({
           placeholder="Describe the room type..."
           rows={2}
         />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput
             label="Price per Night (Rs.)"
             type="number"
@@ -213,7 +213,7 @@ export function RoomTypes() {
           }
         />
 
-        <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-3">
+        <motion.div variants={pageTransitionFast} className="grid gap-4 grid-cols-1 sm:grid-cols-3">
           <StatCard label="Room Types" value={roomTypes.length} icon="BedDouble" color="text-primary" index={0} />
           <StatCard label="Avg Price/Night" value={formatCurrency(avgPrice)} icon="DollarSign" color="text-success" index={1} />
           <StatCard label="Total Capacity" value={totalCapacity} icon="Users" color="text-info" index={2} />

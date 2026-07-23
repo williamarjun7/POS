@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { Sidebar } from "@/layouts/Sidebar"
 import { TopNav } from "@/layouts/TopNav"
 import { RouteTransition } from "@/components/RouteTransition"
+import { useMediaQuery } from "@/lib/hooks/useMediaQuery"
 
 const SIDEBAR_WIDTH = 260
 const SIDEBAR_COLLAPSED_WIDTH = 64
@@ -12,6 +13,7 @@ const SIDEBAR_COLLAPSED_WIDTH = 64
 export function DashboardLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const isLg = useMediaQuery("(min-width: 1024px)")
 
   const toggleCollapse = () => setCollapsed((prev) => !prev)
   const toggleMobile = () => setMobileOpen((prev) => !prev)
@@ -31,27 +33,37 @@ export function DashboardLayout() {
         )}
       </AnimatePresence>
 
-      {/* Mobile sidebar */}
-      <div className={cn("lg:hidden", mobileOpen ? "block" : "hidden")}>
-        <Sidebar collapsed={false} onToggle={toggleCollapse} />
-      </div>
+      {/* Mobile sidebar — slide-out drawer */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <motion.div
+            initial={{ x: -280 }}
+            animate={{ x: 0 }}
+            exit={{ x: -280 }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className="fixed top-0 left-0 z-50 h-full lg:hidden"
+          >
+            <Sidebar collapsed={false} onToggle={toggleMobile} />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Desktop sidebar */}
       <div className="hidden lg:block">
         <Sidebar collapsed={collapsed} onToggle={toggleCollapse} />
       </div>
 
-      {/* Main content */}
+      {/* Main content — fluid responsive layout */}
       <motion.div
         animate={{
-          marginLeft: collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH,
+          marginLeft: isLg ? (collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH) : 0,
         }}
         transition={{ duration: 0.2, ease: "easeInOut" }}
-        className="min-h-screen flex-1 max-lg:ml-0"
+        className="min-h-screen max-lg:ml-0"
       >
         <TopNav onMobileMenuToggle={toggleMobile} />
-        <main className="p-4 lg:p-6">
-          <div className="mx-auto max-w-[1600px]">
+        <main className="p-3 sm:p-4 lg:p-5">
+          <div className="fluid-container">
             <RouteTransition>
               <Outlet />
             </RouteTransition>

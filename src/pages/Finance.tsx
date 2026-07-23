@@ -525,7 +525,7 @@ export function Finance() {
 
         {activeTab === "overview" && (
           <motion.div initial="hidden" animate="visible" variants={{ show: { transition: { staggerChildren: 0.06 } } }} className="space-y-6">
-            <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <motion.div variants={pageTransitionFast} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <motion.div whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
                 <StatCard label="Total Revenue" value={formatCurrency(totalRevenue)} icon="TrendingUp" color="text-success" trend="up" trendValue={`From all ${financialSummary?.totalInvoices ?? 0} invoices`} index={0} />
               </motion.div>
@@ -566,7 +566,7 @@ export function Finance() {
               </div>
             ) : (
               <>
-            <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <motion.div variants={pageTransitionFast} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <StatCard label="Total Invoices" value={financialSummary?.totalInvoices ?? 0} icon="Receipt" color="text-primary" index={0} />
               <StatCard label="Paid" value={paidCount} icon="CheckCircle2" color="text-success" index={1} />
               <StatCard label="Unpaid" value={pendingCount} icon="Clock" color="text-warning" index={2} />
@@ -622,7 +622,7 @@ export function Finance() {
               </div>
             ) : (
               <>
-                <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <motion.div variants={pageTransitionFast} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <StatCard label="Total Expenses" value={formatCurrency(totalExpenses)} icon="DollarSign" color="text-destructive" index={0} />
                   <StatCard label="Categories" value={expenseCategoriesCount} icon="Layers" color="text-primary" index={1} />
                   <StatCard label="Avg per Expense" value={formatCurrency(avgPerExpense)} icon="Calculator" color="text-info" index={2} />
@@ -668,8 +668,8 @@ export function Finance() {
               </div>
             ) : (
               <>
-              <div className="flex items-center justify-between">
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6 flex-1">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6 flex-1 min-w-0">
                   <StatCard label="Opening Balance" value={formatCurrency(todayRec.openingBalance)} icon="Wallet" color="text-primary" index={0} />
                   <StatCard label="Cash In" value={formatCurrency(todayRec.cashReceived)} icon="TrendingUp" color="text-success" index={1} />
                   <StatCard label="Cash Out" value={formatCurrency(todayRec.cashPaid)} icon="TrendingDown" color="text-destructive" index={2} />
@@ -683,13 +683,13 @@ export function Finance() {
                     index={5}
                   />
                 </div>
-              </div>
-              <div className="flex justify-end">
-                <RequirePermission permission="reconciliation.create">
-                  <Button size="sm" onClick={() => setReconModalOpen(true)}>
-                    <Plus className="h-4 w-4" /> New Reconciliation
-                  </Button>
-                </RequirePermission>
+                <div className="flex justify-end shrink-0">
+                  <RequirePermission permission="reconciliation.create">
+                    <Button size="sm" onClick={() => setReconModalOpen(true)}>
+                      <Plus className="h-4 w-4" /> New Reconciliation
+                    </Button>
+                  </RequirePermission>
+                </div>
               </div>
 
             <motion.div variants={pageTransitionFast}>
@@ -774,7 +774,7 @@ export function Finance() {
 
         {activeTab === "payments" && (
           <motion.div initial="hidden" animate="visible" variants={{ show: { transition: { staggerChildren: 0.06 } } }} className="space-y-6">
-            <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <motion.div variants={pageTransitionFast} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard label="Total Received" value={formatCurrency(totalPaid)} icon="CheckCircle2" color="text-success" index={0} />
               <StatCard label="Total Pending" value={formatCurrency(totalPendingPayments)} icon="Clock" color="text-warning" index={1} />
               <StatCard label="Total Transactions" value={paymentHistory.length} icon="Receipt" color="text-primary" index={2} />

@@ -160,7 +160,7 @@ function CustomerFormModal({
           placeholder="e.g. Ram Sharma"
           error={nameError}
         />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput
             label="Phone"
             value={phone}
@@ -436,7 +436,7 @@ function ReceivePaymentModal({
             type="button"
             onClick={handleReceive}
             disabled={!canSubmit}
-            className="bg-success hover:bg-success/90 min-w-[140px]"
+            className="bg-success hover:bg-success/90 min-w-0 sm:min-w-[140px]"
             size="sm"
           >
             {isSubmitting ? (
@@ -578,14 +578,14 @@ function ReceivePaymentModal({
               </div>
               <div className="space-y-2">
                 {paymentSplits.map((split, index) => (
-                  <div key={index} className="grid grid-cols-[1fr_130px] gap-2.5 items-end">
+                  <div className="grid grid-cols-1 sm:grid sm:grid-cols-[1fr_130px] gap-2.5 items-end">
                     <FormSelect
                       label={index === 0 ? 'Method' : `Method ${index + 1}`}
                       value={split.method}
                       onChange={(e) => updateSplit(index, 'method', e.target.value)}
                       options={paymentMethodOptions}
                     />
-                    <div className="space-y-1">
+                    <div className="space-y-1 w-full">
                       <label className="block text-xs font-medium text-muted-foreground">Amount</label>
                       <div className="flex gap-1">
                         <input
@@ -625,8 +625,8 @@ function ReceivePaymentModal({
               )}
             </div>
 
-            {/* Live summary - compact single line */}
-            <div className="flex items-center justify-between gap-4 rounded-lg bg-muted/40 px-3 py-2.5 border border-border/50">
+            {/* Live summary - wraps on mobile */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg bg-muted/40 px-3 py-2.5 border border-border/50">
               <div className="flex items-center gap-1.5 text-xs">
                 <span className="text-muted-foreground">Outstanding:</span>
                 <span className="font-medium text-foreground">{formatCurrency(selectedTotal)}</span>
@@ -1222,15 +1222,16 @@ export function Customers() {
         "flex gap-4",
         viewingCustomer ? "flex-col lg:flex-row" : "flex-col"
       )}>
+        {/* Customer table - takes full width when no profile, splits when profile is open */}
         <div className={cn(
           "min-w-0",
-          viewingCustomer ? "lg:w-1/2 xl:w-3/5" : "w-full"
+          viewingCustomer ? "w-full lg:w-1/2 xl:w-3/5" : "w-full"
         )}>
           <motion.div
             variants={fadeUp}
             initial="hidden"
             animate="visible"
-            className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm"
+            className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm overflow-x-auto"
           >
             <DataTable
               columns={columns}
@@ -1245,10 +1246,10 @@ export function Customers() {
           </motion.div>
         </div>
 
-        {/* Profile Panel - Slide-in on desktop, overlay on mobile */}
+        {/* Profile Panel - Fullscreen overlay on mobile, sidebar on desktop */}
         <div className={cn(
           viewingCustomer
-            ? "fixed inset-0 z-50 lg:relative lg:inset-auto lg:z-auto lg:w-1/2 xl:w-2/5"
+            ? "fixed inset-0 z-50 flex flex-col lg:relative lg:inset-auto lg:z-auto lg:w-1/2 xl:w-2/5 lg:block"
             : "hidden"
         )}>
           {/* Backdrop for mobile */}
@@ -1258,7 +1259,7 @@ export function Customers() {
               onClick={() => setViewingCustomer(null)}
             />
           )}
-          <div className="relative h-full lg:h-auto lg:max-h-[calc(100vh-16rem)] lg:rounded-xl lg:border lg:border-border lg:shadow-sm lg:overflow-hidden">
+          <div className="relative flex-1 overflow-y-auto lg:max-h-[calc(100vh-16rem)] lg:rounded-xl lg:border lg:border-border lg:shadow-sm">
             <CustomerProfile
               customer={viewingCustomer}
               open={!!viewingCustomer}

@@ -83,7 +83,7 @@ function PaymentFormModal({
             ...suppliers.map(s => ({ value: s.id, label: s.name })),
           ]}
         />
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormInput
             label="Amount (Rs.)"
             type="number"
@@ -101,7 +101,7 @@ function PaymentFormModal({
             onChange={(e) => setPaymentDate(e.target.value)}
           />
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormSelect
             label="Payment Method"
             required

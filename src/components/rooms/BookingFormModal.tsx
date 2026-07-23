@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   X, User, Mail, Phone, CalendarDays, CalendarRange,
   CreditCard, FileText, Ban, Archive, Trash2,
@@ -20,6 +20,9 @@ import {
 import { BookingPaymentModal } from './BookingPaymentModal';
 import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
 import { processPaymentWithRecovery } from '@/lib/services/unified-payment-service';
+import { getNextInvoiceNumber } from '@/lib/services/sequence-service';
+import { logActivitySafe } from '@/lib/services/activity-log-service';
+import { insforge } from '@/lib/services/auth-service';
 import { db } from '@/lib/db/insforge';
 import type { Room } from '@/types';
 
@@ -36,7 +39,7 @@ interface BookingFormModalProps {
 }
 
 export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: BookingFormModalProps) {
-  const { createBooking, cancelBooking, archiveBooking, deleteBooking } = useBookings();
+  const { createBooking, cancelBooking, archiveBooking, deleteBooking, updateBooking } = useBookings();
 
   const isExisting = !!booking;
   const isBookMode = mode === 'book';
@@ -55,8 +58,8 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
   const [adults, setAdults] = useState(1);
   const [children, setChildren] = useState(0);
   const [discount, setDiscount] = useState(0);
-  const [idType, setIdType] = useState('citizenship');
-  const [idNumber, setIdNumber] = useState('');
+  const [idType, setIdType] = useState(booking?.idType ?? 'citizenship');
+  const [idNumber, setIdNumber] = useState(booking?.idNumber ?? '');
   const [paymentMethod, setPaymentMethod] = useState(booking?.paymentMethod ?? 'cash');
   const [notes, setNotes] = useState(booking?.specialRequests ?? '');
   const [nameError, setNameError] = useState('');
@@ -67,6 +70,8 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
   const [showPaymentDecision, setShowPaymentDecision] = useState(false);
   const [pendingBookingData, setPendingBookingData] = useState<NewBookingData | null>(null);
   const [showPosPayment, setShowPosPayment] = useState(false);
+  // Separate flag to launch PosPaymentDialog after BookingPaymentModal closes
+  const [launchPayment, setLaunchPayment] = useState(false);
 
   // ── Confirm dialog state ───────────────────────────────────
   const [confirmAction, setConfirmAction] = useState<{
@@ -160,31 +165,42 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
     setShowPaymentDecision(true)
   };
 
-  /** Handle "Pay Now" — delegate to global PosPaymentDialog */
+  // Effect: launch PosPaymentDialog after BookingPaymentModal unmounts (avoids z-index conflict)
+  useEffect(() => {
+    if (launchPayment) {
+      setShowPosPayment(true)
+      setLaunchPayment(false)
+    }
+  }, [launchPayment])
+
+  /** Handle "Pay Now" — close decision modal, launch global payment dialog */
   const handlePayNow = useCallback(() => {
     if (!pendingBookingData) return
-    setShowPosPayment(true)
+    // Close the payment decision modal FIRST so it doesn't block PosPaymentDialog (z-index issue)
+    setShowPaymentDecision(false)
+    // Effect will react to this flag and open PosPaymentDialog after unmount
+    setLaunchPayment(true)
   }, [pendingBookingData])
 
   /**
    * Handle payment result from PosPaymentDialog.
    * Strategy to avoid orphan records:
-   *   1. Create booking FIRST (cheap, cancellable)
-   *   2. Process payment via unified RPC (atomic, idempotent)
-   *   3. If RPC fails → cancel the booking → NO orphan records
+   *   1. Process payment via unified RPC FIRST (atomic, idempotent — creates invoice + payment)
+   *   2. If RPC succeeds → create booking → link booking to invoice
+   *   3. If RPC fails → nothing created → NO orphan records
    */
   const handlePaymentComplete = useCallback(async (paymentResult?: PaymentResult) => {
     if (!pendingBookingData || !paymentResult) {
       setShowPosPayment(false)
       return
     }
-    let createdBooking: Booking | null = null
+
+    let paymentSucceeded = false
 
     try {
-      // ═══ STEP 1: Create the booking ═══
-      createdBooking = await persistBooking(pendingBookingData, paymentResult.paidAmount ?? pendingBookingData.totalAmount)
-
-      // ═══ STEP 2: Process payment via unified pipeline ═══
+      // ═══ STEP 1: Process payment FIRST ═══
+      // This creates the invoice + payment record atomically.
+      // If this fails, NOTHING is created — no cleanup needed.
       const rpcResult = await processPaymentWithRecovery({
         tableId: '',
         customerName: pendingBookingData.guestName,
@@ -208,12 +224,104 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
         throw new Error(rpcResult.error || 'Payment processing failed')
       }
 
-      // ═══ STEP 3: Insert invoice items (non-critical, fire-and-forget) ═══
-      if (rpcResult.invoiceId) {
+      // ═══ Payment succeeded flag (used in catch for correct error message) ═══
+      paymentSucceeded = true
+      const rpcInvoiceId = rpcResult.invoiceId
+      const rpcPaymentRef = rpcResult.paymentReference
+
+      // ═══ STEP 2: Payment succeeded — now create booking ═══
+      const createdBooking = await persistBooking(pendingBookingData, paymentResult.paidAmount ?? pendingBookingData.totalAmount)
+
+      // ═══ STEP 3: Link booking to invoice (non-critical, fire-and-forget) ═══
+      if (rpcInvoiceId) {
+        // Link invoice to booking
+        await insforge.database
+          .from('invoices')
+          .update({ booking_id: createdBooking.id } as any)
+          .eq('id', rpcInvoiceId)
+          .catch(() => {})
+
+        // Insert invoice items for the room charge
         const nightsCalc = nights
         const nightlyRateCalc = room.price || room.pricePerNight || 0
         db.insertMany('invoice_items', [{
-          invoice_id: rpcResult.invoiceId,
+          invoice_id: rpcInvoiceId,
+          name: `Room ${roomLabel} — ${nightsCalc} night${nightsCalc !== 1 ? 's' : ''}`,
+          quantity: nightsCalc,
+          unit_price: nightlyRateCalc,
+          total_price: pendingBookingData.totalAmount,
+        }]).catch(() => {})
+
+        // Link payment to booking
+        await insforge.database
+          .from('payments')
+          .update({ booking_id: createdBooking.id } as any)
+          .eq('payment_reference', rpcPaymentRef)
+          .catch(() => {})
+      }
+
+      showSuccess(`${pendingBookingData.guestName} booked in — Room ${roomLabel} (${formatCurrency(pendingBookingData.totalAmount)} via ${paymentResult.paymentMethod ?? 'payment'})`)
+      onClose()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Processing failed'
+
+      if (paymentSucceeded) {
+        // Payment went through but booking creation failed → orphan invoice exists
+        // Log it and show clear error message so cashier can recover manually
+        console.error('[Booking] Payment succeeded but booking creation failed:', {
+          error: message,
+          guestName: pendingBookingData.guestName,
+          roomLabel,
+          total: pendingBookingData.totalAmount,
+        })
+        showError(`Payment was processed but booking creation failed: ${message}. Please check invoices and contact support.`)
+      } else {
+        // Booking was NOT created (payment failed or exception before persistBooking)
+        showError(`Payment failed: ${message}. No records were created. You may retry.`)
+      }
+    } finally {
+      setShowPosPayment(false)
+      setShowPaymentDecision(false)
+      setPendingBookingData(null)
+    }
+  }, [pendingBookingData, room, roomLabel, nights, persistBooking, onClose])
+
+  /** Handle "Pay at Checkout" — create booking with unpaid invoice */
+  const handlePayLater = useCallback(async () => {
+    if (!pendingBookingData) return
+    setSaving(true)
+
+    try {
+      // 1. Create booking with pending payment status
+      const createdBooking = await persistBooking(pendingBookingData, 0)
+
+      // 2. Create an unpaid accommodation invoice for room charges
+      const invNumber = await getNextInvoiceNumber()
+      const { data: invoiceData, error: invoiceError } = await insforge.database
+        .from('invoices')
+        .insert([{
+          invoice_number: invNumber,
+          customer_name: pendingBookingData.guestName,
+          subtotal: pendingBookingData.totalAmount,
+          discount: pendingBookingData.discount ?? 0,
+          total: pendingBookingData.totalAmount - (pendingBookingData.discount ?? 0),
+          status: 'pending',
+          booking_id: createdBooking.id,
+          table_id: room.id,
+          due_date: pendingBookingData.checkOut,
+        }] as any)
+        .select()
+        .single()
+
+      if (invoiceError) throw new Error('Failed to create accommodation invoice')
+
+      // 3. Insert invoice items for room charges
+      if (invoiceData) {
+        const invoiceId = (invoiceData as any).id
+        const nightsCalc = nights
+        const nightlyRateCalc = room.price || room.pricePerNight || 0
+        await db.insertMany('invoice_items', [{
+          invoice_id: invoiceId,
           name: `Room ${roomLabel} — ${nightsCalc} night${nightsCalc !== 1 ? 's' : ''}`,
           quantity: nightsCalc,
           unit_price: nightlyRateCalc,
@@ -221,35 +329,16 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
         }]).catch(() => {})
       }
 
-      showSuccess(`${pendingBookingData.guestName} booked in — Room ${roomLabel} (${formatCurrency(pendingBookingData.totalAmount)} via ${paymentResult.paymentMethod ?? 'payment'})`)
-      onClose()
-    } catch (err) {
-      // ═══ CLEANUP: Cancel booking if payment failed ═══
-      if (createdBooking) {
-        try {
-          await cancelBooking(createdBooking.id)
-        } catch {
-          // If cancel fails too, booking remains but can be managed manually
-          console.warn('[Booking] Created booking but payment failed; cleanup attempted.')
-        }
-      }
+      // 4. Log activity
+      logActivitySafe({
+        activityType: 'booking_created',
+        entityId: createdBooking.id,
+        entityLabel: `Room ${roomLabel} — ${pendingBookingData.guestName}`,
+        status: isBookMode ? 'occupied' : 'reserved',
+        amount: pendingBookingData.totalAmount,
+        details: `Pay at checkout — ${formatCurrency(pendingBookingData.totalAmount)}`,
+      }).catch(() => {})
 
-      const message = err instanceof Error ? err.message : 'Payment processing failed'
-      showError(`Payment failed: ${message}. No orphan records were created.`)
-    } finally {
-      setShowPosPayment(false)
-      setShowPaymentDecision(false)
-      setPendingBookingData(null)
-    }
-  }, [pendingBookingData, room, roomLabel, nights, persistBooking, cancelBooking, onClose])
-
-  /** Handle "Pay at Checkout" — create booking with pending payment */
-  const handlePayLater = useCallback(async () => {
-    if (!pendingBookingData) return
-    setSaving(true)
-
-    try {
-      await persistBooking(pendingBookingData, 0)
       showSuccess(`${pendingBookingData.guestName} booked in — Room ${roomLabel} (${formatCurrency(pendingBookingData.totalAmount)}). Payment at checkout.`)
       onClose()
     } catch (err) {
@@ -259,7 +348,7 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
       setShowPaymentDecision(false)
       setPendingBookingData(null)
     }
-  }, [pendingBookingData, roomLabel, persistBooking, onClose])
+  }, [pendingBookingData, roomLabel, isBookMode, nights, room, persistBooking, onClose])
 
   /** Handle cancel from payment decision */
   const handleCancelPaymentDecision = useCallback(() => {
@@ -342,7 +431,7 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
   return (
     <>
       <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/50 py-8">
-        <div className="w-full max-w-lg rounded-2xl border bg-background shadow-2xl p-6 mx-4">
+        <div className="w-full max-w-[min(32rem,calc(100vw-2rem))] rounded-2xl border bg-background shadow-2xl p-6 mx-4">
           {/* Header */}
           <div className="flex items-start justify-between mb-6">
             <div>
@@ -471,19 +560,6 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                   </div>
                 </div>
 
-                {/* ID Proof */}
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
-                    <FileText className="h-3 w-3" /> ID Proof
-                  </h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    <FormSelect label="ID Type" value={idType} onChange={(e) => setIdType(e.target.value)}
-                      options={idOptions} />
-                    <FormInput label="ID Number" value={idNumber} onChange={(e) => setIdNumber(e.target.value)}
-                      placeholder="ID number" leadingIcon={<FileText className="h-4 w-4" />} />
-                  </div>
-                </div>
-
                 {/* Discount */}
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
@@ -540,6 +616,19 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
               </>
             )}
 
+            {/* ID Proof (shown for both new AND existing bookings) */}
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
+                <FileText className="h-3 w-3" /> ID Proof
+              </h4>
+              <div className="grid grid-cols-2 gap-3">
+                <FormSelect label="ID Type" value={idType} onChange={(e) => setIdType(e.target.value)}
+                  options={idOptions} />
+                <FormInput label="ID Number" value={idNumber} onChange={(e) => setIdNumber(e.target.value)}
+                  placeholder="ID number" leadingIcon={<FileText className="h-4 w-4" />} />
+              </div>
+            </div>
+
             {/* Actions */}
             <div className="flex gap-3 pt-2">
               {isExisting ? (
@@ -591,6 +680,29 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                       Delete
                     </button>
                   )}
+
+                  {/* Save Changes — always visible for existing bookings */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!booking) return
+                      setSaving(true)
+                      try {
+                        await updateBooking(booking.id, { idType, idNumber })
+                        showSuccess('Document details updated')
+                        onClose()
+                      } catch (err) {
+                        showError(err instanceof Error ? err.message : 'Failed to update booking')
+                      } finally {
+                        setSaving(false)
+                      }
+                    }}
+                    disabled={saving}
+                    className="flex items-center justify-center gap-2 flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 shadow-sm transition-all disabled:opacity-50"
+                  >
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                    Save Changes
+                  </button>
 
                   {!canCancel && !canDelete && !isActive && (
                     <Button type="button" variant="outline" onClick={onClose} className="flex-1">
