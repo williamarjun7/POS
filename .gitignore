@@ -49,8 +49,9 @@ secrets.*
 *.local
 opencode.json
 
-# Scripts (setup/utility scripts that shouldn't contain secrets)
-scripts/
+# Scripts with hardcoded secrets — do NOT commit credentials in these
+scripts/create-owner-account.mjs
+scripts/verify-owner-email.mjs
 
 # Windows artifacts
 nul
