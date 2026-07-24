@@ -42,6 +42,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     { label: "Administration", icon: "Settings", href: "/admin", permission: "users.manage" },
     { label: "Profile", icon: "UserCheck", href: "/profile", permission: "profile.view" },
     { label: "Print Settings", icon: "Printer", href: "/print-settings", permission: "print.manage" },
+    { label: "Expense Categories", icon: "Layers", href: "/expense-categories", permission: "settings.manage" },
     { label: "Room Types", icon: "BedDouble", href: "/room-types", permission: "operations.manage" },
   ]
 

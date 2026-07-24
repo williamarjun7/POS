@@ -224,10 +224,12 @@ export interface PaymentRow {
 export interface ExpenseRow {
   id: string
   description: string
-  category: 'utilities' | 'supplies' | 'maintenance' | 'staff' | 'marketing' | 'other'
+  category: string
   amount: number
+  quantity: number
+  unit: string
   date: string
-  payment_method: 'cash' | 'fonepay' | 'credit' | 'reception_qr'
+  payment_method: string | null
   recorded_by: string | null
   receipt_url: string | null
   notes: string | null
@@ -389,6 +391,19 @@ export interface ActivityLogRow {
   details: string | null
   ip_address: string | null
   created_at: string
+}
+
+// ─── Expense Categories ────────────────────────────────────
+
+export interface ExpenseCategoryRow {
+  id: string
+  name: string
+  slug: string
+  description: string
+  is_active: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
 }
 
 // ─── Settings ──────────────────────────────────────────────

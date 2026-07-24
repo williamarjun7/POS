@@ -126,7 +126,34 @@ export type TableStatus = "available" | "occupied" | "reserved" | "cleaning" | "
 export type HousekeepingStatus = "pending" | "in_progress" | "completed"
 export type MaintenancePriority = "low" | "medium" | "high" | "urgent"
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked_in" | "completed"
-export type ExpenseCategory = "utilities" | "supplies" | "maintenance" | "staff" | "marketing" | "other"
+export type ExpenseCategory =
+  | 'dairy'
+  | 'grocery'
+  | 'vegetables'
+  | 'fruits'
+  | 'meat'
+  | 'bakery'
+  | 'snacks'
+  | 'beverages'
+  | 'tea_coffee'
+  | 'fuel'
+  | 'transport'
+  | 'cleaning'
+  | 'laundry'
+  | 'maintenance'
+  | 'housekeeping'
+  | 'utilities'
+  | 'internet'
+  | 'electricity'
+  | 'rent'
+  | 'salary'
+  | 'office'
+  | 'equipment'
+  | 'room_supplies'
+  | 'toiletries'
+  | 'amenities'
+  | 'marketing'
+  | 'misc'
 export type UserRole = "admin" | "manager" | "cashier" | "waiter" | "housekeeper" | "receptionist" | "owner"
 
 export interface DiningTable {
@@ -240,6 +267,8 @@ export interface Expense {
   description: string
   category: ExpenseCategory
   amount: number
+  quantity: number
+  unit: string
   date: string
   paymentMethod: PaymentMethod
   recordedBy: string

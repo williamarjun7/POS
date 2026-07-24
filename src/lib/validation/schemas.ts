@@ -164,19 +164,43 @@ export const customerLedgerSchemas = {
 
 // ─── Expense Schemas ───────────────────────────────────────────
 
+/** Valid expense categories (must match DB) */
+const expenseCategoryEnum = z.enum([
+  'dairy', 'grocery', 'vegetables', 'fruits', 'meat', 'bakery',
+  'snacks', 'beverages', 'tea_coffee', 'fuel', 'transport',
+  'cleaning', 'laundry', 'maintenance', 'housekeeping',
+  'utilities', 'internet', 'electricity', 'rent', 'salary',
+  'office', 'equipment', 'room_supplies', 'toiletries',
+  'amenities', 'marketing', 'misc',
+]);
+
+/** Valid units of measurement */
+const expenseUnitEnum = z.enum([
+  'pcs', 'kg', 'g', 'L', 'mL', 'Pack', 'Box', 'Bottle', 'Can',
+  'Dozen', 'Bag', 'Sack', 'Carton', 'm', 'Roll', 'Tray', 'Bundle',
+  'Unit', 'Other',
+]);
+
 export const expenseSchemas = {
-  /** Validate expense creation */
+  /** Validate expense creation (simplified) */
   createExpense: z.object({
     description: safeString.min(1, 'Description is required').max(2000),
-    category: z.enum(['utilities', 'supplies', 'maintenance', 'staff', 'marketing', 'other']),
-    amount: monetaryAmount,
-    date: isoDateString,
-    paymentMethod: dbPaymentMethod,
-    recordedBy: optionalSafeString,
-    receiptUrl: optionalSafeString,
+    category: expenseCategoryEnum,
+    unitPrice: monetaryAmount,
+    quantity: z.number().positive('Quantity must be greater than 0'),
+    unit: expenseUnitEnum,
     notes: optionalSafeString,
-    vendor: optionalSafeString,
-    receiptNumber: optionalSafeString,
+    recordedBy: optionalSafeString,
+  }),
+
+  /** Validate expense update */
+  updateExpense: z.object({
+    description: safeString.min(1).max(2000).optional(),
+    category: expenseCategoryEnum.optional(),
+    unitPrice: monetaryAmount.optional(),
+    quantity: z.number().positive().optional(),
+    unit: expenseUnitEnum.optional(),
+    notes: optionalSafeString,
   }),
 }
 

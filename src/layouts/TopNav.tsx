@@ -5,6 +5,7 @@ import { useTheme } from "@/lib/core/theme-context"
 import { useAuth } from "@/lib/core/auth-context"
 import logo from "@/assets/logo.png"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ConfirmDialog"
 
 interface TopNavProps {
   onMobileMenuToggle?: () => void
@@ -14,8 +15,9 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const { toggleTheme, theme } = useTheme()
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
   const [profileOpen, setProfileOpen] = useState(false)
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
   const profileRef = useRef<HTMLDivElement>(null)
 
   // Derive initials from the authenticated user's name
@@ -38,7 +40,7 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
       { label: 'Expenses', href: '/expenses' }, { label: 'Finance', href: '/finance' },
       { label: 'Analytics', href: '/analytics' }, { label: 'Reports', href: '/reports' },
       { label: 'Administration', href: '/admin' },
-      { label: 'Profile', href: '/profile' }, { label: 'Print Settings', href: '/print-settings' },
+      { label: 'Profile', href: '/profile' }, { label: 'Print Settings', href: '/print-settings' }, { label: 'Expense Categories', href: '/expense-categories' },
       { label: 'Room Types', href: '/room-types' },
     ]
     const item = NAV_ITEMS.find(
@@ -58,6 +60,7 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
   }, [])
 
   return (
+    <>
     <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center border-b border-border bg-background/80 backdrop-blur-md">
       <div className="flex w-full items-center gap-2 sm:gap-4 px-responsive">
         {/* Mobile hamburger */}
@@ -129,6 +132,7 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
 
           {/* Logout */}
           <button
+            onClick={() => setLogoutConfirmOpen(true)}
             className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
             aria-label="Logout"
           >
@@ -137,5 +141,31 @@ export function TopNav({ onMobileMenuToggle }: TopNavProps) {
         </div>
       </div>
     </header>
+
+      {/* Logout Confirmation Dialog — rendered outside the sticky header
+          so fixed positioning works correctly (sticky containers can clip
+          fixed-position child elements) */}
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        title="Logout"
+        message={`Are you sure you want to logout${user?.name ? `, ${user.name}` : ''}? You'll need to sign in again.`}
+        confirmLabel="Logout"
+        cancelLabel="Stay Signed In"
+        variant="danger"
+        onConfirm={() => {
+          setLogoutConfirmOpen(false)
+          // Chain the redirect AFTER logout() fully completes.
+          // logout() does: await signOut() → clearSession() → setUser(null).
+          // Without this .then(), the redirect fires before clearSession()
+          // runs, leaving stale loginTimestamp in localStorage. On page
+          // reload, isSessionValid() returns true and the SDK restores
+          // the session, silently re-logging the user in.
+          logout().then(() => {
+            window.location.href = '/login'
+          })
+        }}
+        onCancel={() => setLogoutConfirmOpen(false)}
+      />
+    </>
   )
 }

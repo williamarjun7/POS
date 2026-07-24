@@ -24,6 +24,7 @@ import { useServerPagination } from "@/lib/hooks/useServerPagination"
 import { usePaymentsList } from '@/lib/services/payment-service'
 import { logActivitySafe } from '@/lib/services/activity-log-service'
 import { insforge } from '@/lib/services/auth-service'
+import { useAuth } from '@/lib/core/auth-context'
 import { pageTransitionFast } from "@/lib/animations/presets"
 import {
   XAxis,
@@ -41,7 +42,7 @@ import type {
 } from "@/types"
 import type { PaymentMethod } from "@/types"
 import type { Expense } from "@/lib/services/expense-service"
-import { useExpenses } from "@/lib/services/expense-service"
+import { useExpenses, EXPENSE_CATEGORIES, EXPENSE_UNITS } from "@/lib/services/expense-service"
 import { useCashReconciliations } from "@/lib/services/cash-reconciliation-service"
 import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
 import { PaymentBreakdown } from "@/components/payments/PaymentBreakdown"
@@ -85,14 +86,18 @@ const COLORS = {
 const statusFilterOptions = ["all", "paid", "pending", "overdue", "partial", "credit_invoice"] as const
 const categoryFilterOptions: { id: ExpenseCategory | "all"; label: string }[] = [
   { id: "all", label: "All" },
-  { id: "utilities", label: "Utilities" },
-  { id: "supplies", label: "Supplies" },
+  { id: "dairy", label: "Dairy" },
+  { id: "grocery", label: "Grocery" },
+  { id: "vegetables", label: "Veggies" },
+  { id: "meat", label: "Meat" },
+  { id: "fuel", label: "Petrol/Fuel" },
+  { id: "cleaning", label: "Cleaning" },
   { id: "maintenance", label: "Maintenance" },
-  { id: "staff", label: "Staff" },
-  { id: "marketing", label: "Marketing" },
-  { id: "other", label: "Other" },
+  { id: "utilities", label: "Utilities" },
+  { id: "salary", label: "Salary" },
+  { id: "misc", label: "Misc" },
 ]
-const paymentMethodFilterOptions: { id: PaymentMethod | "all"; label: string }[] = [
+const paymentMethodFilterOptions: { id: string; label: string }[] = [
   { id: "all", label: "All Methods" },
   { id: "cash", label: "Cash with Change" },
   { id: "reception_qr", label: "Reception QR" },
@@ -101,6 +106,7 @@ const paymentMethodFilterOptions: { id: PaymentMethod | "all"; label: string }[]
 ]
 
 export function Finance() {
+  const { user } = useAuth()
   const [activeTab, setActiveTab] = useState("overview")
   const [invoiceStatusFilter, setInvoiceStatusFilter] = useState<"all" | "paid" | "pending" | "overdue" | "partial" | "credit_invoice">("all")
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState<ExpenseCategory | "all">("all")
@@ -229,19 +235,19 @@ export function Finance() {
   const [expenseModalOpen, setExpenseModalOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
   const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null)
-  const [newExpense, setNewExpense] = useState({ description: "", category: "supplies" as ExpenseCategory, amount: "", paymentMethod: "cash" as PaymentMethod, notes: "", vendor: "", receiptNumber: "" })
+  const [newExpense, setNewExpense] = useState({ description: "", category: "" as ExpenseCategory | "", unitPrice: "", quantity: "1", unit: "Unit" as string, notes: "" })
 
   const handleEditExpense = (expense: Expense) => {
     setEditingExpense(expense)
+    const unitPrice = expense.quantity > 0 ? expense.amount / expense.quantity : expense.amount
     setExpenseModalOpen(true)
     setNewExpense({
       description: expense.description,
       category: expense.category,
-      amount: String(expense.amount),
-      paymentMethod: expense.paymentMethod,
+      unitPrice: String(unitPrice),
+      quantity: String(expense.quantity),
+      unit: expense.unit || 'Unit',
       notes: expense.notes || '',
-      vendor: expense.vendor || '',
-      receiptNumber: expense.receiptNumber || '',
     })
   }
   const [reconModalOpen, setReconModalOpen] = useState(false)
@@ -327,13 +333,23 @@ export function Finance() {
   ]
 
   const expenseColumns: Column<Expense>[] = [
-    { key: "description", header: "Description", render: (r) => <span className="font-medium">{r.description}</span> },
+    { key: "description", header: "Item", render: (r) => (
+      <div>
+        <span className="font-medium">{r.description}</span>
+        {r.quantity > 1 && <span className="ml-1.5 text-xs text-muted-foreground">{r.quantity}×{r.unit}</span>}
+      </div>
+    ) },
     { key: "category", header: "Category", render: (r) => <StatusBadge label={r.category} variant="secondary" /> },
     { key: "amount", header: "Amount", render: (r) => <span className="font-semibold">{formatCurrency(r.amount)}</span> },
-    { key: "vendor", header: "Vendor", render: (r) => r.vendor ? <span className="text-sm text-foreground">{r.vendor}</span> : <span className="text-muted-foreground/50">—</span> },
     { key: "date", header: "Date" },
-    { key: "paymentMethod", header: "Payment Method", render: (r) => <PaymentMethodBadge method={r.paymentMethod} size="sm" /> },
-    { key: "recordedBy", header: "Recorded By" },
+    {
+      key: "recordedBy",
+      header: "Recorded By",
+      render: (r) => {
+        const name = r.recordedByName;
+        return name ? <span className="text-sm text-muted-foreground">{name}</span> : <span className="text-muted-foreground/40">—</span>;
+      },
+    },
     { key: "actions", header: "", render: (r) => <div className="flex items-center gap-1">
       <RequirePermission permission="expenses.manage">
         <button onClick={() => handleEditExpense(r)} className="rounded-lg p-1.5 hover:bg-muted transition-colors" title="Edit Expense"><MoreHorizontal className="h-4 w-4 text-muted-foreground" /></button>
@@ -354,48 +370,61 @@ export function Finance() {
     { key: "time", header: "Time" },
   ]
 
+  const computedExpenseTotal = useMemo(() => {
+    const price = Number.parseFloat(newExpense.unitPrice) || 0
+    const qty = Number.parseFloat(newExpense.quantity) || 0
+    return price * qty
+  }, [newExpense.unitPrice, newExpense.quantity])
+
   const handleSaveExpense = async () => {
-    if (!newExpense.description.trim() || !newExpense.amount) {
-      showError("Please fill in description and amount")
+    if (!newExpense.description.trim()) {
+      showError("Please enter an expense description")
+      return
+    }
+    if (!newExpense.category) {
+      showError("Please select a category")
+      return
+    }
+    if (!newExpense.unitPrice || Number.parseFloat(newExpense.unitPrice) <= 0) {
+      showError("Please enter a valid unit price")
       return
     }
     try {
       if (editingExpense) {
         await updateExpense(editingExpense.id, {
           description: newExpense.description,
-          category: newExpense.category,
-          amount: Number(newExpense.amount),
-          paymentMethod: newExpense.paymentMethod,
+          category: newExpense.category as ExpenseCategory,
+          unitPrice: Number.parseFloat(newExpense.unitPrice),
+          quantity: Number.parseFloat(newExpense.quantity) || 1,
+          unit: newExpense.unit,
           notes: newExpense.notes || undefined,
-          vendor: newExpense.vendor || undefined,
-          receiptNumber: newExpense.receiptNumber || undefined,
         })
         showSuccess("Expense updated successfully")
       } else {
         await addExpense({
           description: newExpense.description,
-          category: newExpense.category,
-          amount: Number(newExpense.amount),
-          paymentMethod: newExpense.paymentMethod,
+          category: newExpense.category as ExpenseCategory,
+          unitPrice: Number.parseFloat(newExpense.unitPrice),
+          quantity: Number.parseFloat(newExpense.quantity) || 1,
+          unit: newExpense.unit,
           notes: newExpense.notes || undefined,
-          vendor: newExpense.vendor || undefined,
-          receiptNumber: newExpense.receiptNumber || undefined,
+          recordedBy: user?.id,
         })
 
         logActivitySafe({
           activityType: 'expense_created',
           entityLabel: `Expense: ${newExpense.description}`,
           status: 'completed',
-          amount: Number(newExpense.amount),
+          amount: computedExpenseTotal,
           location: newExpense.category,
-          details: `Expense of ${formatCurrency(Number(newExpense.amount))} for "${newExpense.description}" (${newExpense.category}) paid via ${newExpense.paymentMethod}${newExpense.notes ? ` — ${newExpense.notes}` : ''}`,
+          details: `${newExpense.description} — ${newExpense.quantity} × ${formatCurrency(Number.parseFloat(newExpense.unitPrice))} = ${formatCurrency(computedExpenseTotal)}`,
         })
 
-        showSuccess(`Expense "${newExpense.description}" added successfully`)
+        showSuccess(`Expense "${newExpense.description}" added — ${formatCurrency(computedExpenseTotal)}`)
       }
       setExpenseModalOpen(false)
       setEditingExpense(null)
-      setNewExpense({ description: "", category: "supplies", amount: "", paymentMethod: "cash", notes: "", vendor: "", receiptNumber: "" })
+      setNewExpense({ description: "", category: "", unitPrice: "", quantity: "1", unit: "Unit", notes: "" })
     } catch (err) {
       showError(err instanceof Error ? err.message : "Failed to save expense")
     }
@@ -846,73 +875,101 @@ export function Finance() {
           variant="danger"
         />
 
-        <BaseModal open={expenseModalOpen} onClose={() => { setExpenseModalOpen(false); setEditingExpense(null) }} title={editingExpense ? "Edit Expense" : "Add New Expense"} size="md">
-          <div className="space-y-4">
-            <FormInput
-              label="Description"
-              placeholder="Enter expense description"
-              required
-              value={newExpense.description}
-              onChange={(e) => setNewExpense((prev) => ({ ...prev, description: e.target.value }))}
-            />
-            <FormSelect
-              label="Category"
-              required
-              value={newExpense.category}
-              onChange={(e) => setNewExpense((prev) => ({ ...prev, category: e.target.value as ExpenseCategory }))}
-              options={[
-                { value: "utilities", label: "Utilities" },
-                { value: "supplies", label: "Supplies" },
-                { value: "maintenance", label: "Maintenance" },
-                { value: "staff", label: "Staff" },
-                { value: "marketing", label: "Marketing" },
-                { value: "other", label: "Other" },
-              ]}
-            />
-            <FormInput
-              label="Amount"
-              type="number"
-              placeholder="0.00"
-              required
-              value={newExpense.amount}
-              onChange={(e) => setNewExpense((prev) => ({ ...prev, amount: e.target.value }))}
-            />
-            <div className="grid grid-cols-2 gap-4">
-              <FormInput
-                label="Vendor / Payee"
-                placeholder="Optional vendor name"
-                value={newExpense.vendor}
-                onChange={(e) => setNewExpense((prev) => ({ ...prev, vendor: e.target.value }))}
-              />
-              <FormInput
-                label="Receipt #"
-                placeholder="Optional receipt number"
-                value={newExpense.receiptNumber}
-                onChange={(e) => setNewExpense((prev) => ({ ...prev, receiptNumber: e.target.value }))}
+        <BaseModal open={expenseModalOpen} onClose={() => { setExpenseModalOpen(false); setEditingExpense(null) }} title={editingExpense ? "Edit Expense" : "Add Expense"} size="md">
+          <div className="space-y-5">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground/80">Expense Name *</label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Milk, Tomato, Sugar..."
+                value={newExpense.description}
+                onChange={(e) => setNewExpense((prev) => ({ ...prev, description: e.target.value }))}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
               />
             </div>
-            <FormSelect
-              label="Payment Method"
-              required
-              value={newExpense.paymentMethod}
-              onChange={(e) => setNewExpense((prev) => ({ ...prev, paymentMethod: e.target.value as PaymentMethod }))}
-              options={[
-                { value: "cash", label: "Cash with Change" },
-                { value: "reception_qr", label: "Reception QR" },
-                { value: "fonepay", label: "FonePay QR" },
-                { value: "credit", label: "Credit Payment" },
-              ]}
-            />
-            <FormTextarea
-              label="Notes"
-              placeholder="Optional notes..."
-              rows={2}
-              value={newExpense.notes}
-              onChange={(e) => setNewExpense((prev) => ({ ...prev, notes: e.target.value }))}
-            />              <FormActions>
-                <Button variant="outline" onClick={() => { setExpenseModalOpen(false); setEditingExpense(null) }}>Cancel</Button>
-                <Button onClick={handleSaveExpense}>{editingExpense ? "Save Changes" : "Add Expense"}</Button>
-              </FormActions>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground/80">Category *</label>
+              <select
+                value={newExpense.category}
+                onChange={(e) => setNewExpense((prev) => ({ ...prev, category: e.target.value as ExpenseCategory }))}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+              >
+                <option value="">Select category...</option>
+                {EXPENSE_CATEGORIES.map(cat => (
+                  <option key={cat.id} value={cat.id}>{cat.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-foreground/80">Unit Price (Rs.) *</label>
+                <input
+                  type="number"
+                  min={0.01}
+                  step={0.01}
+                  required
+                  placeholder="0.00"
+                  value={newExpense.unitPrice}
+                  onChange={(e) => setNewExpense((prev) => ({ ...prev, unitPrice: e.target.value }))}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-foreground/80">Quantity</label>
+                <input
+                  type="number"
+                  min={0.01}
+                  step={0.01}
+                  placeholder="1"
+                  value={newExpense.quantity}
+                  onChange={(e) => setNewExpense((prev) => ({ ...prev, quantity: e.target.value }))}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-foreground/80">Unit</label>
+                <select
+                  value={newExpense.unit}
+                  onChange={(e) => setNewExpense((prev) => ({ ...prev, unit: e.target.value }))}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+                >
+                  {EXPENSE_UNITS.map(u => (
+                    <option key={u.value} value={u.value}>{u.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {Number.parseFloat(newExpense.unitPrice) > 0 && Number.parseFloat(newExpense.quantity) > 0 && (
+              <div className="rounded-xl bg-gradient-to-r from-primary/5 to-primary/10 border border-primary/20 p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">{newExpense.quantity} × {formatCurrency(Number.parseFloat(newExpense.unitPrice) || 0)}</span>
+                  <div className="text-right">
+                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Total</p>
+                    <p className="text-xl font-bold tabular-nums">{formatCurrency(computedExpenseTotal)}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground/80">Notes <span className="text-muted-foreground/50">(optional)</span></label>
+              <input
+                type="text"
+                placeholder="Add a short note..."
+                value={newExpense.notes}
+                onChange={(e) => setNewExpense((prev) => ({ ...prev, notes: e.target.value }))}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button variant="outline" onClick={() => { setExpenseModalOpen(false); setEditingExpense(null) }}>Cancel</Button>
+              <Button onClick={handleSaveExpense}>{editingExpense ? "Save Changes" : "Record Expense"}</Button>
+            </div>
           </div>
         </BaseModal>
       </div>

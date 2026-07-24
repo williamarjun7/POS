@@ -56,6 +56,7 @@ const Reports = lazy(() => import('@/pages/Reports').then(m => ({ default: m.Rep
 const Admin = lazy(() => import('@/pages/Admin').then(m => ({ default: m.Admin })))
 const PaymentRecovery = lazy(() => import('@/pages/PaymentRecovery').then(m => ({ default: m.PaymentRecovery })))
 const PrintSettingsPage = lazy(() => import('@/pages/PrintSettings').then(m => ({ default: m.PrintSettingsPage })))
+const ExpenseCategoriesPage = lazy(() => import('@/pages/ExpenseCategories').then(m => ({ default: m.ExpenseCategoriesPage })))
 const Profile = lazy(() => import('@/pages/Profile').then(m => ({ default: m.Profile })))
 const Billing = lazy(() => import('@/pages/Billing').then(m => ({ default: m.Billing })))
 const NotFound = lazy(() => import('@/pages/NotFound').then(m => ({ default: m.NotFound })))
@@ -302,6 +303,11 @@ export default function App() {
                 <Route path="print-settings" element={
                   <AuthorizedRoute permission="print.manage" showAccessDenied>
                     <LazyRoute><PrintSettingsPage /></LazyRoute>
+                  </AuthorizedRoute>
+                } />
+                <Route path="expense-categories" element={
+                  <AuthorizedRoute permission="settings.manage" showAccessDenied>
+                    <LazyRoute><ExpenseCategoriesPage /></LazyRoute>
                   </AuthorizedRoute>
                 } />
                 <Route path="profile" element={
