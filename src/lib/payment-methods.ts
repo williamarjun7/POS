@@ -9,7 +9,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   cash: 'Cash with Change',
   reception_qr: 'Reception QR',
   fonepay: 'FonePay QR',
-  credit: 'Credit Payment',
+  credit: 'Credit Account',
   split: 'Split Payment',
   partial: 'Partial Payment',
 }

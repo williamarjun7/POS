@@ -8,6 +8,7 @@ import { createClient, InsForgeError } from '@insforge/sdk'
 
 const rawBaseUrl = import.meta.env.VITE_INSFORGE_URL
 const anonKey = import.meta.env.VITE_INSFORGE_ANON_KEY
+const functionsUrl = import.meta.env.VITE_INSFORGE_FUNCTIONS_URL
 
 if (!rawBaseUrl) {
   throw new Error('Missing VITE_INSFORGE_URL environment variable')
@@ -20,7 +21,7 @@ if (!anonKey) {
 export const insforge = createClient({
   baseUrl: rawBaseUrl,
   anonKey,
-
+  functionsUrl,
 })
 
 export type InsForgeUser = Awaited<ReturnType<typeof insforge.auth.getCurrentUser>>['data']

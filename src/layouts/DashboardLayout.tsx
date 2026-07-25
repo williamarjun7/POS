@@ -19,7 +19,11 @@ export function DashboardLayout() {
   const toggleMobile = () => setMobileOpen((prev) => !prev)
 
   return (
-    <div className="min-h-screen bg-background">
+    // ═══ Root: full viewport, no body scrolling ═══
+    // h-dvh = 100dvh (dynamic viewport height).
+    // overflow-hidden prevents scroll chaining into body.
+    // flex-col stacks TopNav + main content vertically.
+    <div className="h-dvh flex flex-col overflow-hidden bg-background">
       {/* Mobile backdrop */}
       <AnimatePresence>
         {mobileOpen && (
@@ -53,17 +57,20 @@ export function DashboardLayout() {
         <Sidebar collapsed={collapsed} onToggle={toggleCollapse} />
       </div>
 
-      {/* Main content — fluid responsive layout */}
+      {/* ═══ Main content column ═══
+          Takes full remaining height after TopNav.
+          overflow-y-auto makes this the single scrollable area for page content.
+          min-h-0 is essential for flex children to shrink below their content height. */}
       <motion.div
         animate={{
           marginLeft: isLg ? (collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH) : 0,
         }}
         transition={{ duration: 0.2, ease: "easeInOut" }}
-        className="min-h-screen max-lg:ml-0"
+        className="flex flex-col min-h-0 flex-1 max-lg:ml-0"
       >
         <TopNav onMobileMenuToggle={toggleMobile} />
-        <main className="p-3 sm:p-4 lg:p-5">
-          <div className="fluid-container">
+        <main className="flex-1 overflow-y-auto min-h-0 p-3 sm:p-4 lg:p-5">
+          <div className="fluid-container min-h-0">
             <RouteTransition>
               <Outlet />
             </RouteTransition>

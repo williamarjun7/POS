@@ -196,6 +196,11 @@ DO $$ BEGIN
 END $$;
 
 -- print_settings: all authenticated SELECT
+-- advisor-ack: print_settings is a global config singleton (printer/paper settings)
+-- with no user ownership column. All authenticated staff need to read it for
+-- daily POS operations. The USING(true) policy is intentional — the data is
+-- non-sensitive app configuration, and restricting it would break printing.
+-- Reviewed and confirmed in migration 20260807000101.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='print_settings' AND policyname='authenticated_select') THEN
     CREATE POLICY "authenticated_select" ON public.print_settings
@@ -204,6 +209,13 @@ DO $$ BEGIN
 END $$;
 
 -- user_profiles: staff can SELECT all
+-- advisor-ack: user_profiles.staff_select intentionally uses USING(true) because
+-- all authenticated staff need to see each other's names and roles for daily
+-- operations (finance, analytics, admin management). The table does NOT contain
+-- passwords or payment data. Role-based access is enforced by SECURITY INVOKER
+-- helper functions (converted in migration 20260807000102), which now run as the
+-- calling user and are protected by this same policy.
+-- Reviewed and confirmed in migrations 20260720000100, 20260807000101.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='user_profiles' AND policyname='staff_select') THEN
     CREATE POLICY "staff_select" ON public.user_profiles

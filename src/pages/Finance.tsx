@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import { motion } from "framer-motion"
 import { Plus,
   MoreHorizontal,
@@ -13,7 +13,7 @@ import { StatCard, SectionCard } from "@/components/ui/stat-card"
 import { Button } from "@/components/ui/button"
 import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/filters/DateFilterBar"
 import { Tabs } from "@/components/Tabs"
-import { cn, formatCurrency } from "@/lib/utils"
+import { cn, formatCurrency, getInvoiceDisplayStatus } from "@/lib/utils"
 import { exportCsv } from "@/lib/services/csv-export"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { RequirePermission } from "@/lib/core/PermissionGuards"
@@ -60,17 +60,7 @@ const statusVariant: Record<string, "default" | "success" | "warning" | "destruc
   credit_invoice: "info",
 }
 
-// ─── Derived display status from financial state ──────────
-// Per the spec:
-//   Outstanding = 0 → "Paid" (green)
-//   Paid > 0 AND Outstanding > 0 → "Partially Paid" (amber)
-//   Paid = 0 → "Credit" (blue)
-function getDisplayStatus(paid: number, total: number): { label: string; variant: 'success' | 'warning' | 'info' } {
-  const outstanding = total - paid
-  if (outstanding <= 0) return { label: 'Paid', variant: 'success' }
-  if (paid > 0) return { label: 'Partially Paid', variant: 'warning' }
-  return { label: 'Credit', variant: 'info' }
-}
+
 
 const COLORS = {
   primary: "var(--color-primary, #6366f1)",
@@ -83,7 +73,7 @@ const COLORS = {
 
 // Using pageTransitionFast, staggerContainerFast from presets
 
-const statusFilterOptions = ["all", "paid", "pending", "overdue", "partial", "credit_invoice"] as const
+const statusFilterOptions = ["all", "paid", "pending", "overdue", "partial", "credit_invoice", "cancelled"] as const
 const categoryFilterOptions: { id: ExpenseCategory | "all"; label: string }[] = [
   { id: "all", label: "All" },
   { id: "dairy", label: "Dairy" },
@@ -147,7 +137,9 @@ export function Finance() {
   const [invoicePaymentBreakdowns, setInvoicePaymentBreakdowns] = useState<Record<string, Array<{ method: string; amount: number; discount?: number }>>>({})
   // Fetch total paid (non-credit) per invoice for Paid & Outstanding columns
   const [invoicePaidAmounts, setInvoicePaidAmounts] = useState<Record<string, number>>({})
-  useEffect(() => {
+  
+  // ── Fetch per-page data (items, payments) with auto-refresh every 15s ──
+  const loadPageData = useCallback(async () => {
     const invoiceIds = invoicesPage.map(inv => inv.id)
     if (invoiceIds.length === 0) {
       setInvoiceItemCounts({})
@@ -155,8 +147,7 @@ export function Finance() {
       setInvoicePaidAmounts({})
       return
     }
-    let cancelled = false
-    Promise.all([
+    const [itemsResult, paymentsResult] = await Promise.all([
       insforge.database
         .from('invoice_items')
         .select('invoice_id')
@@ -166,42 +157,92 @@ export function Finance() {
         .select('invoice_id, payment_method, amount, discount')
         .in('invoice_id', invoiceIds)
         .not('payment_method', 'is', null),
-    ]).then(([itemsResult, paymentsResult]) => {
-      if (cancelled) return
-      // Item counts
-      const counts: Record<string, number> = {}
-      for (const row of (itemsResult.data ?? []) as Array<{ invoice_id: string }>) {
-        counts[row.invoice_id] = (counts[row.invoice_id] ?? 0) + 1
+    ])
+
+    // ── Item counts ─────────────────────────────────────────────
+    // Count invoice_items per invoice
+    const counts: Record<string, number> = {}
+    for (const row of (itemsResult.data ?? []) as Array<{ invoice_id: string }>) {
+      counts[row.invoice_id] = (counts[row.invoice_id] ?? 0) + 1
+    }
+    // Removed the fallback `counts[invId] = 1` — it incorrectly showed "1 items"
+    // for invoices that have zero invoice_items in the database. Now shows 0
+    // when no items exist, which correctly surfaces the missing-items problem.
+    setInvoiceItemCounts(counts)
+
+    // Payment methods, breakdowns & totals per invoice
+    const methods: Record<string, Set<string>> = {}
+    const breakdowns: Record<string, Array<{ method: string; amount: number; discount?: number }>> = {}
+    const paidAmounts: Record<string, number> = {}
+    for (const row of (paymentsResult.data ?? []) as Array<{ invoice_id: string; payment_method: string; amount: number; discount?: number }>) {
+      if (!methods[row.invoice_id]) methods[row.invoice_id] = new Set()
+      methods[row.invoice_id].add(row.payment_method)
+
+      if (!breakdowns[row.invoice_id]) breakdowns[row.invoice_id] = []
+      breakdowns[row.invoice_id].push({ method: row.payment_method, amount: Number(row.amount), discount: row.discount ? Number(row.discount) : undefined })
+
+      if (row.payment_method !== 'credit') {
+        paidAmounts[row.invoice_id] = (paidAmounts[row.invoice_id] ?? 0) + Number(row.amount)
       }
-      setInvoiceItemCounts(counts)
+    }
 
-      // Payment methods, breakdowns & totals per invoice
-      const methods: Record<string, Set<string>> = {}
-      const breakdowns: Record<string, Array<{ method: string; amount: number; discount?: number }>> = {}
-      const paidAmounts: Record<string, number> = {}
-      for (const row of (paymentsResult.data ?? []) as Array<{ invoice_id: string; payment_method: string; amount: number; discount?: number }>) {
-        if (!methods[row.invoice_id]) methods[row.invoice_id] = new Set()
-        methods[row.invoice_id].add(row.payment_method)
+    // ── Synthetic Credit Entries ────────────────────────────────────
+    // The process_payment RPC does NOT store credit as a payment row.
+    // When a partial payment + credit is created (e.g. Cash Rs. 90 +
+    // Credit Rs. 300 on a Rs. 390 invoice), only the Cash Rs. 90 is
+    // recorded in the payments table. The Rs. 300 credit is invisible.
+    //
+    // To show the COMPLETE settlement breakdown, we infer the credit
+    // amount from (invoice.total - paidAmount) and add a synthetic
+    // 'Credit Account' entry. This covers:
+    //   1. Full credit sales (no payment row exists)
+    //   2. Partial + credit (credit portion is not stored)
+    //   3. Partial payments without explicit credit (outstanding is still owed)
+    //
+    // Canceled invoices are excluded — nothing is owed on a canceled invoice.
+    for (const inv of invoicesPage) {
+      if (inv.status === 'cancelled') continue
+      const total = Number(inv.total)
+      const paid = paidAmounts[inv.id] ?? 0
+      const outstanding = Math.max(0, total - paid)
 
-        // Store each payment with its amount and discount for breakdown display
-        if (!breakdowns[row.invoice_id]) breakdowns[row.invoice_id] = []
-        breakdowns[row.invoice_id].push({ method: row.payment_method, amount: Number(row.amount), discount: row.discount ? Number(row.discount) : undefined })
+      if (outstanding > 0) {
+        const existingBreakdown = breakdowns[inv.id] ?? []
+        const alreadyHasCreditEntry = existingBreakdown.some(e => e.method === 'credit')
 
-        // Aggregate REAL MONEY only — credit is NOT payment
-        if (row.payment_method !== 'credit') {
-          paidAmounts[row.invoice_id] = (paidAmounts[row.invoice_id] ?? 0) + Number(row.amount)
+        if (!alreadyHasCreditEntry) {
+          if (!breakdowns[inv.id]) breakdowns[inv.id] = []
+          breakdowns[inv.id].push({
+            method: 'credit',
+            amount: outstanding,
+          })
+          // Also add 'credit' to the methods Set so the render condition
+          // (methods.length > 0 && breakdown.length > 0) passes, ensuring
+          // the PaymentBreakdown component renders instead of the fallback
+          // PaymentMethodBadge. This is critical for full credit sales
+          // where zero payment records exist.
+          if (!methods[inv.id]) methods[inv.id] = new Set()
+          methods[inv.id].add('credit')
         }
       }
-      const methodList: Record<string, string[]> = {}
-      for (const [invId, methodSet] of Object.entries(methods)) {
-        methodList[invId] = Array.from(methodSet)
-      }
-      setInvoicePaymentMethods(methodList)
-      setInvoicePaymentBreakdowns(breakdowns)
-      setInvoicePaidAmounts(paidAmounts)
-    }).catch((err) => { console.warn('[Finance] Failed to fetch invoice metadata:', err) })
-    return () => { cancelled = true }
+    }
+    const methodList: Record<string, string[]> = {}
+    for (const [invId, methodSet] of Object.entries(methods)) {
+      methodList[invId] = Array.from(methodSet)
+    }
+    setInvoicePaymentMethods(methodList)
+    setInvoicePaymentBreakdowns(breakdowns)
+    setInvoicePaidAmounts(paidAmounts)
   }, [invoicesPage])
+
+  useEffect(() => {
+    loadPageData()
+    // Background refresh every 15s while tab is visible
+    const interval = setInterval(() => {
+      if (!document.hidden) loadPageData()
+    }, 15_000)
+    return () => clearInterval(interval)
+  }, [loadPageData])
 
   // Map DB rows to frontend Invoice type
   const invoices: Invoice[] = invoicesPage.map(row => ({
@@ -266,7 +307,9 @@ export function Finance() {
 
   const cashFlow = useMemo(() => cashFlowData ?? [], [cashFlowData])
 
-  const filteredInvoices = invoiceStatusFilter === "all" ? invoices : invoices.filter((inv) => inv.status === invoiceStatusFilter)
+  const filteredInvoices = invoiceStatusFilter === "all" 
+    ? invoices.filter((inv) => inv.status !== 'cancelled')
+    : invoices.filter((inv) => inv.status === invoiceStatusFilter)
   const filteredExpenses = expenseCategoryFilter === "all" ? expenses : expenses.filter((e) => e.category === expenseCategoryFilter)
   const filteredPayments = paymentMethodFilter === "all" ? paymentHistory : paymentHistory.filter((p) => p.method === paymentMethodFilter)
 
@@ -274,14 +317,14 @@ export function Finance() {
   const totalPendingPayments = useMemo(() => paymentHistory.filter((p) => p.status === "pending" || p.status === "overdue").reduce((s, p) => s + p.amount, 0), [paymentHistory])
 
   const expenseCategoriesCount = new Set(expenses.map((e) => e.category)).size
-  const avgPerExpense = expenses.length > 0 ? Math.round(totalExpenses / expenses.length) : 0
+  const avgPerExpense = (financialSummary?.expenseCount ?? expenses.length) > 0 ? Math.round(totalExpenses / (financialSummary?.expenseCount ?? expenses.length)) : 0
 
   const todayRec = reconciliations[0] ?? { id: '', date: '', openingBalance: 0, cashReceived: 0, cashPaid: 0, expectedBalance: 0, actualBalance: 0, variance: 0, reconciledBy: '', reconciledAt: '' }
 
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "invoices", label: "Invoices", count: financialSummary?.totalInvoices ?? invoices.length },
-    { id: "expenses", label: "Expenses", count: expenses.length },
+    { id: "expenses", label: "Expenses", count: financialSummary?.expenseCount ?? expenses.length },
     { id: "cashflow", label: "Cash Flow" },
     { id: "payments", label: "Payments", count: paymentHistory.length },
   ]
@@ -308,7 +351,7 @@ export function Finance() {
     } },
     { key: "status", header: "Status", render: (r) => {
       const paid = invoicePaidAmounts[r.id] ?? 0
-      const { label, variant } = getDisplayStatus(paid, r.total)
+      const { label, variant } = getInvoiceDisplayStatus(paid, r.total)
       return <StatusBadge label={label} variant={variant} />
     } },
     { key: "paymentMethod", header: "Payment", render: (r) => {
@@ -559,7 +602,7 @@ export function Finance() {
                 <StatCard label="Total Revenue" value={formatCurrency(totalRevenue)} icon="TrendingUp" color="text-success" trend="up" trendValue={`From all ${financialSummary?.totalInvoices ?? 0} invoices`} index={0} />
               </motion.div>
               <motion.div whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-                <StatCard label="Total Expenses" value={formatCurrency(totalExpenses)} icon="TrendingDown" color="text-destructive" trend="down" trendValue={`${expenses.length} expense entries`} index={1} />
+                <StatCard label="Total Expenses" value={formatCurrency(totalExpenses)} icon="TrendingDown" color="text-destructive" trend="down" trendValue={`${financialSummary?.expenseCount ?? expenses.length} expense entries`} index={1} />
               </motion.div>
               <motion.div whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
                 <StatCard label="Net Profit" value={formatCurrency(netProfit)} icon="DollarSign" color={netProfit >= 0 ? "text-success" : "text-destructive"} trend={netProfit >= 0 ? "up" : "down"} trendValue={netProfit >= 0 ? "Positive cash flow" : "Negative cash flow"} index={2} />

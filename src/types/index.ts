@@ -226,11 +226,7 @@ export interface Customer {
   phone: string
   email?: string
   address?: string
-  totalOrders: number
-  totalSpent: number
   lastVisit: string
-  loyaltyPoints: number
-  creditBalance: number
 }
 
 export interface Reservation {

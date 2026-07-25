@@ -182,7 +182,9 @@ export async function getDashboardReport(
     }>
     for (const p of paymentsForInvoices) {
       if (p.invoice_id && p.payment_method !== 'credit') {
-        paidByInvoice[p.invoice_id] = (paidByInvoice[p.invoice_id] || 0) + Number(p.amount)
+        // ⚠️ Number(p.amount) may be NaN if amount is undefined/null.
+        // Using (Number(p?.amount) || 0) ensures safe fallback to 0.
+        paidByInvoice[p.invoice_id] = (paidByInvoice[p.invoice_id] || 0) + (Number(p?.amount) || 0)
       }
     }
   }

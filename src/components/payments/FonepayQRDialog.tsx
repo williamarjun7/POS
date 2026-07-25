@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { QrCode, RefreshCw, CheckCircle, Timer, AlertCircle, Wifi, WifiOff, X, Loader2 } from 'lucide-react'
-import QRCode from 'qrcode'
-import type { FonepayQRData } from '@/lib/services/fonepay-service'
+import type { FonepayQRData, PreGeneratedQRData } from '@/lib/services/fonepay-service'
 import {
   generateFonepayQR,
+  generateQRDataURL,
   checkQRStatus,
   connectFonepayWebSocket,
   isFonepayConfigured,
@@ -16,74 +16,6 @@ import {
 
 const npr = (amount: number) =>
   `Rs. ${new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)}`
-
-/**
- * Generate a QR code data URL using the pure QR matrix API
- * (QRCode.create) and manual SVG rendering.
- *
- * This completely avoids qrcode's browser.js entry point which
- * goes through renderCanvas — a function that checks canvas.getContext
- * on a string argument and crashes on first mount in some environments.
- */
-function generateQRDataURL(
-  text: string,
-  options: { width: number; margin: number; color: { dark: string; light: string } },
-): string {
-  if (!text || text.trim().length === 0) {
-    throw new Error(
-      'Cannot generate QR code: Fonepay returned an empty QR message. ' +
-        'This may indicate a configuration issue with the payment gateway.',
-    )
-  }
-  const qrData = QRCode.create(text, { margin: options.margin })
-  const size = qrData.modules.size
-  const data = qrData.modules.data
-  const margin = options.margin
-  const qrSize = size + margin * 2
-
-  // Build SVG path for dark modules (same algorithm as qrcode/svg-tag.js)
-  let path = ''
-  let moveBy = 0
-  let newRow = false
-  let lineLength = 0
-
-  for (let i = 0; i < data.length; i++) {
-    const col = i % size
-    const row = Math.floor(i / size)
-
-    if (!col && !newRow) newRow = true
-
-    if (data[i]) {
-      lineLength++
-
-      if (!(i > 0 && col > 0 && data[i - 1])) {
-        path += newRow
-          ? `M${col + margin} ${0.5 + row + margin}`
-          : `m${moveBy} 0`
-        moveBy = 0
-        newRow = false
-      }
-
-      if (!(col + 1 < size && data[i + 1])) {
-        path += `h${lineLength}`
-        lineLength = 0
-      }
-    } else {
-      moveBy++
-    }
-  }
-
-  const bg = `<path fill="${options.color.light}" d="M0 0h${qrSize}v${qrSize}H0z"/>`
-  const dots = `<path stroke="${options.color.dark}" d="${path}"/>`
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${options.width}" height="${options.width}" viewBox="0 0 ${qrSize} ${qrSize}" shape-rendering="crispEdges">${bg}${dots}</svg>`
-
-  // Convert SVG to base64 data URL
-  const base64 =
-    typeof window !== 'undefined'
-      ? window.btoa(unescape(encodeURIComponent(svg)))
-      : Buffer.from(svg).toString('base64')
-  return `data:image/svg+xml;base64,${base64}`
-}
 
 // ─── Structured Logging ─────────────────────────────────────
 
@@ -116,6 +48,12 @@ interface FonepayQRDialogProps {
   onCancel: () => void
   customerName?: string
   invoiceNumber?: string
+  /**
+   * Pre-generated QR data from PosPaymentDialog background generation.
+   * When provided, the dialog skips the 2-3s generation phase and shows
+   * the QR immediately. Start polling and WebSocket as usual.
+   */
+  preGeneratedData?: PreGeneratedQRData | null
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -127,9 +65,21 @@ export function FonepayQRDialog({
   onCancel,
   customerName,
   invoiceNumber,
+  preGeneratedData,
 }: FonepayQRDialogProps) {
-  const [status, setStatus] = useState<QRStatus>('generating')
-  const [qrData, setQrData] = useState<FonepayQRData | null>(null)
+  // If pre-generated data was provided, skip the generation phase entirely.
+  // But only use it if the amount matches — a discount change invalidates it.
+  const canUsePreGenerated = !!preGeneratedData && preGeneratedData.amount === amount
+  const [status, setStatus] = useState<QRStatus>(canUsePreGenerated ? 'displaying' : 'generating')
+  const [qrData, setQrData] = useState<FonepayQRData | null>(
+    canUsePreGenerated
+      ? {
+          qrImage: preGeneratedData!.qrImage,
+          paymentRefId: preGeneratedData!.paymentRefId,
+          wsUrl: preGeneratedData!.wsUrl,
+        }
+      : null,
+  )
   const [timeLeft, setTimeLeft] = useState(FONEPAY_CONFIG.qrTimeoutSeconds)
   const [errorMessage, setErrorMessage] = useState('')
   const [wsStatus, setWsStatus] = useState<FonepayWSStatus>('disconnected')
@@ -154,6 +104,10 @@ export function FonepayQRDialog({
 
   // ─── QR Generation (mount only, with retry for gateway warmup) ─
   //
+  // If pre-generated data was passed in, skip generation entirely.
+  // This saves ~2-3s because the QR was generated in the background
+  // while the user was still on the review screen choosing a payment method.
+  //
   // Console logs show the FonePay gateway returns empty qrMessage on the
   // FIRST call with a new PRN, and the actual QR on the SECOND call with
   // that SAME PRN.  This retry loop keeps using the same PRN so the
@@ -162,6 +116,9 @@ export function FonepayQRDialog({
   // Only retries on empty QR — auth/network errors surface immediately.
   // ────────────────────────────────────────────────────────────────
   useEffect(() => {
+    // Skip generation if we already have pre-generated data
+    if (canUsePreGenerated) return
+
     let mounted = true
 
     const initQR = async () => {
@@ -180,7 +137,11 @@ export function FonepayQRDialog({
       // PRN MUST be a UUID-format string — the Fonepay API rejects non-UUID values.
       const prn = generatePRN()
 
-      const MAX_ATTEMPTS = 5
+      // The FonePay gateway often returns empty qrMessage on the FIRST call
+      // with a new PRN, and the actual QR on the SECOND call with the same PRN.
+      // The first call creates the gateway session; the second reuses it.
+      // MAX_ATTEMPTS=2 covers this common case without wasting time on extra calls.
+      const MAX_ATTEMPTS = 2
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         if (!mounted || cancelledRef.current) return
@@ -195,9 +156,7 @@ export function FonepayQRDialog({
 
           log('QR_GENERATED', { prn: prn.slice(0, 8), attempt })
 
-          // Empty QR → retry with same PRN (gateway needs warmup call).
-          // Retries are back-to-back with no delay — the first call creates
-          // the gateway session, subsequent calls reuse it.
+          // Empty QR → retry with same PRN (gateway warmup).
           if (!data.qrMessage || data.qrMessage.trim().length === 0) {
             if (attempt < MAX_ATTEMPTS - 1) continue
             throw new FonepayError(
@@ -207,7 +166,7 @@ export function FonepayQRDialog({
             )
           }
 
-          // Success — render QR
+          // Success — render QR (SVG rendering is ~5ms, no canvas dependency)
           const qrImage = generateQRDataURL(data.qrMessage, {
             width: 320,
             margin: 2,

@@ -20,7 +20,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   [])
 
   return (
-    <div className="relative flex min-h-screen w-full overflow-hidden bg-background">
+    <div className="relative flex h-dvh w-full overflow-hidden bg-background">
       {/* Animated gradient orbs */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden="true">
         <motion.div

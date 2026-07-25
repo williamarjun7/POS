@@ -53,5 +53,9 @@ opencode.json
 scripts/create-owner-account.mjs
 scripts/verify-owner-email.mjs
 
+# Playwright E2E test artifacts
+playwright-report/
+test-results/
+
 # Windows artifacts
 nul

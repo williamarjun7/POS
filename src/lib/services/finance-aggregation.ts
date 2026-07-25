@@ -70,6 +70,8 @@ export interface FinancialSummary {
   salesToday: number
   /** Today's expenses (expenses with date = today) */
   expensesToday: number
+  /** Expense count matching the same date filter as totalExpenses */
+  expenseCount: number
 }
 
 export interface RevenueByDayEntry {
@@ -236,8 +238,9 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
     .from('expenses')
     .select('amount')
 
-  const totalExpenses = ((expensesData ?? []) as Array<{ amount: number }>)
-    .reduce((sum, e) => sum + Number(e.amount), 0)
+  const expenseRows = (expensesData ?? []) as Array<{ amount: number }>
+  const totalExpenses = expenseRows.reduce((sum, e) => sum + Number(e.amount), 0)
+  const expenseCount = expenseRows.length
 
   // 4. Customer credit outstanding (computed from invoices, NOT stale credit_balance)
   // Outstanding credit = SUM(invoice.total - real payments) for unpaid invoices.
@@ -307,6 +310,7 @@ async function fetchFinancialSummaryForRange(
   // ── Period-dependent metrics (filtered by date range) ─
   let periodRevenue = 0
   let periodExpenses = 0
+  let periodExpenseCount = 0
   let periodPaid = 0
   let periodPending = 0
   let periodOverdue = 0
@@ -343,8 +347,9 @@ async function fetchFinancialSummaryForRange(
       .select('amount')
       .gte('date', startDate)
       .lte('date', endDate)
-    periodExpenses = ((expData ?? []) as Array<{ amount: number }>)
-      .reduce((s, e) => s + Number(e.amount), 0)
+    const expRows = (expData ?? []) as Array<{ amount: number }>
+    periodExpenses = expRows.reduce((s, e) => s + Number(e.amount), 0)
+    periodExpenseCount = expRows.length
   }
 
   // ── Current-state metrics (always ALL records) ─
@@ -404,12 +409,14 @@ async function fetchFinancialSummaryForRange(
 
   // ALL expenses for all-time fallback
   let totalExpensesVal = periodExpenses
+  let expenseCountVal = periodExpenseCount
   if (!hasRange) {
     const { data: allExp } = await insforge.database
       .from('expenses')
       .select('amount')
-    totalExpensesVal = ((allExp ?? []) as Array<{ amount: number }>)
-      .reduce((s, e) => s + Number(e.amount), 0)
+    const allExpRows = (allExp ?? []) as Array<{ amount: number }>
+    totalExpensesVal = allExpRows.reduce((s, e) => s + Number(e.amount), 0)
+    expenseCountVal = allExpRows.length
   }
   // Today's expenses (always queried for the dashboard card)
   const { data: todayExpData } = await insforge.database
@@ -437,6 +444,7 @@ async function fetchFinancialSummaryForRange(
     collectedToday: Math.round(collectedToday),
     salesToday: Math.round(salesToday),
     expensesToday: Math.round(expensesToday),
+    expenseCount: expenseCountVal,
   }
 }
 

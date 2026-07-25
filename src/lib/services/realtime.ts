@@ -38,38 +38,64 @@ const OPERATIONS_KEYS: QueryKey[] = [
 /**
  * Start all global polling subscriptions.
  * Call once (e.g. from App.tsx) to keep every module in sync.
+ *
+ * Polling automatically pauses when the browser tab is hidden (Page Visibility API)
+ * and resumes when the tab becomes visible again — no wasted network requests.
  */
 export function startRealtimePolling(queryClient: QueryClient): Unsubscribe {
+  let pollingPaused = false
   const intervals: ReturnType<typeof setInterval>[] = []
 
+  // ── Visibility-aware interval helper ────────────────────────
+  // Skips the callback when the tab is hidden. The actual interval timer
+  // keeps running (so when the user returns, the next tick fires immediately), 
+  // but no queries are invalidated while hidden.
+  function createVisibilityAwareInterval(fn: () => void, ms: number) {
+    return setInterval(() => {
+      if (!pollingPaused) fn()
+    }, ms)
+  }
+
+  // ── Watch page visibility ───────────────────────────────────
+  const onVisibilityChange = () => {
+    pollingPaused = document.hidden
+  }
+  document.addEventListener('visibilitychange', onVisibilityChange)
+
   // Core dashboard data — every 5 seconds
-  intervals.push(setInterval(() => {
+  intervals.push(createVisibilityAwareInterval(() => {
     for (const key of DASHBOARD_KEYS) {
       queryClient.invalidateQueries({ queryKey: key })
     }
   }, 5_000))
 
   // Analytics — every 10 seconds
-  intervals.push(setInterval(() => {
+  intervals.push(createVisibilityAwareInterval(() => {
     queryClient.invalidateQueries({ queryKey: ['analytics'] })
     queryClient.invalidateQueries({ queryKey: ['finance'] })
   }, 10_000))
 
   // Menu & inventory — every 15 seconds (less volatile data)
-  intervals.push(setInterval(() => {
+  intervals.push(createVisibilityAwareInterval(() => {
     queryClient.invalidateQueries({ queryKey: ['menu'] })
     queryClient.invalidateQueries({ queryKey: ['batches'] })
   }, 15_000))
 
   // Operations — every 5 seconds
-  intervals.push(setInterval(() => {
+  intervals.push(createVisibilityAwareInterval(() => {
     for (const key of OPERATIONS_KEYS) {
       queryClient.invalidateQueries({ queryKey: key })
     }
   }, 5_000))
 
+  // Customers — every 10 seconds
+  intervals.push(createVisibilityAwareInterval(() => {
+    queryClient.invalidateQueries({ queryKey: ['customers'] })
+  }, 10_000))
+
   return () => {
     intervals.forEach(clearInterval)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
   }
 }
 

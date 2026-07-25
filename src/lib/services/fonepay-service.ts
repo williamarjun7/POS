@@ -13,7 +13,17 @@
  * WebSocket connection is direct to Fonepay (no secret needed).
  */
 
+import QRCode from 'qrcode'
 import { insforge } from '@/lib/services/auth-service'
+
+// ─── Pre-generated QR data type ─────────────────────────────
+
+export interface PreGeneratedQRData {
+  qrImage: string
+  paymentRefId: string
+  wsUrl?: string
+  amount: number
+}
 
 // ─── Configuration ────────────────────────────────────────────
 
@@ -229,6 +239,76 @@ export function connectFonepayWebSocket(
       ws.close()
     }
   }
+}
+
+// ─── QR Image Generation (shared between pre-generate and dialog) ─
+
+/**
+ * Generate a QR code data URL using the pure QR matrix API
+ * (QRCode.create) and manual SVG rendering.
+ *
+ * This completely avoids qrcode's browser.js entry point which
+ * goes through renderCanvas — a function that checks canvas.getContext
+ * on a string argument and crashes on first mount in some environments.
+ */
+export function generateQRDataURL(
+  text: string,
+  options: { width: number; margin: number; color: { dark: string; light: string } },
+): string {
+  if (!text || text.trim().length === 0) {
+    throw new Error(
+      'Cannot generate QR code: Fonepay returned an empty QR message. ' +
+        'This may indicate a configuration issue with the payment gateway.',
+    )
+  }
+  const qrData = QRCode.create(text, { margin: options.margin })
+  const size = qrData.modules.size
+  const data = qrData.modules.data
+  const margin = options.margin
+  const qrSize = size + margin * 2
+
+  // Build SVG path for dark modules (same algorithm as qrcode/svg-tag.js)
+  let path = ''
+  let moveBy = 0
+  let newRow = false
+  let lineLength = 0
+
+  for (let i = 0; i < data.length; i++) {
+    const col = i % size
+    const row = Math.floor(i / size)
+
+    if (!col && !newRow) newRow = true
+
+    if (data[i]) {
+      lineLength++
+
+      if (!(i > 0 && col > 0 && data[i - 1])) {
+        path += newRow
+          ? `M${col + margin} ${0.5 + row + margin}`
+          : `m${moveBy} 0`
+        moveBy = 0
+        newRow = false
+      }
+
+      if (!(col + 1 < size && data[i + 1])) {
+        path += `h${lineLength}`
+        lineLength = 0
+      }
+    } else {
+      moveBy++
+    }
+  }
+
+  const bg = `<path fill="${options.color.light}" d="M0 0h${qrSize}v${qrSize}H0z"/>`
+  const dots = `<path stroke="${options.color.dark}" d="${path}"/>`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${options.width}" height="${options.width}" viewBox="0 0 ${qrSize} ${qrSize}" shape-rendering="crispEdges">${bg}${dots}</svg>`
+
+  // Convert SVG to base64 data URL
+  const base64 =
+    typeof window !== 'undefined'
+      ? window.btoa(unescape(encodeURIComponent(svg)))
+      : Buffer.from(svg).toString('base64')
+  return `data:image/svg+xml;base64,${base64}`
 }
 
 // ─── Utility ─────────────────────────────────────────────────

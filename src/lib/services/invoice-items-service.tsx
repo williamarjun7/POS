@@ -85,13 +85,35 @@ export async function insertInvoiceItems(
     total_price: item.quantity * item.unitPrice,
   }))
 
+  // Explicitly coerce values to numbers — PostgREST can return numeric as string
+  // in some serialization paths. Zod validates, but defense-in-depth saves debugging.
+  const safeRows = rows.map(r => ({
+    ...r,
+    quantity: Number(r.quantity),
+    unit_price: Number(r.unit_price),
+    total_price: Number(r.total_price),
+  }))
+
   const { data, error } = await insforge.database
     .from('invoice_items')
-    .insert(rows)
+    .insert(safeRows)
     .select()
 
-  if (error) throw error
-  return (data ?? []).map((row: unknown) => rowToInvoiceItem(row as InvoiceItemRow))
+  if (error) {
+    // Always log, not just DEV mode. This has been silently failing.
+    console.error(
+      '[INVOICE_ITEMS] Insert failed:',
+      JSON.stringify({ message: error.message, code: (error as any).code, details: (error as any).details, hint: (error as any).hint }),
+      { invoiceId, itemCount: items.length },
+    )
+    throw error
+  }
+
+  const inserted = (data ?? []).map((row: unknown) => rowToInvoiceItem(row as InvoiceItemRow))
+  if (import.meta.env.DEV) {
+    console.log('[INVOICE_ITEMS] Inserted', inserted.length, 'items for invoice', invoiceId)
+  }
+  return inserted
 }
 
 /**

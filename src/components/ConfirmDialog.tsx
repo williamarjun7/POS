@@ -9,6 +9,7 @@ interface ConfirmDialogProps {
   confirmLabel?: string
   cancelLabel?: string
   variant?: 'danger' | 'warning' | 'info'
+  loading?: boolean
   onConfirm: () => void
   onCancel: () => void
 }
@@ -20,6 +21,7 @@ export function ConfirmDialog({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'danger',
+  loading = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -57,20 +59,33 @@ export function ConfirmDialog({
             <div className="flex justify-end gap-3 mt-6">
               <button
                 onClick={onCancel}
-                className="px-4 py-2 text-sm font-medium text-muted-foreground bg-muted rounded-md hover:bg-muted/80"
+                disabled={loading}
+                className={cn(
+                  "px-4 py-2 text-sm font-medium rounded-md transition-all",
+                  loading
+                    ? "text-muted-foreground/40 cursor-not-allowed"
+                    : "text-muted-foreground bg-muted hover:bg-muted/80"
+                )}
               >
                 {cancelLabel}
               </button>
               <button
                 onClick={onConfirm}
+                disabled={loading}
                 className={cn(
-                  "px-4 py-2 text-sm font-medium text-white rounded-md",
-                  variant === 'danger' && "bg-destructive hover:bg-destructive/90",
-                  variant === 'warning' && "bg-warning hover:bg-warning/90 text-foreground",
-                  variant === 'info' && "bg-info hover:bg-info/90"
+                  "px-4 py-2 text-sm font-medium text-white rounded-md transition-all flex items-center gap-2",
+                  variant === 'danger' && (loading ? "bg-destructive/60 cursor-not-allowed" : "bg-destructive hover:bg-destructive/90"),
+                  variant === 'warning' && (loading ? "bg-warning/60 cursor-not-allowed" : "bg-warning hover:bg-warning/90 text-foreground"),
+                  variant === 'info' && (loading ? "bg-info/60 cursor-not-allowed" : "bg-info hover:bg-info/90")
                 )}
               >
-                {confirmLabel}
+                {loading && (
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
+                {loading ? 'Deleting...' : confirmLabel}
               </button>
             </div>
           </motion.div>

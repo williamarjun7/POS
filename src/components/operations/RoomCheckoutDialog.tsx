@@ -233,24 +233,17 @@ export function RoomCheckoutDialog({
 
       // 3. Insert invoice items
       if (invoiceItemsList.length > 0 && rpcResult.invoiceId) {
-        await insertInvoiceItems(rpcResult.invoiceId, invoiceItemsList).catch(() => {})
+        await insertInvoiceItems(rpcResult.invoiceId, invoiceItemsList).catch((iiErr) => {
+          console.error('[CHECKOUT] Failed to insert invoice items:', iiErr instanceof Error ? iiErr.message : iiErr)
+        })
       }
 
-      // 4. Update order batches to paid
-      if (orderBatches.length > 0) {
-        const batchIds = orderBatches.map(b => b.id)
-        await insforge.database
-          .from("order_batches")
-          .update({ status: "paid" })
-          .in("id", batchIds)
-
-        await insforge.database
-          .from("order_batch_items")
-          .update({ status: "paid" })
-          .in("batch_id", batchIds)
-          .not("status", "in", "(cancelled,voided)")
-      }
-
+      // 4. Update booking to checked_out
+      // NOTE: Step 4 (order batch updates) is SKIPPED because the
+      // process_payment RPC already handles batch item/status updates
+      // atomically inside the database transaction. These redundant
+      // direct updates were removed to avoid duplicate DB writes.
+      //
       // 5. Update booking to checked_out
       if (booking?.id) {
         await insforge.database.from("bookings").update({ status: "checked_out" }).eq("id", booking.id)

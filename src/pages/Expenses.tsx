@@ -105,6 +105,7 @@ export function Expenses() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [categorySearch, setCategorySearch] = useState("")
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false)
   const [showQuickFill, setShowQuickFill] = useState(false)
@@ -258,7 +259,8 @@ export function Expenses() {
   }
 
   const handleDelete = async () => {
-    if (!deleteId) return
+    if (!deleteId || isDeleting) return
+    setIsDeleting(true)
     try {
       await deleteExpense(deleteId)
       showSuccess("Expense deleted")
@@ -266,6 +268,7 @@ export function Expenses() {
       showError(err instanceof Error ? err.message : "Failed to delete expense")
     } finally {
       setDeleteId(null)
+      setIsDeleting(false)
     }
   }
 
@@ -743,6 +746,7 @@ export function Expenses() {
           message="Are you sure you want to delete this expense? This action cannot be undone."
           confirmLabel="Delete"
           variant="danger"
+          loading={isDeleting}
         />
       </div>
     </PageTransition>

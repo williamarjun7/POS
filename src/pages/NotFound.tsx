@@ -6,7 +6,7 @@ export function NotFound() {
   const navigate = useNavigate()
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+    <div className="flex h-dvh items-center justify-center bg-background p-4">
       <div className="text-center max-w-md">
         {/* Animated 404 graphic */}
         <motion.div

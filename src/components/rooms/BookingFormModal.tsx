@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   X, User, Mail, Phone, CalendarDays, CalendarRange,
   CreditCard, FileText, Ban, Archive, Trash2,
@@ -39,6 +40,7 @@ interface BookingFormModalProps {
 }
 
 export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: BookingFormModalProps) {
+  const queryClient = useQueryClient()
   const { createBooking, cancelBooking, archiveBooking, deleteBooking, updateBooking } = useBookings();
 
   const isExisting = !!booking;
@@ -296,6 +298,11 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
       const createdBooking = await persistBooking(pendingBookingData, 0)
 
       // 2. Create an unpaid accommodation invoice for room charges
+      // NOTE: table_id is intentionally NOT set here because this is a
+      // room booking, not a table order. The booking_id links the invoice
+      // to the booking, and the booking links to the room. Setting table_id
+      // to a room UUID would be semantically incorrect and could break
+      // reporting queries that join invoices to tables by table_id.
       const invNumber = await getNextInvoiceNumber()
       const { data: invoiceData, error: invoiceError } = await insforge.database
         .from('invoices')
@@ -307,7 +314,6 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
           total: pendingBookingData.totalAmount - (pendingBookingData.discount ?? 0),
           status: 'pending',
           booking_id: createdBooking.id,
-          table_id: room.id,
           due_date: pendingBookingData.checkOut,
         }] as any)
         .select()
@@ -490,7 +496,6 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                   placeholder="e.g. Ram Sharma"
                   error={nameError}
                   leadingIcon={<User className="h-4 w-4" />}
-                  readOnly={isExisting}
                 />
                 <div className="grid grid-cols-2 gap-3">
                   <FormInput
@@ -500,7 +505,6 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="guest@email.com"
                     leadingIcon={<Mail className="h-4 w-4" />}
-                    readOnly={isExisting}
                   />
                   <FormInput
                     label="Phone"
@@ -511,7 +515,6 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                     placeholder="98XXXXXXXX"
                     error={phoneError}
                     leadingIcon={<Phone className="h-4 w-4" />}
-                    readOnly={isExisting}
                   />
                 </div>
               </div>
@@ -686,10 +689,37 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
                     type="button"
                     onClick={async () => {
                       if (!booking) return
+                      if (!guestName.trim()) { setNameError('Guest name is required'); return }
+                      if (!phone.trim()) { setPhoneError('Phone number is required'); return }
                       setSaving(true)
                       try {
-                        await updateBooking(booking.id, { idType, idNumber })
-                        showSuccess('Document details updated')
+                        // 1. Update booking with all editable fields
+                        await updateBooking(booking.id, {
+                          guestName: guestName.trim(),
+                          guestEmail: email.trim(),
+                          guestPhone: phone.trim(),
+                          idType: idType || undefined,
+                          idNumber: idNumber || undefined,
+                          specialRequests: notes.trim() || undefined,
+                        })
+
+                        // 2. Sync rooms.guest for checked-in bookings (occupied rooms)
+                        //    so the Dashboard and Operations page reflect the new name.
+                        if (booking.status === 'checked_in' && guestName.trim()) {
+                          await insforge.database
+                            .from('rooms')
+                            .update({ guest: guestName.trim() } as any)
+                            .eq('id', room.id)
+                        }
+
+                        // 3. Invalidate caches so Dashboard / Operations see the update in real-time.
+                        //    The existing WebSocket subscription to the rooms table also fires.
+                        queryClient.invalidateQueries({ queryKey: ['dashboard', 'rooms'] })
+                        queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] })
+                        queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] })
+                        queryClient.invalidateQueries({ queryKey: ['operations'] })
+
+                        showSuccess('Guest details updated')
                         onClose()
                       } catch (err) {
                         showError(err instanceof Error ? err.message : 'Failed to update booking')

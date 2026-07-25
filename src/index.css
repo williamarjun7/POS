@@ -78,6 +78,11 @@
 
 @layer base {
   * { @apply border-border; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
   body {
     @apply bg-background text-foreground;
     margin: 0;
@@ -85,8 +90,6 @@
     font-weight: var(--font-weight-body, 400);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    overflow-x: clip;
-    overscroll-behavior: none;
     -webkit-overflow-scrolling: touch;
     touch-action: manipulation;
     padding-top: env(safe-area-inset-top);
@@ -346,11 +349,6 @@ button > *, a > *, [role="button"] > * {
 
 .safe-area-bottom {
   padding-bottom: env(safe-area-inset-bottom);
-}
-
-/* Prevent overscroll bounce on Android */
-html {
-  overscroll-behavior: none;
 }
 
 /* Fix for Android keyboard pushing content up */

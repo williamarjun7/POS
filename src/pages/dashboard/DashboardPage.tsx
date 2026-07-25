@@ -24,7 +24,7 @@ import { DashboardRoomTile } from '../../components/rooms/DashboardRoomTile';
 import { useBookings } from '@/lib/services/booking-service';
 
 
-import { formatCurrency, formatDuration } from '@/lib/utils';
+import { formatCurrency, formatDuration, getInvoiceDisplayStatus } from '@/lib/utils';
 
 import { StatCard } from '@/components/ui/stat-card';
 
@@ -33,7 +33,7 @@ import {
   ArrowRight, DollarSign, Timer,
   BedDouble, Clock, Banknote,
   Smartphone, QrCode, CreditCard, CircleDollarSign,
-  LayoutGrid, List,
+  LayoutGrid, List, Percent,
 } from 'lucide-react';
 import {
   useDashboardTables,
@@ -102,52 +102,65 @@ export default function DashboardPage() {
   const [checkoutRoom, setCheckoutRoom] = useState<Room | null>(null);
   const [checkoutBooking, setCheckoutBooking] = useState<Booking | null>(null);
 
-  // Pending payments query — invoices with outstanding balances
+  // ─── Pending Payments Query ──────────────────────────────────
+  // Uses TWO separate queries (invoices + payments) instead of a PostgREST
+  // `!left` join which can flatten rows unpredictably when multiple payments
+  // exist per invoice, and can return `payments: {}` (empty object) instead of
+  // `payments: null` for invoices with zero payment records.
+  //
+  // This matches the reliable approach used by the Finance page.
+  // ─────────────────────────────────────────────────────────────────
   const { data: pendingPayments } = useQuery({
     queryKey: dashboardKeys.pendingInvoices,
     queryFn: async () => {
-      const { data, error } = await insforge.database
+      // Step 1: Fetch unpaid invoices (SEPARATE from payments)
+      const { data: invoiceRows, error } = await insforge.database
         .from('invoices')
-        .select('*, restaurant_tables!invoices_table_id_fkey!left(table_number), payments!payments_invoice_id_fkey!left(amount, payment_method)')
+        .select('*, restaurant_tables!invoices_table_id_fkey!left(table_number)')
         .not('status', 'in', '(paid,refunded,cancelled)')
         .order('created_at', { ascending: false })
         .limit(50)
       if (error) throw error
 
-      const rows = (data ?? []) as any[]
-      // ⚠️ PostgREST `!left` join on `payments` flattens each payment into a
-      //    separate row. An invoice with 2 payments produces 2 rows with the
-      //    same invoice data but different `payments` objects. We must aggregate
-      //    ALL payments per invoice before calculating remaining balances.
-      const invoiceMap = new Map<string, {
-        row: any
-        allPayments: Array<{ amount: number; payment_method: string }>
-      }>()
+      const invoices = (invoiceRows ?? []) as any[]
 
-      // First pass: group all payment rows by invoice ID
-      for (const row of rows) {
-        if (!row.id) continue
-        if (!invoiceMap.has(row.id)) {
-          invoiceMap.set(row.id, { row, allPayments: [] })
-        }
-        // Each flattened row carries a single payment object — accumulate it
-        if (row.payments) {
-          invoiceMap.get(row.id)!.allPayments.push(row.payments as any)
+      // Step 2: Fetch payments for these invoices as a separate query
+      const invoiceIds = invoices.map((inv: any) => inv.id).filter(Boolean)
+      const paymentsByInvoice: Record<string, Array<{ amount: number; payment_method: string }>> = {}
+
+      if (invoiceIds.length > 0) {
+        const { data: paymentRows } = await insforge.database
+          .from('payments')
+          .select('invoice_id, amount, payment_method')
+          .in('invoice_id', invoiceIds)
+
+        for (const p of (paymentRows ?? []) as Array<{ invoice_id: string | null; amount: number; payment_method: string | null }>) {
+          if (!p.invoice_id) continue
+          if (!paymentsByInvoice[p.invoice_id]) paymentsByInvoice[p.invoice_id] = []
+          paymentsByInvoice[p.invoice_id].push({
+            amount: Number(p.amount) || 0,
+            payment_method: p.payment_method || 'unknown',
+          })
         }
       }
 
-      // Second pass: process each unique invoice once with ALL its payments
+      // Step 3: Compute outstanding per invoice
       const items: PendingPaymentItem[] = []
-      for (const { row, allPayments } of invoiceMap.values()) {
+      for (const row of invoices) {
         const invTotal = Number(row.total || 0)
-        const nonCreditPayments = allPayments.filter(p => p.payment_method !== 'credit')
-        const nonCreditPaid = nonCreditPayments.reduce((sum, p) => sum + Number(p.amount), 0)
+        const invoicePayments = paymentsByInvoice[row.id] ?? []
+        const nonCreditPaid = invoicePayments
+          .filter(p => p.payment_method !== 'credit')
+          .reduce((sum, p) => sum + p.amount, 0)
         const remaining = Math.max(0, invTotal - nonCreditPaid)
 
         if (remaining <= 0) continue // Skip fully settled
 
-        const isPartial = nonCreditPaid > 0 && remaining > 0
-        const isCreditInvoice = row.status === 'credit_invoice'
+        // Use shared status logic (same as Finance/Customer).
+        const { label: displayStatusLabel } = getInvoiceDisplayStatus(nonCreditPaid, invTotal)
+        const isPartial = displayStatusLabel === 'Partially Paid'
+        const isCreditInvoice = displayStatusLabel === 'Credit' || row.status === 'credit_invoice'
+        const nonCreditPayments = invoicePayments.filter(p => p.payment_method !== 'credit')
         const isSplitPayment = nonCreditPayments.length > 1 && nonCreditPayments.some(p => p.payment_method !== nonCreditPayments[0].payment_method)
         const isOverdue = row.status === 'overdue' || (row.due_date && new Date(row.due_date) < new Date())
 
@@ -209,9 +222,10 @@ export default function DashboardPage() {
   })
 
   const expensesToday = report?.summary.expenses_today ?? 0;
+  const totalDiscounts = report?.summary.total_discounts ?? 0;
   const paymentMethods = report?.payment_summary.payment_methods ?? [];
-
-  const netSales = report?.summary.net_sales ?? 0;
+  const collected = report?.summary.collected ?? 0;
+  const netCashFlow = collected - expensesToday;
 
   const sortedTables = useMemo(() => [...(dashboardTables ?? [])].sort(
     (a, b) => (a.display_order ?? 999) - (b.display_order ?? 999) || (a.table_number?.localeCompare(b.table_number ?? '', undefined, { numeric: true }) ?? 0)
@@ -775,23 +789,23 @@ export default function DashboardPage() {
       </div>
 
       {/* Payment Summary Cards */}
-      <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 sm:col-span-6 lg:col-span-2">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="col-span-1">
           <StatCard icon="Banknote" label="COLLECTED TODAY" value={`Rs. ${report?.summary.collected.toFixed(0) ?? '0'}`} sublabel="Actual payments received today" color="text-emerald-600 dark:text-emerald-400" iconBg="bg-emerald-100 dark:bg-emerald-900/30" className="border-l-4 border-l-emerald-500" index={0} />
         </div>
-        <div className="col-span-12 sm:col-span-6 lg:col-span-2">
+        <div className="col-span-1">
           <StatCard icon="DollarSign" label="SALES TODAY" value={`Rs. ${report?.summary.sales_today.toFixed(0) ?? '0'}`} sublabel="Total invoice value today" color="text-blue-600 dark:text-blue-400" iconBg="bg-blue-100 dark:bg-blue-900/30" className="border-l-4 border-l-blue-500" index={1} />
         </div>
-        <div className="col-span-12 sm:col-span-6 lg:col-span-2">
+        <div className="col-span-1">
           <StatCard icon="TrendingDown" label="EXPENSES TODAY" value={`Rs. ${expensesToday.toFixed(0)}`} sublabel="Total expenses today" color="text-red-600 dark:text-red-400" iconBg="bg-red-100 dark:bg-red-900/30" className="border-l-4 border-l-red-500" index={2} />
         </div>
-        <div className="col-span-12 sm:col-span-6 lg:col-span-2">
+        <div className="col-span-1">
           <StatCard icon="Timer" label="OUTSTANDING" value={`Rs. ${report?.summary.outstanding.toFixed(0) ?? '0'}`} sublabel="Remaining balance (incl. credit)" color="text-orange-600 dark:text-orange-400" iconBg="bg-orange-100 dark:bg-orange-900/30" className="border-l-4 border-l-orange-500" index={3} />
         </div>
-        <div className="col-span-12 sm:col-span-6 lg:col-span-2">
+        <div className="col-span-1">
           <StatCard icon="Receipt" label="PARTIALLY PAID" value={`${report?.summary.partially_paid_count ?? 0}`} sublabel="Invoices awaiting balance" color="text-violet-600 dark:text-violet-400" iconBg="bg-violet-100 dark:bg-violet-900/30" className="border-l-4 border-l-violet-500" index={4} />
         </div>
-        <div className="col-span-12 sm:col-span-6 lg:col-span-2">
+        <div className="col-span-1">
           <StatCard icon="Ban" label="VOIDED ITEMS" value={voidedData?.count != null ? `${voidedData.count} items` : '—'} sublabel={voidedData?.amount != null ? `Rs. ${voidedData.amount.toFixed(0)}` : 'Loading...'} color="text-red-600 dark:text-red-400" iconBg="bg-red-100 dark:bg-red-900/30" className="border-l-4 border-l-red-500" index={5} />
         </div>
       </div>
@@ -836,14 +850,23 @@ export default function DashboardPage() {
               <span className="text-sm font-bold tabular-nums text-purple-600 dark:text-purple-400">Rs. {(report?.summary.credit_outstanding ?? 0).toFixed(0)}</span>
               <span className="text-[10px] text-muted-foreground/60">Customer balances</span>
             </div>
-            {/* Net Profit */}
+            {/* Discounts */}
             <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
-              <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${netSales - expensesToday >= 0 ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
-                <TrendingUp className={`h-3.5 w-3.5 ${netSales - expensesToday >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`} />
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
+                <Percent className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
               </div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Net Profit</span>
-              <span className={`text-sm font-bold tabular-nums ${netSales - expensesToday >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>Rs. {(netSales - expensesToday).toFixed(0)}</span>
-              <span className="text-[10px] text-muted-foreground/60">{netSales - expensesToday >= 0 ? 'Positive margin' : 'Negative margin'}</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Discounts</span>
+              <span className="text-sm font-bold tabular-nums text-cyan-600 dark:text-cyan-400">Rs. {totalDiscounts.toFixed(0)}</span>
+              <span className="text-[10px] text-muted-foreground/60">Total discounts applied</span>
+            </div>
+            {/* Net Cash Flow — cash received minus expenses today */}
+            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
+              <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${netCashFlow >= 0 ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
+                <TrendingUp className={`h-3.5 w-3.5 ${netCashFlow >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`} />
+              </div>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cash Flow</span>
+              <span className={`text-sm font-bold tabular-nums ${netCashFlow >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>Rs. {netCashFlow.toFixed(0)}</span>
+              <span className="text-[10px] text-muted-foreground/60">{netCashFlow >= 0 ? 'Collected vs expenses' : 'Expenses exceed cash in'}</span>
             </div>
             {/* Total Collected */}
             <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50 rounded-r-xl bg-gradient-to-br from-amber-50 to-amber-50/50 dark:from-amber-950/20 dark:to-amber-950/10">
@@ -931,9 +954,9 @@ export default function DashboardPage() {
                         </TableCell>
                         <TableCell className={`text-right font-semibold ${item.remaining > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
                           Rs. {item.remaining.toFixed(0)}
-                          {item.paidAmount > 0 && (
+                          {item.paidAmount > 0 && item.total > 0 && (
                             <span className="block text-[10px] text-muted-foreground font-normal">
-                              {item.paidAmount > 0 ? `${Math.round((item.remaining / item.total) * 100)}% unpaid` : ''}
+                              {Math.round((item.remaining / item.total) * 100)}% unpaid
                             </span>
                           )}
                         </TableCell>

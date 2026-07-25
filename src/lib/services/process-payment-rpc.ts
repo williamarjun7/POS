@@ -101,6 +101,27 @@ export interface ProcessPaymentResult {
   elapsedMs?: number
 }
 
+// ─── Snake→camel case mapper ───────────────────────────────
+// PostgREST returns JSONB keys from the RPC as-is (snake_case),
+// but our TypeScript interfaces use camelCase.  A bare cast
+// (`data as unknown as ProcessPaymentResult`) does NOT transform
+// the keys — runtime properties are still snake_case, so every
+// camelCase field resolves to `undefined`.
+
+function snakeToCamel<T>(obj: Record<string, unknown>): T {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(obj)) {
+    // Convert snake_case to camelCase (e.g. invoice_id → invoiceId)
+    const camel = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+    // Recursively map nested objects (e.g. timing_ms)
+    result[camel] =
+      value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? snakeToCamel<Record<string, unknown>>(value as Record<string, unknown>)
+        : value
+  }
+  return result as T
+}
+
 // ─── RPC Caller ──────────────────────────────────────────────
 
 /**
@@ -149,7 +170,9 @@ export async function callProcessPayment(
     }
 
     // Parse the JSONB response from the RPC
-    const result = data as unknown as ProcessPaymentResult
+    // ⚠️ RPC returns snake_case keys. Must map to camelCase.
+    const raw = data as Record<string, unknown> | null
+    const result = raw ? snakeToCamel<ProcessPaymentResult>(raw) : {} as ProcessPaymentResult
 
     // Merge client-side timing with server-side timing for observability
     const response = {

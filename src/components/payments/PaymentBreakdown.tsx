@@ -152,24 +152,33 @@ export function PaymentBreakdown({
   if (variant === 'inline') {
     return (
       <span className={cn('inline-flex flex-wrap items-center gap-x-2 gap-y-1', className)}>
-        {aggregated.map(({ method, amount, discount, count }) => (
-          <span
-            key={method}
-            className="inline-flex items-center gap-1 text-xs font-medium"
-            style={{ color: getPaymentMethodColor(method) }}
-          >
+        {aggregated.map(({ method, amount, discount, count }) => {
+          const isCredit = method === 'credit'
+          return (
             <span
-              className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-              style={{ backgroundColor: getPaymentMethodColor(method) }}
-            />
-            {getPaymentMethodLabel(method)}
-            <span className="tabular-nums">({formatCurrency(amount)})</span>
-            {discount > 0 && (
-              <span className="text-destructive/70 tabular-nums">-{formatCurrency(discount)}</span>
-            )}
-            {count > 1 && <span className="text-muted-foreground/60">×{count}</span>}
-          </span>
-        ))}
+              key={method}
+              className={cn(
+                'inline-flex items-center gap-1 text-xs font-medium',
+                isCredit && 'border border-dashed rounded-md px-1.5 py-0.5'
+              )}
+              style={{
+                color: getPaymentMethodColor(method),
+                borderColor: isCredit ? getPaymentMethodColor(method) : undefined,
+              }}
+            >
+              <span
+                className='inline-block w-1.5 h-1.5 rounded-full shrink-0'
+                style={{ backgroundColor: getPaymentMethodColor(method) }}
+              />
+              {getPaymentMethodLabel(method)}
+              <span className="tabular-nums">({formatCurrency(amount)})</span>
+              {discount > 0 && (
+                <span className="text-destructive/70 tabular-nums">-{formatCurrency(discount)}</span>
+              )}
+              {count > 1 && <span className="text-muted-foreground/60">×{count}</span>}
+            </span>
+          )
+        })}
         {remaining > 0 && (
           <span className="text-xs text-muted-foreground">+{remaining} more</span>
         )}

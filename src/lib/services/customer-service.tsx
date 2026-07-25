@@ -13,12 +13,19 @@
 
 import { useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { invalidateAfterMutation } from '@/lib/services/cache-invalidation'
 import { insforge } from '@/lib/services/auth-service'
 import type { CustomerRow } from '@/lib/db/types'
 import { customerKeys } from '@/lib/services/customer-ledger'
 
 /* ─── Frontend Customer type (camelCase) ─────────────────── */
 
+/**
+ * Customer profile information from the DB.
+ * Statistical metrics (totalOrders, totalSpent, etc.) are computed
+ * by customer-aggregation.ts — the SINGLE source of truth.
+ * They are NOT stored on this interface.
+ */
 export interface Customer {
   id: string
   name: string
@@ -27,14 +34,6 @@ export interface Customer {
   address?: string
   lastVisit: string
   notes?: string
-  /** @deprecated Stored counter — not maintained. Use invoice-based computation. */
-  totalOrders: number
-  /** @deprecated Stored counter — not maintained. Use invoice-based computation. */
-  totalSpent: number
-  /** @deprecated Always 0 — loyalty points are not implemented. */
-  loyaltyPoints: number
-  /** @deprecated Stored counter — not maintained. Use invoice-based computation. */
-  creditBalance: number
 }
 
 /* ─── React Query Keys ──────────────────────────────────── */
@@ -61,11 +60,6 @@ function rowToCustomer(row: CustomerRow): Customer {
     address: row.address || undefined,
     lastVisit: row.last_visit ?? new Date().toISOString(),
     notes: row.notes ?? undefined,
-    // These fields are no longer stored in DB — default to 0 for backward compat
-    totalOrders: 0,
-    totalSpent: 0,
-    loyaltyPoints: 0,
-    creditBalance: 0,
   }
 }
 
@@ -111,8 +105,6 @@ async function updateCustomerInDb(id: string, data: Partial<Omit<Customer, 'id'>
   if (data.address !== undefined) payload.address = data.address
   if (data.lastVisit !== undefined) payload.last_visit = data.lastVisit
   if (data.notes !== undefined) payload.notes = data.notes ?? null
-  // NOTE: totalOrders, totalSpent, loyaltyPoints, creditBalance are dead columns
-  // and are no longer sent to the database.
 
   const { data: updated, error } = await insforge.database
     .from('customers')
@@ -161,8 +153,7 @@ export function useCustomers(): UseCustomersReturn {
   const createMutation = useMutation({
     mutationFn: createCustomerInDb,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: customerQueryKeys.all })
-      queryClient.invalidateQueries({ queryKey: customerKeys.all })
+      invalidateAfterMutation(queryClient, 'customer_created')
     },
   })
 
@@ -172,8 +163,7 @@ export function useCustomers(): UseCustomersReturn {
       return updateCustomerInDb(id, data)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: customerQueryKeys.all })
-      queryClient.invalidateQueries({ queryKey: customerKeys.all })
+      invalidateAfterMutation(queryClient, 'customer_updated')
     },
   })
 
@@ -181,8 +171,7 @@ export function useCustomers(): UseCustomersReturn {
   const deleteMutation = useMutation({
     mutationFn: deleteCustomerFromDb,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: customerQueryKeys.all })
-      queryClient.invalidateQueries({ queryKey: customerKeys.all })
+      invalidateAfterMutation(queryClient, 'customer_deleted')
     },
   })
 

@@ -8,6 +8,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { invalidateAfterMutation } from '@/lib/services/cache-invalidation';
 import { insforge } from '@/lib/db';
 import type { ExpenseCategory } from '@/types';
 import type { ExpenseRow } from '@/lib/db/types';
@@ -223,10 +224,7 @@ export function useExpenses(): UseExpensesReturn {
   const addMutation = useMutation({
     mutationFn: createExpenseInDb,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: expenseKeys.all });
-      queryClient.invalidateQueries({ queryKey: ['finance'] });
-      queryClient.invalidateQueries({ queryKey: ['analytics'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] });
+      invalidateAfterMutation(queryClient, 'expense_created')
     },
   });
 
@@ -260,10 +258,7 @@ export function useExpenses(): UseExpensesReturn {
       if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: expenseKeys.all });
-      queryClient.invalidateQueries({ queryKey: ['finance'] });
-      queryClient.invalidateQueries({ queryKey: ['analytics'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] });
+      invalidateAfterMutation(queryClient, 'expense_updated')
     },
   });
 
@@ -276,10 +271,7 @@ export function useExpenses(): UseExpensesReturn {
       if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: expenseKeys.all });
-      queryClient.invalidateQueries({ queryKey: ['finance'] });
-      queryClient.invalidateQueries({ queryKey: ['analytics'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] });
+      invalidateAfterMutation(queryClient, 'expense_deleted')
     },
   });
 

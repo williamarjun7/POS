@@ -97,58 +97,54 @@ export function Reports() {
   const [pendingInvoices, setPendingInvoices] = useState(0)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const todayStart = new Date()
-        todayStart.setHours(0, 0, 0, 0)
-        const todayStr = todayStart.toISOString()
-        const monthStart = new Date()
-        monthStart.setDate(1)
-        monthStart.setHours(0, 0, 0, 0)
-        const monthStr = monthStart.toISOString()
+  // ── Fetch live stats on mount + periodic background refresh ──
+  // Refetches every 30s while tab is visible (pauses when hidden)
+  // to show up-to-date revenue, invoice, and activity stats.
+  const fetchStats = useCallback(async () => {
+    try {
+      const todayStart = new Date()
+      todayStart.setHours(0, 0, 0, 0)
+      const todayStr = todayStart.toISOString()
+      const monthStart = new Date()
+      monthStart.setDate(1)
+      monthStart.setHours(0, 0, 0, 0)
+      const monthStr = monthStart.toISOString()
 
-        // Today's payments — date-constrained DB query
-        const [paymentsRes, invoicesRes, activitiesRes] = await Promise.all([
-          insforge.database
-            .from('payments')
-            .select('amount, created_at')
-            .gte('created_at', todayStr),
-          insforge.database
-            .from('invoices')
-            .select('status'),
-          insforge.database
-            .from('activity_logs')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(20),
-        ])
+      const { data: paymentsData } = await insforge.database
+        .from('payments')
+        .select('amount, created_at')
+        .gte('created_at', todayStr)
+      if (paymentsData) {
+        const allTodayPayments = paymentsData as Array<{ amount: number; created_at: string }>
+        setTodayRevenue(allTodayPayments.reduce((sum, p) => sum + Number(p.amount), 0))
+        setTodayPaymentCount(allTodayPayments.length)
+      }
 
-        if (paymentsRes.data) {
-          const allTodayPayments = paymentsRes.data as Array<{ amount: number; created_at: string }>
-          setTodayRevenue(allTodayPayments.reduce((sum, p) => sum + Number(p.amount), 0))
-          setTodayPaymentCount(allTodayPayments.length)
-        }
+      // Month payments & invoices in parallel
+      const [monthPaymentsRes, invoicesRes] = await Promise.all([
+        insforge.database.from('payments').select('amount').gte('created_at', monthStr),
+        insforge.database.from('invoices').select('status'),
+      ])
 
-        // Fetch payments for this month separately (date-constrained)
-        const { data: monthPayments } = await insforge.database
-          .from('payments')
-          .select('amount')
-          .gte('created_at', monthStr)
-        if (monthPayments) {
-          setMonthlyPaymentCount(monthPayments.length)
-        }
+      if (monthPaymentsRes.data) {
+        setMonthlyPaymentCount(monthPaymentsRes.data.length)
+      }
+      if (invoicesRes.data) {
+        const allInvoices = invoicesRes.data as Array<{ status: string }>
+        setTotalInvoices(allInvoices.length)
+        setPendingInvoices(allInvoices.filter(i => i.status === 'pending' || i.status === 'partial').length)
+      }
 
-        // Invoices — date-constrained (count query)
-        if (invoicesRes.data) {
-          const allInvoices = invoicesRes.data as Array<{ status: string }>
-          setTotalInvoices(allInvoices.length)
-          setPendingInvoices(allInvoices.filter(i => i.status === 'pending' || i.status === 'partial').length)
-        }
-
-        // Activity logs — already limited to 20 via query
-        if (activitiesRes.data) {
-          const logs = activitiesRes.data as Array<any>
+      // Activity logs (separate because it's a heavier query)
+      // Only refresh activity on explicit fetches, not every 30s
+      if (!document.hidden) {
+        const { data: activitiesData } = await insforge.database
+          .from('activity_logs')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(20)
+        if (activitiesData) {
+          const logs = activitiesData as Array<any>
           setRecentActivities(
             logs.map((a, i) => ({
               id: a.id || `act-${i}`,
@@ -162,14 +158,24 @@ export function Reports() {
             setLastActivityTime(formatTimeAgo(logs[0].created_at))
           }
         }
-      } catch (err) {
-        console.error('Failed to load reports data:', err)
-      } finally {
-        setLoading(false)
       }
+    } catch (err) {
+      console.error('Failed to load reports data:', err)
+    } finally {
+      setLoading(false)
     }
-    fetchStats()
   }, [])
+
+  useEffect(() => {
+    fetchStats()
+
+    // Background refresh every 30s (pauses when tab hidden)
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchStats()
+    }, 30_000)
+
+    return () => clearInterval(interval)
+  }, [fetchStats])
 
   const uniqueCategories = useMemo(() => ["All", ...new Set(reports.map((r) => r.category))], [])
 

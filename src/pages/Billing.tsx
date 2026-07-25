@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from "framer-motion"
-import { ArrowLeft, Receipt, Banknote, Smartphone, CreditCard, QrCode, CheckCircle2, Printer, SplitSquareVertical, Loader2, AlertCircle, X, Wifi, WifiOff, Clock } from "lucide-react"
+import { ArrowLeft, Receipt, Banknote, Smartphone, CreditCard, QrCode, CheckCircle2, Printer, SplitSquareVertical, Loader2, AlertCircle, X, Wifi, WifiOff, Clock, Trash2 } from "lucide-react"
 import QRCode from "qrcode"
 import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
@@ -33,6 +33,7 @@ import {
 import { getPaymentMethodLabel, toPaymentMethodKey } from "@/lib/payment-methods"
 import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
 import { PaymentBreakdown } from "@/components/payments/PaymentBreakdown"
+import { ConfirmDialog } from "@/components/ConfirmDialog"
 import type { PaymentMethod } from "@/types"
 
 interface InvoiceItemDisplay {
@@ -153,6 +154,10 @@ export function Billing() {
   // ─── Prevent duplicate payment recording from WS + polling race ──
   const paymentRecordedRef = useRef(false)
 
+  // ─── Cancel invoice state ───────────────────────────────
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+
   // Cleanup WebSocket and polling on unmount
   useEffect(() => {
     return () => {
@@ -187,13 +192,37 @@ export function Billing() {
     if (!id) return
     queryClient.invalidateQueries({ queryKey: invoiceKeys.detail(id) })
     queryClient.invalidateQueries({ queryKey: invoiceKeys.payments(id) })
+    queryClient.invalidateQueries({ queryKey: invoiceKeys.items(id) })
     queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] })
     queryClient.invalidateQueries({ queryKey: ['dashboard', 'report'] })
     queryClient.invalidateQueries({ queryKey: ['dashboard', 'pendingInvoices'] })
     queryClient.invalidateQueries({ queryKey: ['batches'] })
     queryClient.invalidateQueries({ queryKey: ['analytics'] })
     queryClient.invalidateQueries({ queryKey: ['finance'] })
+    queryClient.invalidateQueries({ queryKey: ['customers'] })
   }, [id, queryClient])
+
+  // ─── Cancel invoice ────────────────────────────────────
+  const handleCancelInvoice = useCallback(async () => {
+    if (!id || cancelling) return
+    setCancelling(true)
+    try {
+      const { error } = await insforge.database
+        .from('invoices')
+        .update({ status: 'cancelled' })
+        .eq('id', id)
+      if (error) throw error
+      showSuccess('Invoice cancelled')
+      setShowCancelConfirm(false)
+      // Refresh all caches
+      invalidatePaymentCaches()
+      navigate('/dashboard')
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to cancel invoice')
+    } finally {
+      setCancelling(false)
+    }
+  }, [id, cancelling, invalidatePaymentCaches, navigate])
 
   // ─── Record payment to DB (shared by cash and fonepay) ───
   const recordPaymentToDB = useCallback(async (payAmount: number, method: PaymentMethod, reference?: string) => {
@@ -561,7 +590,7 @@ export function Billing() {
               </div>                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/30 px-3 py-2 text-sm">
                 <span className="font-medium text-foreground text-truncate max-w-[200px]">{invoice.customer_name}</span>
                 <span className="text-muted-foreground shrink-0">@{invoice.created_at.split('T')[0]}</span>
-                <span className={`ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                   isFullyPaid ? 'bg-success/10 text-success' :
                   invoice.status === 'partial' ? 'bg-warning/10 text-warning' :
                   invoice.status === 'overdue' ? 'bg-destructive/10 text-destructive' :
@@ -569,6 +598,15 @@ export function Billing() {
                 }`}>
                   {isFullyPaid ? 'Paid' : invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
                 </span>
+                {invoice.status !== 'cancelled' && (
+                  <button
+                    onClick={() => setShowCancelConfirm(true)}
+                    className="ml-auto flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 transition-colors"
+                    title="Cancel invoice"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Cancel
+                  </button>
+                )}
               </div>
 
               <div className="overflow-x-auto">
@@ -895,6 +933,16 @@ export function Billing() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={showCancelConfirm}
+        title="Cancel Invoice"
+        message={`Are you sure you want to cancel invoice #${invoice.invoice_number}? This will remove it from all reports and dashboards. This action cannot be undone.`}
+        confirmLabel={cancelling ? 'Cancelling...' : 'Yes, Cancel Invoice'}
+        variant="danger"
+        onConfirm={handleCancelInvoice}
+        onCancel={() => setShowCancelConfirm(false)}
+      />
     </PageTransition>
   )
 }

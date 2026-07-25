@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import { motion } from "framer-motion"
 import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
@@ -377,23 +377,34 @@ export function Inventory() {
   const [_loading, setLoading] = useState(true)
   const [_loadError, setLoadError] = useState<string | null>(null)
 
-  // Load from DB on mount
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
+  // ── Load from DB on mount + periodic background refresh ──
+  // Refetches inventory every 30s while tab is visible (pauses when hidden)
+  // to keep stock levels in sync without manual browser refresh.
+  const loadData = useCallback(async () => {
     setLoadError(null)
-    Promise.all([
-      fetchInventoryService().catch(e => { if (!cancelled) setLoadError(e.message); return [] }),
-      fetchStockHistory().catch(() => []),
-    ]).then(([inv, hist]) => {
-      if (!cancelled) {
-        setItems(inv)
-        setHistory(hist)
-        setLoading(false)
-      }
-    })
-    return () => { cancelled = true }
+    try {
+      const inv = await fetchInventoryService()
+      const hist = await fetchStockHistory()
+      setItems(inv)
+      setHistory(hist)
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Failed to load inventory')
+    }
   }, [])
+
+  useEffect(() => {
+    setLoading(true)
+    loadData().finally(() => setLoading(false))
+
+    // Background refresh every 30s (pauses when tab hidden)
+    const interval = setInterval(() => {
+      if (!document.hidden) loadData()
+    }, 30_000)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [loadData])
   const [activeTab, setActiveTab] = useState("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState("all")

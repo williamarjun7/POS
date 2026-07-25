@@ -1,3 +1,8 @@
+-- advisor-ack: process_payment intentionally SECURITY DEFINER for atomic multi-table
+-- writes across invoices, payments, and order_batch_items. Has built-in auth
+-- checks (user_id match + role validation) that prevent privilege escalation.
+-- Only authenticated users can invoke (GRANT restricted in migration 20260807000101).
+-- This is an accepted architectural trade-off documented in migrations.
 CREATE OR REPLACE FUNCTION public.process_payment(
   p_table_id                UUID,
   p_customer_name           TEXT,

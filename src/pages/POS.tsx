@@ -26,6 +26,7 @@ import { insforge } from '@/lib/services/auth-service';
 import { insertInvoiceItems } from '@/lib/services/invoice-items-service';
 import { deductStockForSoldItems } from '@/lib/services/inventory-service';
 import { processPaymentWithRecovery } from '@/lib/services/unified-payment-service';
+import { updateAllCachesOnPayment } from '@/lib/services/cache-updater';
 import { db } from '@/lib/db/insforge';
 import { formatCurrency } from '@/lib/utils';
 import { TABLE_STATUS_LABELS, TABLE_STATUS_COLORS } from '@/lib/constants';
@@ -165,7 +166,8 @@ export function POS() {
   const [cartPanelOpen, setCartPanelOpen] = useState(isDesktop);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [selectedTableId, setSelectedTableId] = useState('');
-  const [customerName, setCustomerName] = useState('');
+  const [customerNames, setCustomerNames] = useState<Record<string, string>>({});
+  const customerName = customerNames[selectedTableId] ?? '';
   const [newCartItems, setNewCartItems] = useState<CartLine[]>([]);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
@@ -441,6 +443,53 @@ export function POS() {
     setNewCartItems(prev => prev.map(l => l.menu_item_id === menuItemId ? { ...l, notes } : l));
   }
 
+  // ─── Real-time customer name sync (debounced DB update) ──
+  // When the cashier types a customer name, we update the DB so the Dashboard
+  // (which reads customer_name from order_batches) reflects the change instantly.
+  // The existing WebSocket realtime subscription + polling handles propagation.
+  // Debounced at 1.5s to avoid excessive writes while typing.
+  const customerSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const scheduleCustomerNameSync = useCallback((name: string) => {
+    if (customerSyncTimerRef.current) clearTimeout(customerSyncTimerRef.current)
+    customerSyncTimerRef.current = setTimeout(async () => {
+      try {
+        // Find the first unpaid batch for the current entity (table OR room)
+        // and sync its customer_name. Room batches use room_id instead of table_id.
+        const { data: batchRows } = await insforge.database
+          .from('order_batches')
+          .select('id, customer_name')
+          .or(`table_id.eq.${selectedTableId},room_id.eq.${selectedTableId}`)
+          .not('status', 'in', '(paid,cancelled)')
+          .order('created_at', { ascending: true })
+          .limit(1)
+
+        if (!batchRows || batchRows.length === 0) return // No batches yet — will sync on order placement
+        const firstBatch = (batchRows as Array<{ id: string; customer_name: string | null }>)[0]
+        if (firstBatch.customer_name === name) return // Already in sync
+
+        await insforge.database
+          .from('order_batches')
+          .update({ customer_name: name || null })
+          .eq('id', firstBatch.id)
+
+        // Invalidate batch caches so other tabs / Dashboard see the change
+        queryClient.invalidateQueries({ queryKey: ['batches'] })
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'tables'] })
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'rooms'] })
+      } catch {
+        // Non-critical — name will sync when order is placed or retried
+      }
+    }, 1500)
+  }, [selectedTableId, queryClient])
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (customerSyncTimerRef.current) clearTimeout(customerSyncTimerRef.current)
+    }
+  }, [])
+
   // ─── Session state persistence (sessionStorage) ────
   // Only persists business-critical state: the last-used table and customer name.
   // ⚠️ Temporary UI state (cart items, menu selections, search/filter, etc.)
@@ -464,8 +513,8 @@ export function POS() {
         if (!hasUrlTable && parsed.selectedTableId) {
           setSelectedTableId(parsed.selectedTableId);
         }
-        if (parsed.customerName) {
-          setCustomerName(parsed.customerName);
+        if (parsed.customerNames && parsed.selectedTableId && parsed.customerNames[parsed.selectedTableId]) {
+          setCustomerNames(parsed.customerNames);
         }
       }
     } catch { /* ignore corrupt sessionStorage */ }
@@ -480,14 +529,14 @@ export function POS() {
         sessionStorage.setItem(CART_STORAGE_KEY, JSON.stringify({
           // newCartItems intentionally excluded — temporary UI state
           selectedTableId,
-          customerName,
+          customerNames,
         }));
       } catch { /* sessionStorage full or unavailable */ }
     }, 500);
     return () => {
       if (cartSaveTimerRef.current) clearTimeout(cartSaveTimerRef.current);
     };
-  }, [selectedTableId, customerName]); // newCartItems removed — it's temporary UI
+  }, [selectedTableId, customerNames]); // newCartItems removed — it's temporary UI
 
   // ─── Load batches from DB when table/room is selected ─
   // Always fetch batches whenever a table/room is selected — the hook handles
@@ -529,16 +578,15 @@ export function POS() {
       }));
 
       // Restore customer name from the first batch that has one,
-      // but ONLY if the current customerName is empty (e.g. after
-      // returning from Dashboard or page refresh).
+      // but ONLY if no customer has been entered for THIS table yet.
       // This prevents the customer from being overwritten if the
-      // user manually cleared it in the current session.
-      if (!customerName) {
+      // user manually cleared it or set a different name.
+      if (!customerNames[selectedTableId]) {
         const batchWithCustomer = (fetchedBatches as OrderBatch[]).find(
           b => b.customer_name && b.customer_name.trim() !== ''
         )
         if (batchWithCustomer) {
-          setCustomerName(batchWithCustomer.customer_name)
+          setCustomerNames(prev => ({ ...prev, [selectedTableId]: batchWithCustomer.customer_name }))
         }
       }
     }
@@ -826,7 +874,9 @@ export function POS() {
         total: invoiceTotal,
         invoiceStatus,
         paymentMethod: toPaymentMethodKey(paymentResult.paymentMethod ?? 'cash'),
-        paidAmount: (!isCreditPayment || hasSplitCredit) ? actualPaid : 0,
+        paidAmount: isCreditPayment
+          ? (hasSplitCredit ? actualPaid : (paymentResult.creditAmount ?? invoiceTotal))
+          : actualPaid,
         userId: user?.id ?? null,
         paidItemIds: Array.from(paidItemIds),
         itemPaidStatus: isCreditPayment ? 'credit' : 'paid',
@@ -868,15 +918,56 @@ export function POS() {
       // This must happen BEFORE navigation so the Finance page sees invoice_items.
       // The RPC creates the invoice with totals but does NOT insert line items.
       // We do it here synchronously (no fire-and-forget) so it's guaranteed.
+      // Retry up to 3 times with exponential backoff for resilience.
       if (invoiceItemsList.length > 0) {
-        try {
-          const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList)
-          logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length })
-        } catch (iiErr) {
-          // Non-critical for payment integrity — invoice totals are already correct.
-          // Log and continue; the invoice still shows the correct total in Finance.
-          if (import.meta.env.DEV) {
-            console.error('[PAYMENT] Failed to insert invoice items:', iiErr instanceof Error ? iiErr.message : iiErr)
+        let inserted = false
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList)
+            logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length })
+            inserted = true
+            break
+          } catch (iiErr) {
+            if (attempt < 3) {
+              const delay = 500 * Math.pow(2, attempt - 1)
+              if (import.meta.env.DEV) {
+                console.warn(`[PAYMENT] Invoice items insert attempt ${attempt}/3 failed, retrying in ${delay}ms:`, iiErr instanceof Error ? iiErr.message : iiErr)
+              }
+              await new Promise(resolve => setTimeout(resolve, delay))
+            } else {
+              // Non-critical for payment integrity — invoice totals are already correct.
+              // Log and continue; the invoice still shows the correct total in Finance.
+              if (import.meta.env.DEV) {
+                console.error('[PAYMENT] Failed to insert invoice items after 3 attempts:', iiErr instanceof Error ? iiErr.message : iiErr)
+              }
+            }
+          }
+        }
+      }
+
+      // ── Split payments: insert additional payment records for extra methods ──
+      // The RPC only records the FIRST payment method. Any additional methods
+      // (from the multi-method split builder) are inserted here as separate
+      // payment rows on the same invoice.
+      if (paymentResult.splitPayments && paymentResult.splitPayments.length > 0) {
+        const additionalPayments = paymentResult.splitPayments.map(sp => ({
+          invoice_id: invoiceId,
+          amount: sp.amount,
+          payment_method: sp.method,
+          reference: `${paymentReference}-${sp.method}`,
+          notes: `Split payment via ${sp.method}`,
+          user_id: user?.id ?? null,
+        }))
+        for (const pay of additionalPayments) {
+          try {
+            await insforge.database.from('payments').insert([pay])
+            logPayment('split_payment_inserted', { method: pay.payment_method, amount: pay.amount })
+          } catch (spErr) {
+            // Non-critical for payment integrity — the invoice and primary payment
+            // are already recorded. Log and continue.
+            if (import.meta.env.DEV) {
+              console.error('[PAYMENT] Failed to insert split payment:', spErr instanceof Error ? spErr.message : spErr)
+            }
           }
         }
       }
@@ -1026,7 +1117,7 @@ export function POS() {
     // CLEAR POS SESSION — runs only after all DB writes succeeded
     // ═══════════════════════════════════════════════════════════════
     clearCart();
-    setCustomerName('');
+    setCustomerNames(prev => { const next = { ...prev }; delete next[selectedTableId]; return next; });
     try { sessionStorage.removeItem(CART_STORAGE_KEY); } catch { /* ignore */ }
 
     // Reset guard after successful completion
@@ -1041,6 +1132,17 @@ export function POS() {
       return updated;
     });
 
+    // ═══ Optimistic cache update — immediate, not waiting for background refetch ═══
+    updateAllCachesOnPayment(queryClient, {
+      tableId: selectedTableId,
+      invoiceId: invoiceId!,
+      grandTotal: invoiceTotal,
+      paidAmount: actualPaid,
+      creditAmount: creditAmount,
+      isCreditPayment,
+      wasFullSettlement: remainingBalance <= 0,
+    })
+
     // Invalidations are fire-and-forget — single wildcard covers all dashboard-* keys
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     queryClient.invalidateQueries({ queryKey: ['batches'] });
@@ -1049,7 +1151,10 @@ export function POS() {
     // Credit is NOT "remaining" — it's "outstanding".
     // Only real-money remaining counts as "remaining".
     if (hasOutstandingCredit) {
-      showSuccess(`Invoice #${invNumber}: ${npr(actualPaid)} received via ${getPaymentMethodLabel(paymentResult.paymentMethod)}. Outstanding credit: ${npr(creditAmount)} assigned to ${paymentResult.creditCustomerName || 'customer'}.`);
+      const creditLabel = isCreditPayment && actualPaid === 0
+        ? `${npr(creditAmount)} billed via ${getPaymentMethodLabel(paymentResult.paymentMethod)}`
+        : `${npr(actualPaid)} received via ${getPaymentMethodLabel(paymentResult.paymentMethod)}`
+      showSuccess(`Invoice #${invNumber}: ${creditLabel}. Outstanding credit: ${npr(creditAmount)} assigned to ${paymentResult.creditCustomerName || 'customer'}.`);
     } else if (remainingBalance > 0) {
       showSuccess(`Partial payment of ${npr(actualPaid)} received. ${npr(remainingBalance)} remaining.`);
     } else {
@@ -1058,7 +1163,7 @@ export function POS() {
     // Always navigate to dashboard after checkout
     navigate('/dashboard');
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTableId, orderBatches, newCartItems, newSubtotal, customerName, queryClient, navigate]);
+  }, [selectedTableId, orderBatches, newCartItems, newSubtotal, customerNames, queryClient, navigate]);
 
   async function handlePlaceOrder() {
     if (newCartItems.length === 0 || !selectedTableId) return;
@@ -1156,7 +1261,7 @@ export function POS() {
   // ─── RENDER ───────────────────────────────────────
 
   return (
-    <PageTransition className="flex flex-col h-[calc(100vh-8rem)] lg:h-[calc(100vh-9rem)] bg-background border-t-4 border-t-emerald-500">
+    <PageTransition className="flex flex-col h-[calc(100dvh-8rem)] lg:h-[calc(100dvh-9rem)] bg-background border-t-4 border-t-emerald-500">
       <motion.div className="flex items-center gap-2 px-4 h-12 border-b border-emerald-200 dark:border-emerald-800 shrink-0 lg:hidden"
         style={{ background: 'linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%)' }}
         animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
@@ -1569,8 +1674,11 @@ export function POS() {
                   </span>
                   <input
                     placeholder="Walk-in"
-                    value={customerName}
-                    onChange={e => setCustomerName(e.target.value)}
+                    value={customerName}                     onChange={e => {
+                       const value = e.target.value
+                       setCustomerNames(prev => ({ ...prev, [selectedTableId]: value }))
+                       scheduleCustomerNameSync(value)
+                     }}
                     className="bg-transparent outline-none w-24 sm:w-28 text-sm placeholder:text-muted-foreground/40"
                   />
                   {customerName && (

@@ -33,3 +33,22 @@ export function formatDuration(totalMinutes: number): string {
   const m = totalMinutes % 60
   return `${h}h ${m}m`
 }
+
+/**
+ * Derive display status label + variant from paid and total amounts.
+ * Single source of truth — used by Finance, Dashboard, Customer, and Reports.
+ *
+ * Rules:
+ *   Outstanding == 0  → "Paid" (green)
+ *   Paid > 0 AND Outstanding > 0 → "Partially Paid" (amber)
+ *   Paid == 0 → "Credit" (blue)
+ */
+export function getInvoiceDisplayStatus(
+  paid: number,
+  total: number,
+): { label: string; variant: 'success' | 'warning' | 'info' } {
+  const outstanding = total - paid
+  if (outstanding <= 0) return { label: 'Paid', variant: 'success' }
+  if (paid > 0) return { label: 'Partially Paid', variant: 'warning' }
+  return { label: 'Credit', variant: 'info' }
+}

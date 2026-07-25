@@ -10,7 +10,36 @@ function log(prefix: string, ...args: unknown[]) {
 }
 
 // ─── Print helper (shared across Fonepay handlers) ─────────
-function buildPrintData(inv: InvoiceData): PrintInvoiceData {
+function buildPrintData(
+  inv: InvoiceData,
+  extraPayments?: Array<{ method: string; amount: number }>,
+  creditInfo?: { amount: number; customerName?: string },
+): PrintInvoiceData {
+  // Build complete payment breakdown from all sources
+  const breakdown: PrintInvoiceData['paymentBreakdown'] = []
+
+  if (extraPayments && extraPayments.length > 0) {
+    // Multi-method split — show each method individually
+    for (const p of extraPayments) {
+      breakdown.push({ method: p.method, amount: p.amount })
+    }
+  } else {
+    // Single method
+    breakdown.push({
+      method: inv.paymentMethod,
+      amount: inv.paidAmount,
+      discount: inv.discount,
+    })
+  }
+
+  // Add credit as a line item if applicable
+  if (creditInfo && creditInfo.amount > 0) {
+    const label = creditInfo.customerName
+      ? `Credit (${creditInfo.customerName})`
+      : 'Credit Account'
+    breakdown.push({ method: label, amount: creditInfo.amount })
+  }
+
   return {
     invoiceNumber: inv.invoiceNumber,
     date: new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }),
@@ -23,11 +52,7 @@ function buildPrintData(inv: InvoiceData): PrintInvoiceData {
     subtotal: inv.subtotal,
     discount: inv.discount || undefined,
     total: inv.grandTotal,
-    paymentBreakdown: [{
-      method: inv.paymentMethod,
-      amount: inv.paidAmount,
-      discount: inv.discount,
-    }],
+    paymentBreakdown: breakdown,
   }
 }
 import { showSuccess, showError } from '@/components/ui/toast';
@@ -37,6 +62,13 @@ import type { InvoiceData as PrintInvoiceData } from '@/components/printing/Invo
 
 import { useRateLimit } from '@/lib/hooks/useRateLimit'
 import { FonepayQRDialog } from './FonepayQRDialog';
+import {
+  generateFonepayQR,
+  generatePRN,
+  isFonepayConfigured,
+  generateQRDataURL,
+  type PreGeneratedQRData,
+} from '@/lib/services/fonepay-service';
 import { SplitPaymentDialog } from './SplitPaymentDialog';
 import { CreditAccountPayment } from './CreditAccountPayment';
 import { ReceptionQRDialog } from './ReceptionQRDialog';
@@ -82,6 +114,8 @@ export interface PaymentResult {
   paidAmount: number;
   creditAmount?: number;
   creditCustomerName?: string;
+  /** Additional payment methods for split payments (beyond the primary method) */
+  splitPayments?: Array<{ method: string; amount: number }>;
   /** The full invoice total (NOT the partial amount).
    *  For partial payments, this is the TOTAL bill amount.
    *  For full payments, same as grandTotal.
@@ -101,6 +135,7 @@ interface PosPaymentDialogProps {
   customerName?: string;
   selectedTableId: string;
   isRoomPayment?: boolean;
+  isCustomerPayment?: boolean;
   onClose: () => void;
   onComplete: (invoiceNumber?: string, paymentResult?: PaymentResult) => void;
 }
@@ -141,7 +176,7 @@ const npr = (amount: number) =>
 
 export function PosPaymentDialog({
   orderId, unpaidItems, customerName: initialCustomerName,
-  selectedTableId, isRoomPayment = false, onClose, onComplete,
+  selectedTableId, isRoomPayment = false, isCustomerPayment = false, onClose, onComplete,
 }: PosPaymentDialogProps) {
   const { checkLimit } = useRateLimit({ cooldownMs: 2000, maxAttempts: 10 })
   const [view, setView] = useState<PaymentView>('review');
@@ -171,6 +206,9 @@ export function PosPaymentDialog({
   } | null>(null);
   const [pendingPartialCredit, setPendingPartialCredit] = useState<{ amount: number; method: string; shouldPrint: boolean } | null>(null);
   const fonepayInvoiceNumberRef = useRef<string | null>(null);
+  // ─── Pre-generated FonePay QR (background generation while on review) ──
+  const preGeneratedQrRef = useRef<PreGeneratedQRData | null>(null)
+  const preGenLoadingRef = useRef(false)
 
   // ─── Items — SNAPSHOTTED on mount (before early return) ─────
   // NOTE: MUST be declared before any hook/derivation that references it.
@@ -228,15 +266,18 @@ export function PosPaymentDialog({
   const changeDue = Math.max(0, cashReceivedNum - effectiveCashTotal);
   const availablePaymentMethods = useMemo(() => {
     let methods = PAYMENT_METHOD_BUTTONS;
-    if (isRoomPayment) {
+    if (isRoomPayment || isCustomerPayment) {
+      // Room payments and customer invoice collections: only real-money methods.
+      // Credit Account, Split Payment, and Partial Payment are invalid
+      // when collecting existing outstanding balances.
       methods = methods.filter(m => ['cash', 'reception_qr', 'fonepay'].includes(m.key));
     }
     if (!!splitContext) {
-      // In split mode, hide 'split' (you're already splitting) and 'partial' (doesn't apply)
-      methods = methods.filter(m => m.key !== 'split' && m.key !== 'partial');
+      // In split mode, hide 'split' (you're already splitting) but show 'partial' for partial payments on selected items
+      methods = methods.filter(m => m.key !== 'split');
     }
     return methods;
-  }, [isRoomPayment, splitContext]);
+  }, [isRoomPayment, isCustomerPayment, splitContext]);
 
   // ─── Payment completion guard — prevents onComplete from being
   //     called more than once, regardless of code path.
@@ -255,6 +296,82 @@ export function PosPaymentDialog({
     paymentCompletedRef.current = true
     onComplete?.(invoiceNumber, result)
   }
+
+  // ─── Pre-generate FonePay QR in background ─────────────
+  // Starts generating the QR code while the user is still on the review screen.
+  // By the time they click "FonePay QR", the QR is already ready — no 3s wait.
+  // Only pre-generates ONCE per amount change. If discount changes, amount
+  // changes, and a new QR is generated for the new amount.
+  // ───────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    // Guard: only pre-generate when on review and we have a valid amount.
+    // Also skip if Fonepay isn't configured at all.
+    if (view !== 'review' || !fonepayEffectiveAmount || fonepayEffectiveAmount <= 0) return
+    if (!isFonepayConfigured()) return
+
+    // Already have a QR for this exact amount — reuse it.
+    if (preGeneratedQrRef.current?.amount === fonepayEffectiveAmount) return
+
+    // Don't start a new generation if one is already in-flight.
+    if (preGenLoadingRef.current) return
+    preGenLoadingRef.current = true
+
+    let cancelled = false
+    const prn = generatePRN()
+
+    ;(async () => {
+      try {
+        log('PRE_GEN', `Pre-generating FonePay QR for amount ${fonepayEffectiveAmount}`)
+
+        const MAX_ATTEMPTS = 2
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+          if (cancelled) return
+
+          const data = await generateFonepayQR({
+            amount: fonepayEffectiveAmount,
+            prn,
+            remarks1: `Highlands Cafe POS\n${initialCustomerName || 'POS Payment'}`,
+          })
+          if (cancelled) return
+
+          // Empty QR → retry with same PRN (gateway warmup).
+          if (!data.qrMessage || data.qrMessage.trim().length === 0) {
+            if (attempt < MAX_ATTEMPTS - 1) continue
+            log('PRE_GEN_FAILED', 'QR empty after all attempts — live generation will retry')
+            return
+          }
+
+          // Generate the SVG QR image (fast, no canvas dependency)
+          const qrImage = generateQRDataURL(data.qrMessage, {
+            width: 320,
+            margin: 2,
+            color: { dark: '#000000', light: '#ffffff' },
+          })
+
+          // Store in ref so FonepayQRDialog can consume it when opened.
+          // Use fonepayEffectiveAmount so we can invalidate on amount change.
+          preGeneratedQrRef.current = {
+            qrImage,
+            paymentRefId: prn,
+            wsUrl: data.thirdpartyQrWebSocketUrl,
+            amount: fonepayEffectiveAmount,
+          }
+          log('PRE_GEN_READY', `FonePay QR pre-generated for Rs. ${fonepayEffectiveAmount}`)
+          return
+        }
+      } catch {
+        // Silently fail — FonepayQRDialog will generate normally when opened.
+        log('PRE_GEN_ERROR', 'Background pre-generation failed — live fallback will handle it')
+      } finally {
+        preGenLoadingRef.current = false
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fonepayEffectiveAmount, view, initialCustomerName])
 
   // ─── Fetch real customers for credit assignment ───
   useEffect(() => {
@@ -313,9 +430,16 @@ export function PosPaymentDialog({
         const match = inv.paymentMethod.match(/Credit\s*\(([^)]+)\)/);
         return match ? match[1] : undefined;
       })(),
-      // For split payments, invoiceTotal is the split amount (same as grandTotal).
-      // For full/partial payments, invoiceTotal is the full bill grandTotal.
-      invoiceTotal: inv.paidItemIds ? effectiveGrandTotal : grandTotal,
+      // ── invoiceTotal: Single Source of Truth ──
+      // For partial payments (detected via pendingPartialCredit or extraCredit),
+      // invoiceTotal MUST be the FULL bill grandTotal so that POS.tsx correctly
+      // computes remainingBalance = invoiceTotal - paidAmount.
+      // Example: total=1000, paid=700 → remaining=300 (NOT 0).
+      // For split payments, invoiceTotal is the selected items' total.
+      // For full payments, invoiceTotal is the full bill grandTotal.
+      invoiceTotal: (pendingPartialCredit !== null || extraCredit !== undefined)
+        ? grandTotal
+        : (inv.paidItemIds ? effectiveGrandTotal : grandTotal),
     };
   };
 
@@ -436,10 +560,11 @@ export function PosPaymentDialog({
     if (!checkLimit()) return;
 
     if (splitContext) {
-      // Split payment via Fonepay — pay only selected items
+      // Split payment via Fonepay — pay only selected items.
+      // Go through the success view (like split-Cash does via simulatePayment)
+      // so the cashier can review and choose to print before finalizing.
       log('FONEPAY_SPLIT_SUCCESS', 'Split Fonepay payment confirmed');
       const ids = splitContext.selectedItemIds
-      const amt = splitContext.splitSubtotal
       setSplitContext(null)
 
       const year = new Date().getFullYear();
@@ -463,11 +588,11 @@ export function PosPaymentDialog({
         paidItemIds: ids,
       }
 
-      const result = getPaymentResult(inv)
-      printService.printInvoice(buildPrintData(inv))
-      showSuccess('Invoice sent to printer')
-      // Don't call onClose — parent POS.tsx handles navigation after RPC succeeds.
-      safeComplete(inv.invoiceNumber, result)
+      setCompletedInvoice(inv)
+      setPendingCreditInfo(undefined)
+      setPendingPartialCredit(null)
+      setSubmittingPayment(false)
+      setShowSuccess(true)
       return
     }
 
@@ -489,7 +614,10 @@ export function PosPaymentDialog({
       return
     }
 
-    log('FONEPAY_SUCCESS', 'Auto-finalizing payment');
+    // Full payment via Fonepay — show the success review screen (like Cash does)
+    // instead of auto-finalizing. The cashier sees the invoice summary with
+    // Print/Skip buttons before the payment is committed.
+    log('FONEPAY_SUCCESS', 'Showing success review');
 
     const year = new Date().getFullYear();
     const fonepayInvoice = fonepayInvoiceNumberRef.current;
@@ -512,14 +640,11 @@ export function PosPaymentDialog({
       paidItemIds: items.map(i => i.id),
     };
 
-    const result = getPaymentResult(inv);
-
-    // Print + safeComplete (print before onComplete to ensure
-    // the dialog stays mounted for the iframe-based print)
-    printService.printInvoice(buildPrintData(inv))
-    showSuccess('Invoice sent to printer')
-    // Don't call onClose — parent POS.tsx handles navigation after RPC succeeds.
-    safeComplete(inv.invoiceNumber, result)
+    setCompletedInvoice(inv)
+    setPendingCreditInfo(undefined)
+    setPendingPartialCredit(null)
+    setSubmittingPayment(false)
+    setShowSuccess(true)
   };
 
   /**
@@ -596,7 +721,17 @@ export function PosPaymentDialog({
       grandTotal: amt,
       paidAmount: amt,
       paymentMethod: method,
-      paidItemIds: paidItems.map(i => i.id),
+      // When the remaining balance is automatically converted to customer credit
+      // (pendingPartialCredit != null), ALL items are settled — some by the partial
+      // cash payment, the rest by the credit account. Include ALL item IDs so the
+      // process_payment RPC marks every item as 'paid', leading to all batches
+      // being marked 'paid', which triggers the auto_close_table_session trigger
+      // and releases the table for the next customer.
+      // Without this, only the cash-covered items would be marked 'paid', leaving
+      // the batch in 'partial' status, the session active, and the table occupied.
+      paidItemIds: pendingPartialCredit !== null
+      ? items.map(i => i.id)
+      : paidItems.map(i => i.id),
     }
   }
 
@@ -605,13 +740,14 @@ export function PosPaymentDialog({
       selectedItemIds: params.item_ids,
       splitSubtotal: params.amount,
     })
+    // Route back to the review view where they can pick a payment method
     setView('review')
   };
 
   const handlePaymentMethodClick = (key: string) => {
-    // Room payments: only cash, reception QR, and FonePay are allowed
+    // Room payments & customer invoice collections: only cash, reception QR, and FonePay are allowed
     const RESTRICTED_METHODS = ['credit', 'split', 'partial'];
-    if (isRoomPayment && RESTRICTED_METHODS.includes(key)) return;
+    if ((isRoomPayment || isCustomerPayment) && RESTRICTED_METHODS.includes(key)) return;
 
     // Show brief selected state before navigating
     setSelectedMethod(key);
@@ -651,40 +787,33 @@ export function PosPaymentDialog({
     safeComplete(completedInvoice.invoiceNumber, result)
 
     if (shouldPrint) {
-      const printData: PrintInvoiceData = {
-        invoiceNumber: completedInvoice.invoiceNumber,
-        date: new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }),
-        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
-        items: (completedInvoice.items ?? []).map(i => ({
-          name: i.name ?? 'Item',
-          quantity: i.quantity,
-          unitPrice: i.unitPrice ?? 0,
-        })),
-        subtotal: completedInvoice.subtotal,
-        discount: completedInvoice.discount || undefined,
-        total: completedInvoice.grandTotal,
-        paymentBreakdown: [{
-          method: completedInvoice.paymentMethod,
-          amount: completedInvoice.paidAmount,
-          discount: completedInvoice.discount,
-        }],
-      }
-      printService.printInvoice(printData)
+      printService.printInvoice(buildPrintData(
+        completedInvoice,
+        undefined,
+        pendingCreditInfo ?? undefined,
+      ))
       showSuccess('Invoice sent to printer')
     }
 
     onClose?.()
   };
 
-  // ─── Assign customer for partial credit (fires safeComplete, then parent navigates) ───
-  const handleAssignCreditAndComplete = () => {
-    if (!selectedCustomer || !completedInvoice || !pendingPartialCredit) return;
-    const creditInfo = { amount: pendingPartialCredit.amount, customerName: selectedCustomer.name };
+  // ─── Assign customer for partial credit via CreditAccountPayment UI ───
+  // Reuses the global CreditAccountPayment component so the UX is identical
+  // to a standard Credit Account payment. Dispatches safeComplete when customer
+  // is selected and the credit is assigned.
+  const handlePartialCreditPay = (_customerId: string, customerName: string) => {
+    if (!completedInvoice || !pendingPartialCredit) return;
+    const creditInfo = { amount: pendingPartialCredit.amount, customerName };
     const result = getPaymentResult(completedInvoice, creditInfo);
     safeComplete(completedInvoice.invoiceNumber, result);
 
     if (pendingPartialCredit.shouldPrint) {
-      printService.printInvoice(buildPrintData(completedInvoice));
+      printService.printInvoice(buildPrintData(
+        completedInvoice,
+        undefined,
+        creditInfo,
+      ));
       showSuccess('Invoice sent to printer');
     }
     setPendingPartialCredit(null);
@@ -1062,7 +1191,7 @@ export function PosPaymentDialog({
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
         <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
-          <CreditAccountPayment grandTotal={grandTotal} onBack={() => setView('review')} onPay={handleCreditPay} submitting={submittingPayment} />
+          <CreditAccountPayment grandTotal={isSplitMode ? effectiveGrandTotal : grandTotal} onBack={() => setView('review')} onPay={handleCreditPay} submitting={submittingPayment} />
         </div>
       </div>
     );
@@ -1072,7 +1201,7 @@ export function PosPaymentDialog({
   if (view === 'partial') {
     return (
       <PartialPaymentDialog
-        invoiceTotal={grandTotal}
+        invoiceTotal={isSplitMode ? effectiveGrandTotal : grandTotal}
         invoiceNumber={undefined}
         onConfirm={handleNewPartialPay}
         onCancel={() => setView('review')}
@@ -1083,104 +1212,17 @@ export function PosPaymentDialog({
 
   // ─── View: Deferred Customer Assignment ───
   // Shown after a partial payment succeeds when credit is needed but no customer was set.
+  // Reuses the global CreditAccountPayment component for a consistent UX.
   if (view === 'partial_customer') {
-
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-        <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg overflow-hidden">
-          <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 px-6 py-6 text-center text-white">
-            <div className="mx-auto w-14 h-14 rounded-full bg-white/20 flex items-center justify-center mb-3">
-              <User className="h-7 w-7" />
-            </div>
-            <h2 className="text-lg font-bold">Customer Required</h2>
-            <p className="text-sm text-emerald-100 mt-1">
-              Assign credit to a customer
-            </p>
-            <p className="text-3xl font-bold text-white mt-2">
-              {npr(pendingPartialCredit?.amount ?? 0)}
-            </p>
-          </div>
-          <div className="p-5 space-y-4">
-            <div>
-              <p className="text-sm text-muted-foreground mb-1">
-                Payment was successful. The remaining amount needs a customer to create the credit record.
-              </p>
-              <div className="flex items-center gap-2 mt-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                <span>{npr(pendingPartialCredit?.amount ?? 0)} will be billed as credit.</span>
-              </div>
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1.5 block">
-                Search Customer <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={customerSearch}
-                onChange={e => { setCustomerSearch(e.target.value); setSelectedCustomer(null); }}
-                placeholder="Type name or phone..."
-                className="w-full h-11 rounded-xl border border-border bg-transparent px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
-                autoFocus
-              />
-              {customersLoading && (
-                <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" /> Loading customers...
-                </div>
-              )}
-              {!customersLoading && customerSearch && filteredCustomers.length > 0 && !selectedCustomer && (
-                <div className="mt-1.5 border border-border rounded-xl bg-card overflow-hidden max-h-40 overflow-y-auto shadow-sm">
-                  {filteredCustomers.map(c => (
-                    <button
-                      key={c.id}
-                      onClick={() => { setSelectedCustomer(c); setCustomerSearch(c.name); }}
-                      className="w-full flex items-center justify-between px-4 py-3 text-sm hover:bg-muted transition-colors text-left border-b border-border last:border-0"
-                    >
-                      <span className="font-medium">{c.name}</span>
-                      {c.phone && <span className="text-xs text-muted-foreground">{c.phone}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {!customersLoading && customerSearch && filteredCustomers.length === 0 && !selectedCustomer && (
-                <div className="mt-1.5">
-                  <p className="text-xs text-muted-foreground mb-1">No customers found.</p>
-                  <button
-                    onClick={() => setSelectedCustomer({ id: customerSearch, name: customerSearch })}
-                    className="w-full rounded-lg border-2 border-dashed border-emerald-300 dark:border-emerald-700 px-3 py-2 text-sm font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 transition-colors"
-                  >
-                    + Use &ldquo;{customerSearch}&rdquo; as new customer
-                  </button>
-                </div>
-              )}
-              {selectedCustomer && (
-                <div className="mt-1.5 flex items-center justify-between rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/30 px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-500" />
-                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-300">{selectedCustomer.name}</span>
-                  </div>
-                  <button
-                    onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }}
-                    className="text-xs text-muted-foreground hover:text-destructive transition-colors"
-                  >
-                    Change
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="p-4 border-t space-y-2">
-            <div className="rounded-xl bg-muted/30 p-3 space-y-1.5 text-sm">
-              <div className="flex justify-between"><span className="text-muted-foreground">Paid Today</span><span className="font-semibold">{npr(completedInvoice?.paidAmount ?? 0)}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Outstanding Credit</span><span className="font-semibold text-amber-600">{npr(pendingPartialCredit?.amount ?? 0)}</span></div>
-            </div>
-            <button
-              onClick={handleAssignCreditAndComplete}
-              disabled={!selectedCustomer}
-              className="w-full h-14 rounded-xl bg-emerald-500 text-white font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm"
-            >
-              <Check className="h-5 w-5" /> Assign & Complete
-            </button>
-          </div>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border bg-background shadow-lg max-h-[90vh] overflow-y-auto">
+          <CreditAccountPayment
+            grandTotal={pendingPartialCredit?.amount ?? 0}
+            onBack={() => setView('review')}
+            onPay={handlePartialCreditPay}
+            submitting={false}
+          />
         </div>
       </div>
     );
@@ -1218,6 +1260,7 @@ export function PosPaymentDialog({
         onCancel={fonepayCancelCallback}
         customerName={initialCustomerName}
         invoiceNumber={invNum}
+        preGeneratedData={preGeneratedQrRef.current}
       />
     );
   }
