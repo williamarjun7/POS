@@ -12,7 +12,7 @@ import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
 import { showSuccess, showError } from '@/components/ui/toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RequirePermission } from '@/lib/core/PermissionGuards';
-import { recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
+import { ensureCustomer, recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
 import { useMenuCategories, useMenuItems } from '@/lib/api/menu.hooks';
 import { useDashboardTables, useRooms, useTableBatches, useRoomBatches } from '@/lib/hooks';
 import { useMediaQuery } from '@/lib/hooks/useMediaQuery';
@@ -761,8 +761,10 @@ export function POS() {
     const invoiceTotal = paymentResult.invoiceTotal ?? paymentResult.grandTotal ?? 0;
     const actualPaid = paymentResult.paidAmount ?? 0;
     const creditAmount = paymentResult.creditAmount ?? 0;
+    // ═══ Remaining balance = what's still owed after REAL money collected ═══
+    // Credit is NOT payment — it is Accounts Receivable.
+    // Remaining balance determines invoice status, not the payment method.
     const remainingBalance = Math.max(0, invoiceTotal - actualPaid);
-    const hasOutstandingCredit = creditAmount > 0;
 
     // ── Guard: zero-amount invoices must NEVER be created ──
     if (invoiceTotal <= 0) {
@@ -834,21 +836,33 @@ export function POS() {
       )),
     ];
 
-    // 2. Determine invoice status based on ACTUAL REAL MONEY received vs total.
-    //    CREDIT is NOT payment — it is Accounts Receivable.
-    //    An invoice is only 'paid' when real money covers the total.
-    //    If credit was created, status is 'credit_invoice'.
-    //    If only partial real money was received (no credit), status is 'partial'.
+    // 2. Invoice status = f(remainingBalance).  Never based on payment method.
+    //    - Paid:      Real money covers 100% of the bill → remainingBalance == 0
+    //    - Partial:   Some real money received, some still owed
+    //    - credit_invoice: No real money received at all
     let invoiceStatus: string;
-    if (isCreditPayment) {
-      invoiceStatus = 'credit_invoice';
-    } else if (hasOutstandingCredit) {
-      // Partial real money + credit for the rest — invoice has outstanding credit
-      invoiceStatus = 'credit_invoice';
-    } else if (remainingBalance <= 0) {
+    if (remainingBalance <= 0) {
       invoiceStatus = 'paid';
-    } else {
+    } else if (actualPaid > 0) {
       invoiceStatus = 'partial';
+    } else {
+      invoiceStatus = 'credit_invoice';
+    }
+
+    // ═══ Resolve customer name → ID BEFORE RPC (atomic invoice creation) ═══
+    // This eliminates the client-side backfill race condition.
+    // The RPC sets customer_id directly on the invoice at creation time.
+    const invoiceCustomerName = paymentResult.creditCustomerName || customerName || 'Walk-in';
+    let resolvedCustomerId: string | null | undefined;
+    if (invoiceCustomerName && invoiceCustomerName !== 'Walk-in' && invoiceCustomerName.trim()) {
+      try {
+        const cust = await ensureCustomer(invoiceCustomerName.trim());
+        resolvedCustomerId = cust.id;
+      } catch {
+        // Non-critical — RPC will still create the invoice; customer_id will
+        // be backfilled by the post-RPC updateCustomerAfterInvoice retry logic.
+        resolvedCustomerId = null;
+      }
     }
 
     // ═══ Call unified payment service (with recovery persistence) ═══
@@ -868,7 +882,8 @@ export function POS() {
     try {
       const rpcResult = await processPaymentWithRecovery({
         tableId: selectedTableId,
-        customerName: paymentResult.customerName || paymentResult.creditCustomerName || customerName || 'Walk-in',
+        customerName: invoiceCustomerName,
+        customerId: resolvedCustomerId,
         subtotal: isSplitPayment ? paidSubtotal : subtotal,
         discount,
         total: invoiceTotal,
@@ -1055,28 +1070,38 @@ export function POS() {
       };
 
       // Phase 2: Customer record updates
-      const invoiceCustomerName = paymentResult.creditCustomerName || customerName || ''
+      //   - updateCustomerAfterInvoice: update last_visit and backfill customer_id
+      //     (only if pre-RPC resolution failed — otherwise already set atomically)
+      //   - recordCreditCharge: track the credit charge on the customer record
       if (invoiceCustomerName && invoiceCustomerName !== 'Walk-in' && invoiceCustomerName.trim()) {
-        await retry(
-          () => updateCustomerAfterInvoice(invoiceCustomerName, invoiceTotal, invoiceId ?? undefined),
-          'updateCustomerAfterInvoice'
-        )
+        // Always update last_visit, even if customer_id was set by the RPC
+        if (!resolvedCustomerId) {
+          // Pre-RPC resolution failed — try backfill as fallback
+          await retry(
+            () => updateCustomerAfterInvoice(invoiceCustomerName, invoiceTotal, invoiceId ?? undefined),
+            'updateCustomerAfterInvoice'
+          )
+        } else {
+          // Customer_id was set atomically by RPC — just update last_visit
+          await retry(
+            () => updateCustomerAfterInvoice(invoiceCustomerName, invoiceTotal, undefined),
+            'updateCustomerAfterInvoice'
+          )
+        }
       }
 
-      if (paymentResult.creditCustomerName) {
-        if (paymentResult.creditAmount && paymentResult.creditAmount > 0) {
-          await retry(
-            () => recordCreditCharge(paymentResult.creditCustomerName!, paymentResult.creditAmount!, invNumber, `Credit from ${paymentResult.paymentMethod || 'partial payment'}`, invoiceId ?? undefined),
-            'recordCreditCharge'
-          )
-          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.creditAmount, invoiceNumber: invNumber })
-        } else if (isCreditPayment && !hasSplitCredit) {
-          await retry(
-            () => recordCreditCharge(paymentResult.creditCustomerName!, paymentResult.grandTotal, invNumber, 'Full credit charge', invoiceId ?? undefined),
-            'recordCreditCharge'
-          )
-          logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.grandTotal, invoiceNumber: invNumber, type: 'full' })
-        }
+      if (paymentResult.creditCustomerName && creditAmount > 0) {
+        await retry(
+          () => recordCreditCharge(paymentResult.creditCustomerName!, creditAmount, invNumber, `Credit from ${paymentResult.paymentMethod || 'partial payment'}`, invoiceId ?? undefined),
+          'recordCreditCharge'
+        )
+        logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: creditAmount, invoiceNumber: invNumber })
+      } else if (isCreditPayment && !hasSplitCredit && paymentResult.creditCustomerName) {
+        await retry(
+          () => recordCreditCharge(paymentResult.creditCustomerName!, paymentResult.grandTotal, invNumber, 'Full credit charge', invoiceId ?? undefined),
+          'recordCreditCharge'
+        )
+        logPayment('credit_charge_recorded', { customerName: paymentResult.creditCustomerName, amount: paymentResult.grandTotal, invoiceNumber: invNumber, type: 'full' })
       }
 
       // Phase 3: Inventory deduction (non-critical — never throws, clamps to available stock)
@@ -1148,9 +1173,7 @@ export function POS() {
     queryClient.invalidateQueries({ queryKey: ['batches'] });
 
     // ── Navigation & success messages ──
-    // Credit is NOT "remaining" — it's "outstanding".
-    // Only real-money remaining counts as "remaining".
-    if (hasOutstandingCredit) {
+    if (creditAmount > 0) {
       const creditLabel = isCreditPayment && actualPaid === 0
         ? `${npr(creditAmount)} billed via ${getPaymentMethodLabel(paymentResult.paymentMethod)}`
         : `${npr(actualPaid)} received via ${getPaymentMethodLabel(paymentResult.paymentMethod)}`

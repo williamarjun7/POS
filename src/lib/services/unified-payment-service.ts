@@ -42,6 +42,8 @@ export interface UnifiedPaymentInput {
   tableId: string
   /** Customer name */
   customerName: string
+  /** Customer UUID — set atomically on invoice creation by the RPC */
+  customerId?: string | null
   /** Invoice subtotal */
   subtotal: number
   /** Discount amount */
@@ -213,6 +215,7 @@ export async function processPaymentWithRecovery(
     rpcResult = await callProcessPayment({
       tableId: input.tableId,
       customerName: input.customerName,
+      customerId: input.customerId,
       invoiceSubtotal: input.subtotal,
       invoiceDiscount: input.discount,
       invoiceTotal: input.total,

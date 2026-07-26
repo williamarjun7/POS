@@ -58,6 +58,8 @@ export type PaymentErrorCodeType = typeof PaymentErrorCode[keyof typeof PaymentE
 export interface ProcessPaymentParams {
   tableId: string
   customerName: string
+  /** Customer UUID — set atomically on invoice creation (not backfilled) */
+  customerId?: string | null
   invoiceSubtotal: number
   invoiceDiscount: number
   invoiceTotal: number
@@ -142,6 +144,7 @@ export async function callProcessPayment(
     const { data, error } = await insforge.database.rpc('process_payment', {
       p_table_id: params.tableId,
       p_customer_name: params.customerName,
+      p_customer_id: params.customerId ?? null,
       p_invoice_subtotal: params.invoiceSubtotal,
       p_invoice_discount: params.invoiceDiscount,
       p_invoice_total: params.invoiceTotal,

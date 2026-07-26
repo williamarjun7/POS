@@ -119,6 +119,14 @@ function buildPaidMap(payments: PaymentRow[]): Map<string, number> {
 /**
  * Compute ALL statistics for a single customer.
  *
+ * Outstanding Credit is computed as:
+ *   Remaining Balance = Invoice Total - Discount - SUM(non-credit payments)
+ *
+ * This is calculated across ALL non-cancelled invoices (not just unpaid ones)
+ * because credit-settled invoices (status='paid' via cash+credit) still have
+ * an outstanding balance equal to the credit portion.  Filtering by status
+ * would miss these.
+ *
  * @param customerId - The customer's UUID
  * @returns CustomerStats with totalOrders, totalSpent, outstandingCredit, avgOrderValue
  */
@@ -128,48 +136,46 @@ export async function computeCustomerStats(
   // Fetch all invoices for this customer
   const { data: invoicesData } = await insforge.database
     .from('invoices')
-    .select('id, total, status')
+    .select('id, total, discount, status')
     .eq('customer_id', customerId)
 
-  const invoices = (invoicesData ?? []) as Array<{ id: string; total: number; status: string }>
+  const invoices = (invoicesData ?? []) as Array<{ id: string; total: number; discount: number; status: string }>
 
   // Total Orders = COUNT of non-cancelled invoices
-  // Every completed sale produces exactly one invoice.
-  // Order batches are intermediate workflow records — they don't represent completed transactions.
-  // Only cancelled invoices are excluded (they don't represent completed sales).
   const nonCancelledInvoices = invoices.filter(inv => inv.status !== 'cancelled')
   const totalOrders = nonCancelledInvoices.length
 
   // Total Spent = SUM of non-cancelled invoice totals
   const totalSpent = nonCancelledInvoices.reduce((sum, inv) => sum + Number(inv.total), 0)
 
-  // Outstanding invoices (not paid, not cancelled)
-  const outstandingInvoices = nonCancelledInvoices.filter(
-    inv => inv.status !== 'paid',
-  )
-
-  // Get payments for outstanding invoices
-  const outstandingInvoiceIds = outstandingInvoices.map(inv => inv.id)
+  // Compute outstanding from ALL non-cancelled invoices
+  // Fetch ALL payments for this customer's invoices (not just unpaid ones)
+  const allInvoiceIds = nonCancelledInvoices.map(inv => inv.id)
   let paidByInvoice = new Map<string, number>()
 
-  if (outstandingInvoiceIds.length > 0) {
+  if (allInvoiceIds.length > 0) {
     const { data: paymentsData } = await insforge.database
       .from('payments')
       .select('invoice_id, amount, payment_method')
-      .in('invoice_id', outstandingInvoiceIds)
+      .in('invoice_id', allInvoiceIds)
 
     const payments = (paymentsData ?? []) as PaymentRow[]
+    // Only real payments count toward reducing outstanding (credit is NOT payment)
     paidByInvoice = buildPaidMap(realPaymentsOnly(payments))
   }
 
-  // Outstanding Credit = SUM(invoice.total - real payments) for unpaid invoices
-  const outstandingCredit = outstandingInvoices.reduce((sum, inv) => {
+  // Outstanding Credit = SUM(invoice.total - discount - real payments) across ALL non-cancelled invoices
+  // This correctly captures credit portions on settled invoices.
+  let outstandingCredit = 0
+  let outstandingInvoiceCount = 0
+  for (const inv of nonCancelledInvoices) {
     const paid = paidByInvoice.get(inv.id) ?? 0
-    return sum + Math.max(0, Number(inv.total) - paid)
-  }, 0)
-
-  // Outstanding Invoice Count
-  const outstandingInvoiceCount = outstandingInvoices.length
+    const remaining = Math.max(0, Number(inv.total) - Number(inv.discount) - paid)
+    if (remaining > 0) {
+      outstandingCredit += remaining
+      outstandingInvoiceCount++
+    }
+  }
 
   // Average Order Value = Total Spent / Total Orders
   const avgOrderValue = totalOrders > 0 ? totalSpent / totalOrders : 0
@@ -211,8 +217,9 @@ export async function computeAllCustomerStats(
   // Build query with optional date range
   let query = insforge.database
     .from('invoices')
-    .select('id, customer_id, total, status')
+    .select('id, customer_id, total, discount, status')
     .in('customer_id', customerIds)
+    .not('status', 'eq', 'cancelled')
 
   if (startDate && endDate) {
     const utcStart = kathmanduStartUTC(startDate)
@@ -226,24 +233,24 @@ export async function computeAllCustomerStats(
     id: string
     customer_id: string | null
     total: number
+    discount: number
     status: string
   }>
 
-  // Get all unpaid invoice IDs for payment lookup
-  const unpaidInvoiceIds = invoices
-    .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled')
-    .map(inv => inv.id)
-
-  // Fetch payments for unpaid invoices
+  // Fetch payments for ALL invoices (not just unpaid ones)
+  // This is necessary because credit-settled invoices marked 'paid' still
+  // contribute to outstanding (the credit portion).
+  const allInvoiceIds = invoices.map(inv => inv.id)
   const paidByInvoice = new Map<string, number>()
-  if (unpaidInvoiceIds.length > 0) {
+  if (allInvoiceIds.length > 0) {
     const { data: paymentsData } = await insforge.database
       .from('payments')
       .select('invoice_id, amount, payment_method')
-      .in('invoice_id', unpaidInvoiceIds)
+      .in('invoice_id', allInvoiceIds)
 
     const payments = (paymentsData ?? []) as PaymentRow[]
     for (const p of payments) {
+      // Only real payments (not credit) reduce outstanding
       if (p.payment_method !== 'credit' && p.invoice_id) {
         paidByInvoice.set(p.invoice_id, (paidByInvoice.get(p.invoice_id) ?? 0) + Number(p.amount))
       }
@@ -258,22 +265,24 @@ export async function computeAllCustomerStats(
   for (const custId of customerIds) {
     const custInvoices = invoices.filter(inv => inv.customer_id === custId)
 
-    // Total Spent = sum of non-cancelled invoices
-    const nonCancelled = custInvoices.filter(inv => inv.status !== 'cancelled')
-    const totalSpent = nonCancelled.reduce((sum, inv) => sum + Number(inv.total), 0)
+    // Total Orders = COUNT of non-cancelled invoices
+    const totalOrders = custInvoices.length
 
-    // Total Orders = COUNT of non-cancelled invoices (one invoice = one completed sale)
-    // Order batches are intermediate workflow records — they don't represent completed transactions.
-    const totalOrders = nonCancelled.length
+    // Total Spent = sum of all invoice totals
+    const totalSpent = custInvoices.reduce((sum, inv) => sum + Number(inv.total), 0)
 
-    // Outstanding invoices
-    const outstandingInvoices = custInvoices.filter(
-      inv => inv.status !== 'paid' && inv.status !== 'cancelled',
-    )
-    const outstandingCredit = outstandingInvoices.reduce((sum, inv) => {
+    // Outstanding = SUM(total - discount - real payments) across ALL invoices
+    // This correctly captures credit portions on settled invoices.
+    let outstandingCredit = 0
+    let outstandingInvoiceCount = 0
+    for (const inv of custInvoices) {
       const paid = paidByInvoice.get(inv.id) ?? 0
-      return sum + Math.max(0, Number(inv.total) - paid)
-    }, 0)
+      const remaining = Math.max(0, Number(inv.total) - Number(inv.discount) - paid)
+      if (remaining > 0) {
+        outstandingCredit += remaining
+        outstandingInvoiceCount++
+      }
+    }
 
     if (outstandingCredit > 0 && custId) {
       totalOutstandingBalance += outstandingCredit
@@ -285,7 +294,7 @@ export async function computeAllCustomerStats(
       totalSpent: Math.round(totalSpent),
       outstandingCredit: Math.round(outstandingCredit),
       avgOrderValue: totalOrders > 0 ? Math.round((totalSpent / totalOrders) * 100) / 100 : 0,
-      outstandingInvoiceCount: outstandingInvoices.length,
+      outstandingInvoiceCount,
     })
   }
 
@@ -307,6 +316,11 @@ export interface OverallOutstanding {
  * Compute the total outstanding balance across ALL customers.
  * Used by the Customers page header stats and Dashboard.
  *
+ * Outstanding = SUM(invoice.total - discount - non-credit payments) across ALL
+ * non-cancelled invoices that have a valid customer_id.  Orphan invoices
+ * (customer_id IS NULL) are excluded to avoid inflating customer KPIs with
+ * Walk-in or unlinked records.
+ *
  * @param startDate - Optional Kathmandu-local start date (YYYY-MM-DD) to filter invoices
  * @param endDate   - Optional Kathmandu-local end date (YYYY-MM-DD) to filter invoices
  */
@@ -316,8 +330,9 @@ export async function computeOverallOutstanding(
 ): Promise<OverallOutstanding> {
   let query = insforge.database
     .from('invoices')
-    .select('id, customer_id, total, status')
-    .not('status', 'in', '(paid,cancelled)')
+    .select('id, customer_id, total, discount')
+    .not('status', 'eq', 'cancelled')
+    .not('customer_id', 'is', 'null')  // Exclude orphan invoices
 
   if (startDate && endDate) {
     const utcStart = kathmanduStartUTC(startDate)
@@ -325,13 +340,14 @@ export async function computeOverallOutstanding(
     query = query.gte('created_at', utcStart).lte('created_at', utcEnd)
   }
 
-  const { data: outstandingInvoices } = await query
+  const { data: invoices } = await query
 
-  if (!outstandingInvoices || (outstandingInvoices as Array<unknown>).length === 0) {
+  if (!invoices || (invoices as Array<unknown>).length === 0) {
     return { totalOutstandingBalance: 0, creditCustomerCount: 0 }
   }
 
-  const invoiceIds = (outstandingInvoices as Array<{ id: string }>).map(inv => inv.id)
+  const invoiceList = invoices as Array<{ id: string; customer_id: string; total: number; discount: number }>
+  const invoiceIds = invoiceList.map(inv => inv.id)
 
   const paidByInvoice = new Map<string, number>()
   if (invoiceIds.length > 0) {
@@ -350,9 +366,9 @@ export async function computeOverallOutstanding(
   const customersWithDebt = new Set<string>()
   let totalOutstanding = 0
 
-  for (const inv of outstandingInvoices as Array<{ id: string; customer_id: string | null; total: number }>) {
+  for (const inv of invoiceList) {
     const paid = paidByInvoice.get(inv.id) ?? 0
-    const outstanding = Math.max(0, Number(inv.total) - paid)
+    const outstanding = Math.max(0, Number(inv.total) - Number(inv.discount) - paid)
     if (outstanding > 0) {
       totalOutstanding += outstanding
       if (inv.customer_id) customersWithDebt.add(inv.customer_id)

@@ -7,6 +7,8 @@ import { DataTable, type Column } from "@/components/DataTable"
 import { BaseModal } from "@/components/ui/modal"
 import { FormInput, FormSelect, FormActions } from "@/components/ui/form-field"
 import { StatCard } from "@/components/ui/stat-card"
+import { StatusBadge } from "@/components/StatusBadge"
+import { EmptyState } from "@/components/EmptyState"
 
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
@@ -24,7 +26,7 @@ import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/
 import { PosPaymentDialog, type PaymentResult } from "@/components/payments"
 import {
   Plus, Edit, Trash2, Phone, Mail, Search, Filter, X, Check,
-  CreditCard, TrendingUp, Loader2, CheckCircle2
+  CreditCard, TrendingUp, Loader2, CheckCircle2, Users
 } from "lucide-react"
 import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
 import { CustomerProfile } from "@/components/customers/CustomerProfile"
@@ -213,6 +215,14 @@ export function Customers() {
       // Also update header stats
       setRealOutstandingBalance(result.totalOutstandingBalance)
       setCreditCustomerCount(result.creditCustomerCount)
+
+      // Active customer count = number of customers with totalOrders > 0
+      // This matches the "Active" filter logic (both use invoice stats)
+      let activeCount = 0
+      for (const stats of result.statsByCustomer.values()) {
+        if (stats.totalOrders > 0) activeCount++
+      }
+      setActiveCustomerCount(activeCount)
     } catch {
       // Non-critical
     }
@@ -252,6 +262,8 @@ export function Customers() {
   const [spendMin, setSpendMin] = useState("")
   const [spendMax, setSpendMax] = useState("")
   const [showFilters, setShowFilters] = useState(false)
+  type CustomerStatusFilter = 'all' | 'credit' | 'paid' | 'active' | 'inactive'
+  const [statusFilter, setStatusFilter] = useState<CustomerStatusFilter>('all')
   const [sortOutstanding, setSortOutstanding] = useState<'none' | 'asc' | 'desc'>('none')
   const [showForm, setShowForm] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
@@ -271,18 +283,60 @@ export function Customers() {
   // Initial values are set by the shared hook.
   const [realOutstandingBalance, setRealOutstandingBalance] = useState(0)
   const [creditCustomerCount, setCreditCustomerCount] = useState(0)
+  const [activeCustomerCount, setActiveCustomerCount] = useState(0)
 
   const totalCustomers = customers.length
-  // Active customers in the selected date range (last_visit within range)
-  const activeCustomers = customers.filter((c) => {
-    const visitDate = c.lastVisit?.split('T')[0] ?? ''
-    return visitDate >= dateRange.startDate && visitDate <= dateRange.endDate
-  }).length
+
+  // Active customers in the selected date range — derived from invoice stats,
+  // matching the same business logic as the "Active" filter (totalOrders > 0).
+  // Uses computeAllCustomerStats() which already scopes by date range, so
+  // a customer is "active" when they have at least one invoice in the range.
+  // This is the SAME data source as the Active filter — they will always agree.
+  // The count is computed inside fetchCustomerStats alongside the other KPIs.
+  const activeCustomers = activeCustomerCount
 
   // Filtered list for display
-  interface CustomerRow { id: string; name: string; phone: string; email: string; lastVisit: string; totalSpent: number; totalOrders: number; outstandingCredit: number; notes?: string }
+  // Derive customer's display status based on computed stats
+  function getCustomerStatus(c: {
+    totalOrders: number
+    outstandingCredit: number
+    lastVisit: string
+  }): { label: string; variant: 'success' | 'warning' | 'default' | 'secondary' } {
+    if (c.outstandingCredit > 0) return { label: 'Outstanding', variant: 'warning' }
+    if (c.totalOrders > 0) return { label: 'Paid', variant: 'success' }
+    return { label: 'No Orders', variant: 'default' }
+  }
+
+  interface CustomerRow {
+    id: string
+    name: string
+    phone: string
+    email: string
+    lastVisit: string
+    totalSpent: number
+    totalOrders: number
+    outstandingCredit: number
+    notes?: string
+    _status: { label: string; variant: 'success' | 'warning' | 'default' | 'secondary' }
+  }
+
   const filteredCustomers = useMemo((): CustomerRow[] => {
-    let result = paginatedCustomers
+    let result = paginatedCustomers.map(c => ({
+      ...c,
+      _status: getCustomerStatus(c),
+    }))
+
+    // Apply status filter
+    if (statusFilter === 'credit') {
+      result = result.filter(c => c.outstandingCredit > 0)
+    } else if (statusFilter === 'paid') {
+      result = result.filter(c => c.totalOrders > 0 && c.outstandingCredit === 0)
+    } else if (statusFilter === 'active') {
+      result = result.filter(c => c.totalOrders > 0)
+    } else if (statusFilter === 'inactive') {
+      result = result.filter(c => c.totalOrders === 0)
+    }
+
     if (search.trim()) {
       const q = search.toLowerCase()
       result = result.filter(
@@ -305,7 +359,13 @@ export function Customers() {
       result = [...result].sort((a, b) => b.outstandingCredit - a.outstandingCredit)
     }
     return result
-  }, [paginatedCustomers, search, spendMin, spendMax, sortOutstanding])
+  }, [paginatedCustomers, search, spendMin, spendMax, sortOutstanding, statusFilter])
+
+  // Reset pagination when any filter changes — users should never remain
+  // on a later page after changing the filtering criteria.
+  useEffect(() => {
+    setCustomerPage(0)
+  }, [statusFilter, search, spendMin, spendMax])
 
   const hasFilters = search.trim() || spendMin || spendMax
 
@@ -314,6 +374,26 @@ export function Customers() {
     setSpendMin("")
     setSpendMax("")
   }, [])
+
+  const emptyTitle = (filter: CustomerStatusFilter): string => {
+    switch (filter) {
+      case 'credit': return 'No customers with outstanding balances'
+      case 'paid': return 'No paid customers found'
+      case 'active': return 'No active customers during the selected period'
+      case 'inactive': return 'No inactive customers found'
+      default: return 'No customers found'
+    }
+  }
+
+  const emptyDescription = (filter: CustomerStatusFilter): string => {
+    switch (filter) {
+      case 'credit': return 'All outstanding balances have been settled. Customers with credit will appear here.'
+      case 'paid': return 'Customers who have paid invoices with zero outstanding balance will appear here.'
+      case 'active': return 'Customers with at least one order in the selected date range will appear here.'
+      case 'inactive': return 'Customers with no orders in the selected date range will appear here.'
+      default: return 'Try adjusting your search or filters to find what you are looking for.'
+    }
+  }
 
   const handleSave = async (data: Customer) => {
     try {
@@ -337,6 +417,12 @@ export function Customers() {
         })
         showSuccess("Customer added")
       }
+      // Refresh table, list, and stats after save
+      await Promise.all([
+        refreshCustomerPage(),
+        refreshCustomers(),
+        fetchCustomerStats(),
+      ])
     } catch {
       showError("Failed to save customer. Check your connection.")
     }
@@ -347,6 +433,12 @@ export function Customers() {
     try {
       await removeCustomer(deleteConfirm.id)
       showSuccess("Customer deleted")
+      // Refresh table, list, and stats after delete
+      await Promise.all([
+        refreshCustomerPage(),
+        refreshCustomers(),
+        fetchCustomerStats(),
+      ])
     } catch {
       showError("Failed to delete customer. Check your connection.")
     }
@@ -354,15 +446,16 @@ export function Customers() {
   }
 
   // ─── Open global PosPaymentDialog with customer's outstanding invoices ───
+  // Uses customer_id as the canonical identifier (not customer_name) to avoid
+  // name collisions and ensure correct invoice matching.
   const handleOpenPosPayment = useCallback(async (customerId: string, customerName: string) => {
     try {
-      // Fetch unpaid invoices for this customer
+      // Fetch unpaid invoices for this customer using customer_id
       const { data: invoices } = await insforge.database
         .from('invoices')
-        .select('id, invoice_number, total, status')
-        .eq('customer_name', customerName)
-        .neq('status', 'paid')
-        .neq('status', 'cancelled')
+        .select('id, invoice_number, total, discount, status')
+        .eq('customer_id', customerId)
+        .not('status', 'in', '(paid,cancelled)')
         .order('created_at', { ascending: false })
 
       if (!invoices || invoices.length === 0) {
@@ -386,10 +479,12 @@ export function Customers() {
       }
 
       // Convert to OrderItem[] for PosPaymentDialog (each invoice = one item)
+      // Outstanding = total - discount - real payments
       const items: PosPaymentItem[] = invoices
         .map((inv: any) => {
           const paid = paidByInvoice.get(inv.id) ?? 0
-          const outstanding = Math.max(0, Number(inv.total) - paid)
+          const discount = Number(inv.discount ?? 0)
+          const outstanding = Math.max(0, Number(inv.total) - discount - paid)
           return {
             id: inv.id,
             item_name: `Invoice ${inv.invoice_number}`,
@@ -450,21 +545,6 @@ export function Customers() {
       const createPaymentsForMethod = async (pm: string, pmAmount: number) => {
         if (pmAmount <= 0) return
 
-        if (pm === 'credit') {
-          // Credit payment: no invoice link, just record the credit
-          const { error } = await insforge.database
-            .from('payments')
-            .insert([{
-              customer_id: customerId,
-              invoice_id: null,
-              amount: pmAmount,
-              payment_method: 'credit',
-              notes: `Credit recorded for ${customerName}`,
-            }])
-          if (error) throw new Error(`Credit insert failed: ${error.message}`)
-          return
-        }
-
         // Real-money payment: distribute proportionally across paid invoices
         let distributedSoFar = 0
         const entries = Array.from(invoiceOutstanding.entries())
@@ -489,7 +569,9 @@ export function Customers() {
               invoice_id: invId,
               amount: shareAmount,
               payment_method: pm,
-              notes: `Payment received from ${customerName}`,
+              notes: pm === 'credit'
+                ? `Credit applied for ${customerName}`
+                : `Payment received from ${customerName}`,
             }])
           if (error) throw new Error(`Payment insert failed: ${error.message}`)
           distributedSoFar += shareAmount
@@ -501,34 +583,37 @@ export function Customers() {
       }
 
       // Handle credit amount from PosPaymentDialog (e.g. partial + auto-credit)
+      // ⚠️ Credit payments are now linked to invoice_id (not null) so they
+      // participate in invoice status calculation.
       if (creditAmount && creditAmount > 0) {
         await createPaymentsForMethod('credit', creditAmount)
       }
 
-      // ═══ Update invoice statuses ═══
+      // ═══ Update invoice statuses using remaining balance ═══
+      // Remaining Balance = Invoice Total - Discount - ALL payments (including credit-applied)
+      // This ensures a credit-settled invoice gets marked 'paid' when fully settled.
       for (const invId of paidItemIds) {
         const { data: payData } = await insforge.database
           .from('payments')
           .select('amount, payment_method')
           .eq('invoice_id', invId)
 
+        // Include ALL payment methods (including credit) when computing settled status
         const totalPaid = (payData ?? [])
-          .filter((p: any) => p.payment_method !== 'credit')
           .reduce((s: number, p: any) => s + Number(p.amount), 0)
 
-        const invItem = posPaymentItems.find(i => i.id === invId)
-        if (!invItem) continue
-
-        // Fetch actual invoice total from DB
+        // Fetch actual invoice total + discount from DB
         const { data: invRow } = await insforge.database
           .from('invoices')
-          .select('total')
+          .select('total, discount')
           .eq('id', invId)
           .single()
 
         if (!invRow) continue
         const invoiceTotal = Number((invRow as any).total)
-        const newStatus = totalPaid >= invoiceTotal ? 'paid' : 'partial'
+        const invoiceDiscount = Number((invRow as any).discount ?? 0)
+        const remaining = Math.max(0, invoiceTotal - invoiceDiscount - totalPaid)
+        const newStatus = remaining <= 0 ? 'paid' : 'partial'
 
         await insforge.database
           .from('invoices')
@@ -561,9 +646,31 @@ export function Customers() {
       if (viewingCustomer?.id === customerId) {
         setProfileRefreshCounter(prev => prev + 1)
       }
-      await refreshCustomerPage()
-      await refreshCustomers()
-      await fetchCustomerStats()
+      // Refresh table and customer list first
+      await Promise.all([
+        refreshCustomerPage(),
+        refreshCustomers(),
+      ])
+      // Compute stats directly with the known customer ID (avoids stale closure)
+      try {
+        const freshStats = await computeAllCustomerStats(
+          [customerId],
+          dateRange.startDate,
+          dateRange.endDate,
+        )
+        // Merge fresh stats into existing map
+        setCustomerInvoiceStats(prev => {
+          const updated = new Map(prev)
+          for (const [id, stats] of freshStats.statsByCustomer) {
+            updated.set(id, stats)
+          }
+          return updated
+        })
+        setRealOutstandingBalance(freshStats.totalOutstandingBalance)
+        setCreditCustomerCount(freshStats.creditCustomerCount)
+      } catch {
+        // Non-critical — the useEffect will pick up changes on next interval
+      }
 
       showSuccess(`Payment of ${formatCurrency(paidAmount)} received from ${customerName}`)
     } catch (err) {
@@ -580,11 +687,14 @@ export function Customers() {
     {
       key: "name",
       header: "Customer",
-      render: (row) => (
+      render: (row: CustomerRow) => (
         <div className="flex items-center gap-3">
           <Avatar name={row.name} />
           <div className="min-w-0">
-            <p className="font-medium text-foreground truncate">{row.name}</p>
+            <div className="flex items-center gap-2">
+              <p className="font-medium text-foreground truncate">{row.name}</p>
+              <StatusBadge label={row._status.label} variant={row._status.variant} />
+            </div>
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Phone className="h-3 w-3" /> {row.phone}
             </div>
@@ -622,11 +732,6 @@ export function Customers() {
                 : 'text-amber-600 dark:text-amber-400'
           )}>
             {formatCurrency(balance)}
-            {isZero && (
-              <span className="ml-1.5 inline-flex items-center rounded-full bg-success/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-success">
-                Paid
-              </span>
-            )}
           </span>
         )
       },
@@ -722,7 +827,34 @@ export function Customers() {
         </motion.div>
       </motion.div>
 
-
+      {/* ── Status Filter Chips ── */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {([
+          { key: 'all' as const, label: 'All Customers', icon: 'Users' },
+          { key: 'credit' as const, label: 'Credit', icon: 'CreditCard' },
+          { key: 'paid' as const, label: 'Paid', icon: 'CheckCircle2' },
+          { key: 'active' as const, label: 'Active', icon: 'TrendingUp' },
+          { key: 'inactive' as const, label: 'Inactive', icon: 'X' },
+        ] as const).map(({ key, label, icon: _icon }) => (
+          <button
+            key={key}
+            onClick={() => setStatusFilter(key)}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all',
+              statusFilter === key
+                ? 'border-primary bg-primary/10 text-primary shadow-sm'
+                : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
+            )}
+          >
+            {key === 'credit' && <CreditCard className="h-3.5 w-3.5" />}
+            {key === 'paid' && <CheckCircle2 className="h-3.5 w-3.5" />}
+            {key === 'active' && <TrendingUp className="h-3.5 w-3.5" />}
+            {key === 'inactive' && <X className="h-3.5 w-3.5" />}
+            {key === 'all' && <Users className="h-3.5 w-3.5" />}
+            {label}
+          </button>
+        ))}
+      </div>
 
       <div className="mb-4 rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -832,6 +964,13 @@ export function Customers() {
             animate="visible"
             className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm overflow-x-auto"
           >
+            {filteredCustomers.length === 0 && !customerLoading ? (
+            <EmptyState
+              icon={statusFilter === 'credit' ? 'CreditCard' : statusFilter === 'paid' ? 'CheckCircle2' : statusFilter === 'active' ? 'TrendingUp' : statusFilter === 'inactive' ? 'X' : 'Users'}
+              title={emptyTitle(statusFilter)}
+              description={emptyDescription(statusFilter)}
+            />
+          ) : (
             <DataTable
               columns={columns}
               data={filteredCustomers}
@@ -842,6 +981,7 @@ export function Customers() {
               onPageChange={setCustomerPage}
               onRowClick={(row) => setViewingCustomer(row)}
             />
+          )}
           </motion.div>
         </div>
 

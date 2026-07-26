@@ -1,8 +1,9 @@
--- advisor-ack: process_payment intentionally SECURITY DEFINER for atomic multi-table
--- writes across invoices, payments, and order_batch_items. Has built-in auth
--- checks (user_id match + role validation) that prevent privilege escalation.
--- Only authenticated users can invoke (GRANT restricted in migration 20260807000101).
--- This is an accepted architectural trade-off documented in migrations.
+-- Add p_customer_id to process_payment so customer_id is set atomically
+-- at invoice creation time, eliminating the client-side backfill race condition.
+--
+-- The new parameter has a DEFAULT NULL so existing pending-payment recovery
+-- workflows that call the RPC with the old parameter list still work.
+
 CREATE OR REPLACE FUNCTION public.process_payment(
   p_table_id                UUID,
   p_customer_name           TEXT,
@@ -126,14 +127,14 @@ BEGIN
   END IF;
 
   IF v_existing_invoice_id IS NOT NULL THEN
-    UPDATE invoices SET status = p_invoice_status WHERE id = v_existing_invoice_id;
+    UPDATE invoices SET status = p_invoice_status, customer_id = COALESCE(p_customer_id, customer_id) WHERE id = v_existing_invoice_id;
     v_invoice_id := v_existing_invoice_id;
     v_invoice_number := v_existing_inv_number;
     v_is_new_invoice := false;
   ELSE
     v_invoice_number := format('INV-%s-%s', TO_CHAR(NOW(), 'YYYY'), NEXTVAL('invoice_number_seq'));
-    INSERT INTO invoices (invoice_number, customer_name, table_id, order_batch_ids, subtotal, discount, total, status, payment_method, user_id)
-    VALUES (v_invoice_number, COALESCE(p_customer_name, 'Walk-in'), p_table_id, p_order_batch_ids, p_invoice_subtotal, p_invoice_discount, p_invoice_total, p_invoice_status, p_payment_method, p_user_id)
+    INSERT INTO invoices (invoice_number, customer_name, customer_id, table_id, order_batch_ids, subtotal, discount, total, status, payment_method, user_id)
+    VALUES (v_invoice_number, COALESCE(p_customer_name, 'Walk-in'), p_customer_id, p_table_id, p_order_batch_ids, p_invoice_subtotal, p_invoice_discount, p_invoice_total, p_invoice_status, p_payment_method, p_user_id)
     RETURNING id INTO v_invoice_id;
   END IF;
   v_step2_time := clock_timestamp();
