@@ -199,10 +199,10 @@ export function useRoomTypes() {
 
 // ===== Orders =====
 
-export function useOrders() {
+export function useOrders(startDate?: string, endDate?: string) {
   return useQuery<Order[]>({
-    queryKey: dashboardKeys.orders(),
-    queryFn: fetchOrders,
+    queryKey: [...dashboardKeys.orders(), startDate, endDate],
+    queryFn: () => fetchOrders(startDate, endDate),
     staleTime: 10_000,
     refetchInterval: 15_000,
   })
@@ -224,18 +224,18 @@ const analyticsKeys = {
   occupancyForecast: (days: number) => ['analytics', 'occupancyForecast', days] as const,
 }
 
-export function useRevenueByPeriod(days = 7) {
+export function useRevenueByPeriod(days = 7, startDate?: string, endDate?: string) {
   return useQuery<RevenueByPeriodData>({
-    queryKey: analyticsKeys.revenueByPeriod(days),
-    queryFn: () => fetchRevenueByPeriod(days),
+    queryKey: ['analytics', 'revenue', days, startDate, endDate],
+    queryFn: () => fetchRevenueByPeriod(days, startDate, endDate),
     staleTime: 60_000,
   })
 }
 
-export function useAverageOrderValue(days = 30) {
+export function useAverageOrderValue(days = 30, startDate?: string, endDate?: string) {
   return useQuery<AovEntry[]>({
-    queryKey: analyticsKeys.aov(days),
-    queryFn: () => fetchAverageOrderValue(days),
+    queryKey: ['analytics', 'aov', days, startDate, endDate],
+    queryFn: () => fetchAverageOrderValue(days, startDate, endDate),
     staleTime: 120_000,
   })
 }

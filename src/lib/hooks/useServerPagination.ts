@@ -62,6 +62,13 @@ export function useServerPagination<T>(
   const [error, setError] = useState<string | null>(null)
   const cancelledRef = useRef(false)
 
+  // Sync filters when options.filters changes (e.g. date range change)
+  useEffect(() => {
+    setFilters(initialFilters)
+    setPage(0) // Reset to first page when filters change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(initialFilters)])
+
   const fetchPage = useCallback(async () => {
     setIsLoading(true)
     setError(null)

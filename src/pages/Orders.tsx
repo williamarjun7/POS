@@ -14,6 +14,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { Button } from "@/components/ui/button"
 import { PosPaymentDialog } from "@/components/payments"
 import { useOrders as useOrdersFromDb } from "@/lib/hooks"
+import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/filters/DateFilterBar"
 import { useOrderBatches } from "@/lib/services/order-batch-service"
 import type { Order, OrderItem, OrderStatus, SalesChannel } from "@/types"
 import {
@@ -298,7 +299,11 @@ function OrderActions({
 }  // ── Main Component ──────────────────────────────────────────────────────────
 
 export function Orders() {
-  const { data: dbOrders = [], isLoading: _isLoading, refetch } = useOrdersFromDb()
+  // ── Date filter state ──
+  const [dateFilter, setDateFilter] = useState<DateFilterState>({ preset: 'today' })
+  const dateRange = getDateRange(dateFilter)
+
+  const { data: dbOrders = [], isLoading: _isLoading, refetch } = useOrdersFromDb(dateRange.startDate, dateRange.endDate)
   const { advanceStatus, cancelBatch } = useOrderBatches()
   const [activeTab, setActiveTab] = useState("all")
 
@@ -479,13 +484,17 @@ export function Orders() {
           />
         </motion.div>
 
+        <motion.div variants={pageTransitionFast}>
+          <DateFilterBar filter={dateFilter} dateRange={dateRange} onChange={setDateFilter} />
+        </motion.div>
+
         <motion.div variants={pageTransitionFast} className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          <StatCard label="Total Orders" value={stats.total} icon="ShoppingBag" color="text-blue-500" index={0} />
+          <StatCard label={`Orders (${dateRange.label})`} value={stats.total} icon="ShoppingBag" color="text-blue-500" index={0} />
           <StatCard label="Pending" value={stats.pending} icon="Clock" color="text-amber-500" index={1} />
           <StatCard label="Processing" value={stats.processing} icon="Timer" color="text-cyan-500" index={2} />
           <StatCard label="Completed" value={stats.completed} icon="CheckCircle2" color="text-success" index={3} />
           <StatCard label="Cancelled" value={stats.cancelled} icon="XCircle" color="text-destructive" index={4} />
-          <StatCard label="Revenue" value={formatCurrency(stats.totalRevenue)} icon="DollarSign" color="text-emerald-500" index={5} />
+          <StatCard label={`Revenue (${dateRange.label})`} value={formatCurrency(stats.totalRevenue)} icon="DollarSign" color="text-emerald-500" index={5} />
         </motion.div>
 
         <motion.div variants={pageTransitionFast}>

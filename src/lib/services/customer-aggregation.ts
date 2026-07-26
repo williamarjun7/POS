@@ -85,6 +85,14 @@ export const customerAggKeys = {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
+/** Kathmandu-local date conversion helpers */
+function kathmanduStartUTC(kathmanduDate: string): string {
+  return new Date(kathmanduDate + 'T00:00:00+05:45').toISOString()
+}
+function kathmanduEndUTC(kathmanduDate: string): string {
+  return new Date(kathmanduDate + 'T23:59:59+05:45').toISOString()
+}
+
 /**
  * Filter out credit-method payments from an array of payment rows.
  * Credit is debt, NOT money received. Must be excluded from all cash-flow metrics.
@@ -186,19 +194,33 @@ export interface AllCustomerStats {
 /**
  * Compute stats for ALL customers in a single batch.
  * Avoids N+1 queries by fetching invoices + payments in bulk.
+ *
+ * @param customerIds - Array of customer UUIDs
+ * @param startDate - Optional Kathmandu-local start date (YYYY-MM-DD) to filter invoices by created_at
+ * @param endDate   - Optional Kathmandu-local end date (YYYY-MM-DD) to filter invoices by created_at
  */
 export async function computeAllCustomerStats(
   customerIds: string[],
+  startDate?: string,
+  endDate?: string,
 ): Promise<AllCustomerStats> {
   if (customerIds.length === 0) {
     return { statsByCustomer: new Map(), totalOutstandingBalance: 0, creditCustomerCount: 0 }
   }
 
-  // Fetch all invoices for these customers
-  const { data: invoicesData } = await insforge.database
+  // Build query with optional date range
+  let query = insforge.database
     .from('invoices')
     .select('id, customer_id, total, status')
     .in('customer_id', customerIds)
+
+  if (startDate && endDate) {
+    const utcStart = kathmanduStartUTC(startDate)
+    const utcEnd = kathmanduEndUTC(endDate)
+    query = query.gte('created_at', utcStart).lte('created_at', utcEnd)
+  }
+
+  const { data: invoicesData } = await query
 
   const invoices = (invoicesData ?? []) as Array<{
     id: string
@@ -284,12 +306,26 @@ export interface OverallOutstanding {
 /**
  * Compute the total outstanding balance across ALL customers.
  * Used by the Customers page header stats and Dashboard.
+ *
+ * @param startDate - Optional Kathmandu-local start date (YYYY-MM-DD) to filter invoices
+ * @param endDate   - Optional Kathmandu-local end date (YYYY-MM-DD) to filter invoices
  */
-export async function computeOverallOutstanding(): Promise<OverallOutstanding> {
-  const { data: outstandingInvoices } = await insforge.database
+export async function computeOverallOutstanding(
+  startDate?: string,
+  endDate?: string,
+): Promise<OverallOutstanding> {
+  let query = insforge.database
     .from('invoices')
     .select('id, customer_id, total, status')
     .not('status', 'in', '(paid,cancelled)')
+
+  if (startDate && endDate) {
+    const utcStart = kathmanduStartUTC(startDate)
+    const utcEnd = kathmanduEndUTC(endDate)
+    query = query.gte('created_at', utcStart).lte('created_at', utcEnd)
+  }
+
+  const { data: outstandingInvoices } = await query
 
   if (!outstandingInvoices || (outstandingInvoices as Array<unknown>).length === 0) {
     return { totalOutstandingBalance: 0, creditCustomerCount: 0 }
@@ -514,24 +550,33 @@ export function useCustomerLedgerData(customerId: string | undefined): CustomerL
 
 /**
  * Hook: Overall outstanding balance across all customers.
+ *
+ * @param startDate - Optional Kathmandu-local start date (YYYY-MM-DD) to filter invoices
+ * @param endDate   - Optional Kathmandu-local end date (YYYY-MM-DD) to filter invoices
  */
-export function useOverallOutstanding() {
+export function useOverallOutstanding(startDate?: string, endDate?: string) {
   return useQuery({
-    queryKey: customerAggKeys.outstanding(),
-    queryFn: computeOverallOutstanding,
+    queryKey: [...customerAggKeys.outstanding(), startDate, endDate],
+    queryFn: () => computeOverallOutstanding(startDate, endDate),
     staleTime: 15_000,
   })
 }
 
 /**
  * Hook: Batch stats for multiple customers (for the customer table view).
+ *
+ * @param customerIds - Array of customer UUIDs
+ * @param startDate   - Optional Kathmandu-local start date (YYYY-MM-DD) to filter invoices
+ * @param endDate     - Optional Kathmandu-local end date (YYYY-MM-DD) to filter invoices
  */
 export function useAllCustomerStats(
   customerIds: string[],
+  startDate?: string,
+  endDate?: string,
 ) {
   return useQuery({
-    queryKey: customerAggKeys.allStats(),
-    queryFn: () => computeAllCustomerStats(customerIds),
+    queryKey: [...customerAggKeys.allStats(), startDate, endDate],
+    queryFn: () => computeAllCustomerStats(customerIds, startDate, endDate),
     enabled: customerIds.length > 0,
     staleTime: 10_000,
   })

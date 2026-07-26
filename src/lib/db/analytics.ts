@@ -22,15 +22,42 @@ export interface RevenueByPeriodData {
   dayBuckets: Record<string, number>
 }
 
+/** Kathmandu-local date string (Asia/Kathmandu = UTC+5:45). */
+function kathmanduDateStr(date?: Date): string {
+  const d = date ?? new Date()
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kathmandu' })
+}
+
+function kathmanduStartUTC(kathmanduDate: string): string {
+  return new Date(kathmanduDate + 'T00:00:00+05:45').toISOString()
+}
+
+function kathmanduEndUTC(kathmanduDate: string): string {
+  return new Date(kathmanduDate + 'T23:59:59+05:45').toISOString()
+}
+
 export async function fetchRevenueByPeriod(
   days: number,
+  startDate?: string,
+  endDate?: string,
 ): Promise<RevenueByPeriodData> {
-  const since = daysAgo(days)
+  // Use date range if provided (Kathmandu-local), otherwise fall back to days
+  let utcStart: string
+  let utcEnd: string
+  if (startDate && endDate) {
+    utcStart = kathmanduStartUTC(startDate)
+    utcEnd = kathmanduEndUTC(endDate)
+  } else {
+    const since = daysAgo(days)
+    utcStart = since
+    utcEnd = new Date().toISOString()
+  }
 
   const { data, error } = await insforge.database
     .from('invoices')
     .select('total, created_at')
-    .gte('created_at', since)
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
     .in('status', ['paid', 'partial'])
 
   if (error) throw error
@@ -84,13 +111,24 @@ export interface AovEntry {
 
 export async function fetchAverageOrderValue(
   days: number,
+  startDate?: string,
+  endDate?: string,
 ): Promise<AovEntry[]> {
-  const since = daysAgo(days)
+  let utcStart: string
+  let utcEnd: string
+  if (startDate && endDate) {
+    utcStart = kathmanduStartUTC(startDate)
+    utcEnd = kathmanduEndUTC(endDate)
+  } else {
+    utcStart = daysAgo(days)
+    utcEnd = new Date().toISOString()
+  }
 
   const { data, error } = await insforge.database
     .from('invoices')
     .select('total, created_at')
-    .gte('created_at', since)
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
     .eq('status', 'paid')
 
   if (error) throw error

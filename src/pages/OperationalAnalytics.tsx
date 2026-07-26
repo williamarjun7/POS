@@ -69,12 +69,13 @@ export default function OperationalAnalytics() {
   // ── Real hooks ──
   const { data: orders, isLoading: ordersLoading } = useOrders();
   const { data: rooms } = useRooms();
-  const { data: revenuePeriodData } = useRevenueByPeriod(7);
+  // Pass the selected date range to all analytics hooks so they respect the filter
+  const { data: revenuePeriodData } = useRevenueByPeriod(7, rangeStart, rangeEnd);
   // Payment methods from actual payments table (not invoices)
   const { data: paymentMethodData } = usePaymentMethodBreakdown(rangeStart, rangeEnd);
   // Revenue vs Expenses with REAL expense data
   const { data: revenueByDayData } = useRevenueByDay(7, rangeStart, rangeEnd);
-  const { data: aovData } = useAverageOrderValue(30);
+  const { data: aovData } = useAverageOrderValue(30, rangeStart, rangeEnd);
   const { data: queueHealth } = useQueueAnalytics();
   const { data: staffRoles } = useStaffRoleDistribution();
   const { data: activeStaff } = useActiveStaff();

@@ -118,6 +118,18 @@ export function Finance() {
   const { data: financialSummary } = useFinancialSummaryForRange(rangeStart, rangeEnd)
   const { data: cashFlowData } = useCashFlow()
 
+  // ── Invoice list filters from selected date range ────────────
+  const invoiceFilters = useMemo(() => {
+    if (!rangeStart || !rangeEnd) return undefined
+    // Convert Kathmandu-local date strings to UTC for DB query
+    const utcStart = `${rangeStart}T00:00:00+05:45`
+    const utcEnd   = `${rangeEnd}T23:59:59+05:45`
+    return {
+      'created_at.gte': new Date(utcStart).toISOString(),
+      'created_at.lte': new Date(utcEnd).toISOString(),
+    }
+  }, [rangeStart, rangeEnd])
+
   // Use server-side pagination for invoices (display only — KPI values come from useFinancialSummary)
   const {
     data: invoicesPage,
@@ -127,7 +139,7 @@ export function Finance() {
     isLoading: invLoading,
     error: invError,
     refresh: refreshInvoices,
-  } = useServerPagination<import('@/lib/db/types').InvoiceRow>('invoices', { pageSize: 15, orderBy: 'created_at', orderDir: 'desc' })
+  } = useServerPagination<import('@/lib/db/types').InvoiceRow>('invoices', { pageSize: 15, orderBy: 'created_at', orderDir: 'desc', filters: invoiceFilters })
 
   // Fetch item counts for invoices in the current page
   const [invoiceItemCounts, setInvoiceItemCounts] = useState<Record<string, number>>({})
@@ -310,7 +322,13 @@ export function Finance() {
   const filteredInvoices = invoiceStatusFilter === "all" 
     ? invoices.filter((inv) => inv.status !== 'cancelled')
     : invoices.filter((inv) => inv.status === invoiceStatusFilter)
-  const filteredExpenses = expenseCategoryFilter === "all" ? expenses : expenses.filter((e) => e.category === expenseCategoryFilter)
+  // Date-filtered expenses — respect the selected date range
+  // expense.date is a YYYY-MM-DD string, rangeStart/End are Kathmandu-local YYYY-MM-DD
+  const dateFilteredExpenses = useMemo(() => {
+    if (!rangeStart || !rangeEnd) return expenses
+    return expenses.filter(e => e.date >= rangeStart && e.date <= rangeEnd)
+  }, [expenses, rangeStart, rangeEnd])
+  const filteredExpenses = expenseCategoryFilter === "all" ? dateFilteredExpenses : dateFilteredExpenses.filter((e) => e.category === expenseCategoryFilter)
   const filteredPayments = paymentMethodFilter === "all" ? paymentHistory : paymentHistory.filter((p) => p.method === paymentMethodFilter)
 
   const totalPaid = useMemo(() => paymentHistory.filter((p) => p.status === "paid").reduce((s, p) => s + p.amount, 0), [paymentHistory])

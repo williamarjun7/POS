@@ -34,6 +34,7 @@ import { useAuth } from "@/lib/core/auth-context"
 import type { ExpenseCategory } from "@/types"
 import type { Expense, NewExpenseData } from "@/lib/services/expense-service"
 import { useExpenses, EXPENSE_CATEGORIES, EXPENSE_UNITS } from "@/lib/services/expense-service"
+import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/filters/DateFilterBar"
 import { pageTransitionFast } from "@/lib/animations/presets"
 
 /* ─── Category colour mapping ─────────────────────────────── */
@@ -101,6 +102,10 @@ export function Expenses() {
   const { expenses, isLoading, loadError, addExpense, updateExpense, deleteExpense, refresh } = useExpenses()
   const { user } = useAuth()
 
+  // ── Date filter state (default: This Month) ──
+  const [dateFilter, setDateFilter] = useState<DateFilterState>({ preset: 'this_month' })
+  const dateRange = getDateRange(dateFilter)
+
   const [categoryFilter, setCategoryFilter] = useState<ExpenseCategory | "all">("all")
   const [modalOpen, setModalOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
@@ -130,17 +135,12 @@ export function Expenses() {
   }, [form.unitPrice, form.quantity])
 
   // ── KPIs ──
-  const today = new Date().toISOString().slice(0, 10)
-  const todayExpenses = useMemo(
-    () => expenses.filter(e => e.date === today).reduce((s, e) => s + e.amount, 0),
-    [expenses, today],
-  )
-  const totalExpenses = useMemo(() => expenses.reduce((s, e) => s + e.amount, 0), [expenses])
+  // Range-filtered KPIs
+  const rangeExpenses = dateFilteredExpenses.reduce((s, e) => s + e.amount, 0)
+  const rangeCount = dateFilteredExpenses.length
+  // All-time KPIs (for reference)
+  const totalAllTime = useMemo(() => expenses.reduce((s, e) => s + e.amount, 0), [expenses])
   const categoryCount = useMemo(() => new Set(expenses.map(e => e.category)).size, [expenses])
-  const thisMonth = useMemo(() => {
-    const m = today.slice(0, 7)
-    return expenses.filter(e => e.date.startsWith(m)).reduce((s, e) => s + e.amount, 0)
-  }, [expenses, today])
 
   // ── Filtered categories ──
   const filteredCategories = useMemo(() => {
@@ -149,11 +149,16 @@ export function Expenses() {
     return EXPENSE_CATEGORIES.filter(c => c.label.toLowerCase().includes(q) || c.id.includes(q))
   }, [categorySearch])
 
-  // ── Filtered expenses ──
+  // ── Filtered by category AND date range ──
+  const dateFilteredExpenses = useMemo(() => {
+    return expenses.filter(e => e.date >= dateRange.startDate && e.date <= dateRange.endDate)
+  }, [expenses, dateRange.startDate, dateRange.endDate])
+
   const filtered = useMemo(() => {
-    if (categoryFilter !== "all") return expenses.filter(e => e.category === categoryFilter)
-    return expenses
-  }, [expenses, categoryFilter])
+    let filtered = dateFilteredExpenses
+    if (categoryFilter !== "all") filtered = filtered.filter(e => e.category === categoryFilter)
+    return filtered
+  }, [dateFilteredExpenses, categoryFilter])
 
   // ── Click outside category dropdown ──
   useEffect(() => {
@@ -389,37 +394,32 @@ export function Expenses() {
           />
         </motion.div>
 
+        {/* Date Filter Bar */}
+        <motion.div variants={pageTransitionFast}>
+          <DateFilterBar filter={dateFilter} dateRange={dateRange} onChange={setDateFilter} />
+        </motion.div>
+
         {/* KPI Cards */}
         <motion.div variants={pageTransitionFast} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           <StatCard
-            label="Today's Expenses"
-            value={formatCurrency(todayExpenses)}
+            label={`Expenses (${dateRange.label})`}
+            value={formatCurrency(rangeExpenses)}
             icon="TrendingDown"
             color="text-destructive"
             iconBg="bg-red-100 dark:bg-red-900/30"
-            sublabel="Total expenses today"
+            sublabel={`${rangeCount} entries`}
             className="border-l-4 border-l-red-500"
             index={0}
           />
           <StatCard
-            label="This Month"
-            value={formatCurrency(thisMonth)}
-            icon="Calendar"
-            color="text-primary"
-            iconBg="bg-primary/10"
-            sublabel={`${today.slice(0, 7)} expenses`}
-            className="border-l-4 border-l-primary"
-            index={1}
-          />
-          <StatCard
             label="Total All Time"
-            value={formatCurrency(totalExpenses)}
+            value={formatCurrency(totalAllTime)}
             icon="DollarSign"
             color="text-warning"
             iconBg="bg-amber-100 dark:bg-amber-900/30"
             sublabel={`${expenses.length} entries`}
             className="border-l-4 border-l-amber-500"
-            index={2}
+            index={1}
           />
           <StatCard
             label="Categories Used"
@@ -429,6 +429,16 @@ export function Expenses() {
             iconBg="bg-blue-100 dark:bg-blue-900/30"
             sublabel="Active categories"
             className="border-l-4 border-l-blue-500"
+            index={2}
+          />
+          <StatCard
+            label="Date Range"
+            value={`${dateRange.startDate} — ${dateRange.endDate}`}
+            icon="Calendar"
+            color="text-primary"
+            iconBg="bg-primary/10"
+            sublabel="Filtering period"
+            className="border-l-4 border-l-primary"
             index={3}
           />
         </motion.div>

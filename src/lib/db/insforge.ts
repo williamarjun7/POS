@@ -28,6 +28,26 @@ export type InsForgeResult<T> = Promise<{
   error: Error | null
 }>
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyFilter(query: any, key: string, value: unknown): any {
+  if (value === undefined || value === null) return query
+  const dotIndex = key.lastIndexOf('.')
+  if (dotIndex > 0) {
+    const field = key.slice(0, dotIndex)
+    const op = key.slice(dotIndex + 1)
+    switch (op) {
+      case 'gte': return query.gte(field, value)
+      case 'lte': return query.lte(field, value)
+      case 'gt':  return query.gt(field, value)
+      case 'lt':  return query.lt(field, value)
+      case 'in':  return query.in(field, value as unknown[])
+      case 'neq': return query.neq(field, value)
+      default:    return query.eq(key, value)
+    }
+  }
+  return query.eq(key, value)
+}
+
 /**
  * Typed CRUD helpers wrapping `insforge.database`.
  *
@@ -38,10 +58,11 @@ export const db = {
 
   /**
    * Fetch multiple rows with optional filters.
+   * Supports operator suffixes: 'key.gte', 'key.lte', 'key.gt', 'key.lt', 'key.in', 'key.neq'.
    *
    * @example
-   *   const { data, error } = await db.findMany('menu_items', { available: true })
-   *   const { data } = await db.findMany('menu_items', undefined, { limit: 10, offset: 0 })
+   *   const { data } = await db.findMany('menu_items', { available: true })
+   *   const { data } = await db.findMany('invoices', { 'created_at.gte': '2026-07-01T00:00:00Z' })
    */
   async findMany<T>(
     table: string,
@@ -52,9 +73,7 @@ export const db = {
 
     if (filters) {
       for (const [key, value] of Object.entries(filters)) {
-        if (value !== undefined && value !== null) {
-          query = query.eq(key, value)
-        }
+        query = applyFilter(query, key, value)
       }
     }
 
@@ -94,9 +113,7 @@ export const db = {
   ) {
     let query = insforge.database.from(table).select('*')
     for (const [key, value] of Object.entries(filters)) {
-      if (value !== undefined && value !== null) {
-        query = query.eq(key, value)
-      }
+      query = applyFilter(query, key, value)
     }
     return query.maybeSingle() as unknown as InsForgeResult<T>
   },
@@ -148,9 +165,7 @@ export const db = {
   ) {
     let query = insforge.database.from(table).update(values)
     for (const [key, value] of Object.entries(filters)) {
-      if (value !== undefined && value !== null) {
-        query = query.eq(key, value)
-      }
+      query = applyFilter(query, key, value)
     }
     return query.select() as unknown as InsForgeResult<T[]>
   },
@@ -166,9 +181,7 @@ export const db = {
   async remove(table: string, filters: Record<string, unknown>) {
     let query = insforge.database.from(table).delete()
     for (const [key, value] of Object.entries(filters)) {
-      if (value !== undefined && value !== null) {
-        query = query.eq(key, value)
-      }
+      query = applyFilter(query, key, value)
     }
     return query as unknown as Promise<{ data: null; error: Error | null }>
   },
@@ -176,15 +189,13 @@ export const db = {
   // ─── Count ────────────────────────────────────────────────
 
   /**
-   * Count rows matching optional filters.
+   * Count rows matching optional filters (supports operator suffixes).
    */
   async count(table: string, filters?: Record<string, unknown>) {
     let query = insforge.database.from(table).select('*', { count: 'exact', head: true })
     if (filters) {
       for (const [key, value] of Object.entries(filters)) {
-        if (value !== undefined && value !== null) {
-          query = query.eq(key, value)
-        }
+        query = applyFilter(query, key, value)
       }
     }
     return query as unknown as Promise<{ data: null; count: number | null; error: Error | null }>
@@ -194,11 +205,10 @@ export const db = {
 
   /**
    * Fetch a paginated set of rows with a total count.
-   *
-   * Combines `findMany` with `count` in a single parallel-friendly call.
+   * Filters support operator suffixes: 'key.gte', 'key.lte', etc.
    *
    * @example
-   *   const { data, total, totalPages } = await db.paginate('invoices', { page: 0, pageSize: 10, orderBy: 'created_at', orderDir: 'desc' })
+   *   const { data, total } = await db.paginate('invoices', { page: 0, pageSize: 10, filters: { 'created_at.gte': '...' }, orderBy: 'created_at', orderDir: 'desc' })
    */
   async paginate<T>(
     table: string,
@@ -213,7 +223,6 @@ export const db = {
     const { page, pageSize, filters, orderBy, orderDir } = opts
     const offset = page * pageSize
 
-    // Fetch count in parallel
     const [dataResult, countResult] = await Promise.all([
       this.findMany<T>(table, filters, { limit: pageSize, offset, orderBy, orderDir }),
       this.count(table, filters),

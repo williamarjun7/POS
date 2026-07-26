@@ -20,6 +20,7 @@ import { useServerPagination } from "@/lib/hooks/useServerPagination"
 import type { Customer } from "@/lib/services/customer-service"
 import type { CustomerStats } from "@/lib/services/customer-aggregation"
 import { computeAllCustomerStats } from "@/lib/services/customer-aggregation"
+import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/filters/DateFilterBar"
 import { PosPaymentDialog, type PaymentResult } from "@/components/payments"
 import {
   Plus, Edit, Trash2, Phone, Mail, Search, Filter, X, Check,
@@ -166,6 +167,11 @@ export function Customers() {
   const queryClient = useQueryClient()
   const { customers, isLoading: _isLoading, loadError: _loadError, isSaving: _isSaving, addCustomer, editCustomer, removeCustomer, refresh: refreshCustomers } = useCustomers()
   const [profileRefreshCounter, setProfileRefreshCounter] = useState(0)
+
+  // ── Date filter state (default: This Month) — affects stats and table data ──
+  const [dateFilter, setDateFilter] = useState<DateFilterState>({ preset: 'this_month' })
+  const dateRange = getDateRange(dateFilter)
+
   // Server-side pagination for the DataTable
   const {
     data: customerPage,
@@ -190,7 +196,12 @@ export function Customers() {
     if (customerIds.length === 0) return
 
     try {
-      const result = await computeAllCustomerStats(customerIds)
+      // Pass the date range to filter invoices by created_at
+      const result = await computeAllCustomerStats(
+        customerIds,
+        dateRange.startDate,
+        dateRange.endDate,
+      )
 
       // Convert to plain map for display
       const statsMap = new Map<string, CustomerStats>()
@@ -205,7 +216,7 @@ export function Customers() {
     } catch {
       // Non-critical
     }
-  }, [customerPage])
+  }, [customerPage, dateRange.startDate, dateRange.endDate])
 
   useEffect(() => {
     fetchCustomerStats()
@@ -262,7 +273,11 @@ export function Customers() {
   const [creditCustomerCount, setCreditCustomerCount] = useState(0)
 
   const totalCustomers = customers.length
-  const activeCustomers = customers.filter((c) => daysSince(c.lastVisit) <= 7).length
+  // Active customers in the selected date range (last_visit within range)
+  const activeCustomers = customers.filter((c) => {
+    const visitDate = c.lastVisit?.split('T')[0] ?? ''
+    return visitDate >= dateRange.startDate && visitDate <= dateRange.endDate
+  }).length
 
   // Filtered list for display
   interface CustomerRow { id: string; name: string; phone: string; email: string; lastVisit: string; totalSpent: number; totalOrders: number; outstandingCredit: number; notes?: string }
@@ -682,6 +697,11 @@ export function Customers() {
         }
       />
 
+      {/* Date Filter Bar */}
+      <motion.div variants={fadeUp}>
+        <DateFilterBar filter={dateFilter} dateRange={dateRange} onChange={setDateFilter} />
+      </motion.div>
+
       <motion.div
         variants={stagger}
         initial="hidden"
@@ -692,13 +712,13 @@ export function Customers() {
           <StatCard label="Total Customers" value={formatNumber(totalCustomers)} icon="Users" color="text-primary" index={0} />
         </motion.div>
         <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label="Active (7d)" value={formatNumber(activeCustomers)} icon="TrendingUp" color="text-success" index={1} />
+          <StatCard label={`Active (${dateRange.label})`} value={formatNumber(activeCustomers)} icon="TrendingUp" color="text-success" index={1} />
         </motion.div>
         <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label="Credit Customers" value={formatNumber(creditCustomerCount)} icon="CreditCard" color="text-warning" index={2} />
+          <StatCard label={`Credit (${dateRange.label})`} value={formatNumber(creditCustomerCount)} icon="CreditCard" color="text-warning" index={2} />
         </motion.div>
         <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label="Outstanding Balance" value={formatCurrency(realOutstandingBalance)} icon="AlertCircle" color="text-destructive" index={3} />
+          <StatCard label={`Outstanding (${dateRange.label})`} value={formatCurrency(realOutstandingBalance)} icon="AlertCircle" color="text-destructive" index={3} />
         </motion.div>
       </motion.div>
 

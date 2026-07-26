@@ -5,7 +5,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../lib/core/auth-context';
 import { usePrefetchMenu } from '@/lib/api/menu.hooks';
 import { useNavigate } from 'react-router-dom';
-import { getDashboardReport, todayRange } from '../../lib/services/dashboard.service';
+import { getDashboardReport, kathmanduStartUTC, kathmanduEndUTC } from '../../lib/services/dashboard.service';
+import DateFilterBar, { type DateFilterState, getDateRange } from '@/components/filters/DateFilterBar';
 import { dashboardKeys } from '../../lib/core/query-keys';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
 import { Badge } from '../../components/ui/badge';
@@ -97,26 +98,27 @@ export default function DashboardPage() {
     status?: string;
   } | null>(null);
 
+  // ── Date filter state (default: Today) — only affects analytical KPIs ──
+  const [dateFilter, setDateFilter] = useState<DateFilterState>({ preset: 'today' })
+  const dateRange = getDateRange(dateFilter)
+
   const [folioRoom, setFolioRoom] = useState<Room | null>(null);
   const [folioBooking, setFolioBooking] = useState<Booking | null>(null);
   const [checkoutRoom, setCheckoutRoom] = useState<Room | null>(null);
   const [checkoutBooking, setCheckoutBooking] = useState<Booking | null>(null);
 
-  // ─── Pending Payments Query ──────────────────────────────────
-  // Uses TWO separate queries (invoices + payments) instead of a PostgREST
-  // `!left` join which can flatten rows unpredictably when multiple payments
-  // exist per invoice, and can return `payments: {}` (empty object) instead of
-  // `payments: null` for invoices with zero payment records.
-  //
-  // This matches the reliable approach used by the Finance page.
-  // ─────────────────────────────────────────────────────────────────
+  // ─── Pending Payments Query (date-filtered) ─────────────────
   const { data: pendingPayments } = useQuery({
-    queryKey: dashboardKeys.pendingInvoices,
+    queryKey: [...dashboardKeys.pendingInvoices, dateRange.startDate, dateRange.endDate],
     queryFn: async () => {
-      // Step 1: Fetch unpaid invoices (SEPARATE from payments)
+      const utcStart = kathmanduStartUTC(dateRange.startDate)
+      const utcEnd = kathmanduEndUTC(dateRange.endDate)
+      // Step 1: Fetch unpaid invoices within date range
       const { data: invoiceRows, error } = await insforge.database
         .from('invoices')
         .select('*, restaurant_tables!invoices_table_id_fkey!left(table_number)')
+        .gte('created_at', utcStart)
+        .lte('created_at', utcEnd)
         .not('status', 'in', '(paid,refunded,cancelled)')
         .order('created_at', { ascending: false })
         .limit(50)
@@ -196,22 +198,23 @@ export default function DashboardPage() {
   }, [activeBookings]);
 
   const { data: report, isLoading: reportLoading } = useQuery({
-    queryKey: dashboardKeys.report(todayRange().startDate, todayRange().endDate),
-    queryFn: () => getDashboardReport(todayRange()),
+    queryKey: dashboardKeys.report(dateRange.startDate, dateRange.endDate),
+    queryFn: () => getDashboardReport({ startDate: dateRange.startDate, endDate: dateRange.endDate }),
     staleTime: 30000,
   });
 
-  // ─── Voided items query — count and amount for today ───
+  // ─── Voided items query — count and amount for date range ───
   const { data: voidedData } = useQuery({
-    queryKey: [...dashboardKeys.all, 'voided', todayRange().startDate],
+    queryKey: [...dashboardKeys.all, 'voided', dateRange.startDate, dateRange.endDate],
     queryFn: async () => {
-      const today = todayRange()
+      const utcStart = kathmanduStartUTC(dateRange.startDate)
+      const utcEnd = kathmanduEndUTC(dateRange.endDate)
       const { data, error } = await insforge.database
         .from('order_batch_items')
         .select('quantity, unit_price')
         .eq('status', 'voided')
-        .gte('created_at', today.startDate)
-        .lte('created_at', today.endDate)
+        .gte('created_at', utcStart)
+        .lte('created_at', utcEnd)
       if (error) throw error
       const items = (data ?? []) as Array<{ quantity: number; unit_price: number }>
       const count = items.reduce((s, i) => s + i.quantity, 0)
@@ -424,6 +427,17 @@ export default function DashboardPage() {
           </div>
         </div>
       </AnimatedContainer>
+
+      {/* ═══ Date Filter Bar — affects Analytical KPIs only ═══ */}
+      <AnimatedContainer>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium mr-1">
+            <span className="bg-primary/10 text-primary px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Analytics</span>
+          </div>
+          <DateFilterBar filter={dateFilter} dateRange={dateRange} onChange={setDateFilter} />
+        </div>
+      </AnimatedContainer>
+
       {/* Tables / Rooms Panel */}
       <div className="grid grid-cols-12 gap-4 items-start">
         <div className="col-span-12 lg:col-span-8">
@@ -788,29 +802,46 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Payment Summary Cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      {/* ══════ ANALYTICAL DATA (respects date filter) ══════ */}
+      <AnimatedContainer>
+        <div className="flex items-center gap-2 mb-1">
+          <div className="h-px flex-1 bg-border/50" />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+            {dateRange.label} Financial Summary
+          </span>
+          <div className="h-px flex-1 bg-border/50" />
+        </div>
+      </AnimatedContainer>
+
+      {/* Payment Summary Cards — 8 cards across 2 rows on lg */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-4">
         <div className="col-span-1">
-          <StatCard icon="Banknote" label="COLLECTED TODAY" value={`Rs. ${report?.summary.collected.toFixed(0) ?? '0'}`} sublabel="Actual payments received today" color="text-emerald-600 dark:text-emerald-400" iconBg="bg-emerald-100 dark:bg-emerald-900/30" className="border-l-4 border-l-emerald-500" index={0} />
+          <StatCard icon="Banknote" label={`COLLECTED (${dateRange.isToday ? 'TODAY' : dateRange.label.toUpperCase()})`} value={`Rs. ${report?.summary.collected.toFixed(0) ?? '0'}`} sublabel="Actual payments received" color="text-emerald-600 dark:text-emerald-400" iconBg="bg-emerald-100 dark:bg-emerald-900/30" className="border-l-4 border-l-emerald-500" index={0} />
         </div>
         <div className="col-span-1">
-          <StatCard icon="DollarSign" label="SALES TODAY" value={`Rs. ${report?.summary.sales_today.toFixed(0) ?? '0'}`} sublabel="Total invoice value today" color="text-blue-600 dark:text-blue-400" iconBg="bg-blue-100 dark:bg-blue-900/30" className="border-l-4 border-l-blue-500" index={1} />
+          <StatCard icon="DollarSign" label={`SALES (${dateRange.isToday ? 'TODAY' : dateRange.label.toUpperCase()})`} value={`Rs. ${report?.summary.sales_today.toFixed(0) ?? '0'}`} sublabel="Total invoice value" color="text-blue-600 dark:text-blue-400" iconBg="bg-blue-100 dark:bg-blue-900/30" className="border-l-4 border-l-blue-500" index={1} />
         </div>
         <div className="col-span-1">
-          <StatCard icon="TrendingDown" label="EXPENSES TODAY" value={`Rs. ${expensesToday.toFixed(0)}`} sublabel="Total expenses today" color="text-red-600 dark:text-red-400" iconBg="bg-red-100 dark:bg-red-900/30" className="border-l-4 border-l-red-500" index={2} />
+          <StatCard icon="TrendingDown" label={`EXPENSES (${dateRange.isToday ? 'TODAY' : dateRange.label.toUpperCase()})`} value={`Rs. ${expensesToday.toFixed(0)}`} sublabel="Total expenses" color="text-red-600 dark:text-red-400" iconBg="bg-red-100 dark:bg-red-900/30" className="border-l-4 border-l-red-500" index={2} />
         </div>
         <div className="col-span-1">
-          <StatCard icon="Timer" label="OUTSTANDING" value={`Rs. ${report?.summary.outstanding.toFixed(0) ?? '0'}`} sublabel="Remaining balance (incl. credit)" color="text-orange-600 dark:text-orange-400" iconBg="bg-orange-100 dark:bg-orange-900/30" className="border-l-4 border-l-orange-500" index={3} />
+          <StatCard icon="Timer" label={`OUTSTANDING (${dateRange.isToday ? 'TODAY' : dateRange.label.toUpperCase()})`} value={`Rs. ${report?.summary.outstanding.toFixed(0) ?? '0'}`} sublabel="Remaining balance in range" color="text-orange-600 dark:text-orange-400" iconBg="bg-orange-100 dark:bg-orange-900/30" className="border-l-4 border-l-orange-500" index={3} />
         </div>
         <div className="col-span-1">
-          <StatCard icon="Receipt" label="PARTIALLY PAID" value={`${report?.summary.partially_paid_count ?? 0}`} sublabel="Invoices awaiting balance" color="text-violet-600 dark:text-violet-400" iconBg="bg-violet-100 dark:bg-violet-900/30" className="border-l-4 border-l-violet-500" index={4} />
+          <StatCard icon="Receipt" label="PARTIALLY PAID" value={`${report?.summary.partially_paid_count ?? 0}`} sublabel="Invoices in range" color="text-violet-600 dark:text-violet-400" iconBg="bg-violet-100 dark:bg-violet-900/30" className="border-l-4 border-l-violet-500" index={4} />
         </div>
         <div className="col-span-1">
-          <StatCard icon="Ban" label="VOIDED ITEMS" value={voidedData?.count != null ? `${voidedData.count} items` : '—'} sublabel={voidedData?.amount != null ? `Rs. ${voidedData.amount.toFixed(0)}` : 'Loading...'} color="text-red-600 dark:text-red-400" iconBg="bg-red-100 dark:bg-red-900/30" className="border-l-4 border-l-red-500" index={5} />
+          <StatCard icon="CreditCard" label={`CREDIT OUTST. (${dateRange.isToday ? 'TODAY' : dateRange.label.toUpperCase()})`} value={`Rs. ${report?.summary.credit_outstanding.toFixed(0) ?? '0'}`} sublabel="Unpaid credit in range" color="text-purple-600 dark:text-purple-400" iconBg="bg-purple-100 dark:bg-purple-900/30" className="border-l-4 border-l-purple-500" index={5} />
+        </div>
+        <div className="col-span-1">
+          <StatCard icon="Ban" label={`VOIDED (${dateRange.isToday ? 'TODAY' : dateRange.label.toUpperCase()})`} value={voidedData?.count != null ? `${voidedData.count} items` : '—'} sublabel={voidedData?.amount != null ? `Rs. ${voidedData.amount.toFixed(0)}` : 'Loading...'} color="text-red-600 dark:text-red-400" iconBg="bg-red-100 dark:bg-red-900/30" className="border-l-4 border-l-red-500" index={6} />
+        </div>
+        <div className="col-span-1">
+          <StatCard icon="Percent" label={`DISCOUNTS (${dateRange.isToday ? 'TODAY' : dateRange.label.toUpperCase()})`} value={`Rs. ${totalDiscounts.toFixed(0)}`} sublabel="Total discounts applied" color="text-cyan-600 dark:text-cyan-400" iconBg="bg-cyan-100 dark:bg-cyan-900/30" className="border-l-4 border-l-cyan-500" index={7} />
         </div>
       </div>
 
-      {/* Payment Methods Strip — compact */}
+      {/* Payment Methods Strip — compact (analytical only) */}
       <AnimatedContainer>
         <div className="rounded-xl border bg-card p-0.5 transition-all duration-200 hover:shadow-md">
           <div className="flex flex-wrap items-stretch">
@@ -841,25 +872,7 @@ export default function DashboardPage() {
               <span className="text-sm font-bold tabular-nums text-blue-600 dark:text-blue-400">Rs. {(paymentMethods.find(m => m.method === 'fonepay')?.amount ?? 0).toFixed(0)}</span>
               <span className="text-[10px] text-muted-foreground/60">{paymentMethods.find(m => m.method === 'fonepay')?.count ?? 0} payments</span>
             </div>
-            {/* Outstanding Credit — from customers.credit_balance (NOT payments) */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                <CreditCard className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
-              </div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Outstanding Credit</span>
-              <span className="text-sm font-bold tabular-nums text-purple-600 dark:text-purple-400">Rs. {(report?.summary.credit_outstanding ?? 0).toFixed(0)}</span>
-              <span className="text-[10px] text-muted-foreground/60">Customer balances</span>
-            </div>
-            {/* Discounts */}
-            <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
-                <Percent className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
-              </div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Discounts</span>
-              <span className="text-sm font-bold tabular-nums text-cyan-600 dark:text-cyan-400">Rs. {totalDiscounts.toFixed(0)}</span>
-              <span className="text-[10px] text-muted-foreground/60">Total discounts applied</span>
-            </div>
-            {/* Net Cash Flow — cash received minus expenses today */}
+            {/* Net Cash Flow — cash received minus expenses */}
             <div className="flex flex-1 flex-col items-center justify-center gap-0.5 p-3 min-w-0 border-l border-border/50">
               <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${netCashFlow >= 0 ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
                 <TrendingUp className={`h-3.5 w-3.5 ${netCashFlow >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`} />

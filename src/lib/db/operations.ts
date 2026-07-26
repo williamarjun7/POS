@@ -202,12 +202,27 @@ function rowToRoom(
 
 // ─── Orders ─────────────────────────────────────────────────
 
-export async function fetchOrders(): Promise<Order[]> {
-  // Fetch order batches with their items + table info
-  const { data, error } = await insforge.database
+export async function fetchOrders(
+  startDate?: string,
+  endDate?: string,
+): Promise<Order[]> {
+  // Kathmandu timezone conversion helpers
+  const kathmanduStartUTC = (d: string) => new Date(d + 'T00:00:00+05:45').toISOString()
+  const kathmanduEndUTC = (d: string) => new Date(d + 'T23:59:59+05:45').toISOString()
+
+  // Build query with optional date range
+  let query = insforge.database
     .from('order_batches')
     .select('*, order_batch_items(*), restaurant_tables!order_batches_table_id_fkey!left(table_number)')
     .order('created_at', { ascending: false })
+
+  if (startDate && endDate) {
+    query = query
+      .gte('created_at', kathmanduStartUTC(startDate))
+      .lte('created_at', kathmanduEndUTC(endDate))
+  }
+
+  const { data, error } = await query
 
   if (error) throw error
 

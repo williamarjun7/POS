@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/EmptyState"
 import { formatCurrency } from "@/lib/utils"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { useSupplierPayments } from "@/lib/services/supplier-payment-service"
+import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/filters/DateFilterBar"
 import { useSuppliers } from "@/lib/services/supplier-service"
 import { Plus, Trash2, Search } from "lucide-react"
 import type { SupplierPayment, NewSupplierPaymentData } from "@/lib/services/supplier-payment-service"
@@ -134,7 +135,11 @@ function PaymentFormModal({
 }
 
 export function SupplierPayments() {
-  const { payments, isLoading, loadError, addPayment, removePayment, refresh } = useSupplierPayments()
+  // ── Date filter state (default: This Month) ──
+  const [dateFilter, setDateFilter] = useState<DateFilterState>({ preset: 'this_month' })
+  const dateRange = getDateRange(dateFilter)
+
+  const { payments, isLoading, loadError, addPayment, removePayment, refresh } = useSupplierPayments(dateRange.startDate, dateRange.endDate)
   const { suppliers } = useSuppliers()
   const [search, setSearch] = useState("")
   const [showForm, setShowForm] = useState(false)
@@ -190,10 +195,14 @@ export function SupplierPayments() {
           }
         />
 
+        <motion.div variants={pageTransitionFast}>
+          <DateFilterBar filter={dateFilter} dateRange={dateRange} onChange={setDateFilter} />
+        </motion.div>
+
         <motion.div variants={pageTransitionFast} className="grid gap-4 sm:grid-cols-3">
-          <StatCard label="Total Payments" value={payments.length} icon="Banknote" color="text-primary" index={0} />
-          <StatCard label="Total Amount Paid" value={formatCurrency(totalPaid)} icon="DollarSign" color="text-destructive" index={1} />
-          <StatCard label="Suppliers Paid" value={uniqueSuppliers} icon="Truck" color="text-success" index={2} />
+          <StatCard label={`Payments (${dateRange.label})`} value={payments.length} icon="Banknote" color="text-primary" index={0} />
+          <StatCard label={`Amount Paid (${dateRange.label})`} value={formatCurrency(totalPaid)} icon="DollarSign" color="text-destructive" index={1} />
+          <StatCard label={`Suppliers (${dateRange.label})`} value={uniqueSuppliers} icon="Truck" color="text-success" index={2} />
         </motion.div>
 
         <motion.div variants={pageTransitionFast} className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm">

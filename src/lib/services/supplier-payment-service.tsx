@@ -53,13 +53,22 @@ export interface NewSupplierPaymentData {
 
 /* ─── DB operations ─────────────────────────────────────────── */
 
-async function fetchSupplierPaymentsFromDb(): Promise<SupplierPayment[]> {
-  const { data, error } = await insforge.database
+async function fetchSupplierPaymentsFromDb(
+  startDate?: string,
+  endDate?: string,
+): Promise<SupplierPayment[]> {
+  let query = insforge.database
     .from('supplier_payments')
     .select('*')
     .order('payment_date', { ascending: false });
 
-  if (error) throw error;
+  if (startDate && endDate) {
+    query = query
+      .gte('payment_date', startDate)
+      .lte('payment_date', endDate);
+  }
+
+  const { data, error } = await query;
   return (data ?? []).map((row: unknown) => rowToSupplierPayment(row as SupplierPaymentRow));
 }
 
@@ -145,7 +154,10 @@ export interface UseSupplierPaymentsReturn {
   refresh: () => void;
 }
 
-export function useSupplierPayments(): UseSupplierPaymentsReturn {
+export function useSupplierPayments(
+  startDate?: string,
+  endDate?: string,
+): UseSupplierPaymentsReturn {
   const queryClient = useQueryClient()
 
   const {
@@ -154,8 +166,8 @@ export function useSupplierPayments(): UseSupplierPaymentsReturn {
     error,
     refetch,
   } = useQuery({
-    queryKey: supplierPaymentKeys.all,
-    queryFn: fetchSupplierPaymentsFromDb,
+    queryKey: [...supplierPaymentKeys.all, startDate, endDate],
+    queryFn: () => fetchSupplierPaymentsFromDb(startDate, endDate),
     staleTime: 30_000,
   })
 

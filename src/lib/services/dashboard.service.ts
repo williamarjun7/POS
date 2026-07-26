@@ -72,13 +72,34 @@ export interface ActivityItem {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
+/** Kathmandu-local date string (Asia/Kathmandu = UTC+5:45). */
+export function kathmanduDateString(date?: Date): string {
+  const d = date ?? new Date()
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kathmandu' })
+}
+
+/**
+ * Convert a Kathmandu-local date string to the correct UTC range boundaries.
+ * Start of day in Kathmandu = dateT00:00:00+05:45 → UTC
+ * End   of day in Kathmandu = dateT23:59:59+05:45 → UTC
+ */
+export function kathmanduStartUTC(kathmanduDate: string): string {
+  return new Date(kathmanduDate + 'T00:00:00+05:45').toISOString()
+}
+
+export function kathmanduEndUTC(kathmanduDate: string): string {
+  return new Date(kathmanduDate + 'T23:59:59+05:45').toISOString()
+}
+
+/**
+ * Today's date range in Kathmandu timezone.
+ * Used by the Dashboard when no custom date filter is active.
+ */
 export function todayRange() {
-  const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const end = new Date(start.getTime() + 86400000 - 1)
+  const today = kathmanduDateString()
   return {
-    startDate: start.toISOString().split('T')[0],
-    endDate: end.toISOString().split('T')[0],
+    startDate: today,
+    endDate: today,
   }
 }
 
@@ -97,15 +118,16 @@ export async function getDashboardReport(
   range: { startDate: string; endDate: string },
 ): Promise<DashboardReport> {
   const { startDate, endDate } = range
-  const todayStart = `${startDate}T00:00:00Z`
-  const todayEnd = `${endDate}T23:59:59Z`
+  // Convert Kathmandu-local date range to UTC for DB queries
+  const utcStart = kathmanduStartUTC(startDate)
+  const utcEnd = kathmanduEndUTC(endDate)
 
-  // ── 1. Payments collected today ───────────────────────────
+  // ── 1. Payments collected in range ────────────────────────
   const { data: paymentsData } = await insforge.database
     .from('payments')
     .select('amount, payment_method, created_at')
-    .gte('created_at', todayStart)
-    .lte('created_at', todayEnd)
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
 
   const payments = (paymentsData ?? []) as Array<{
     amount: number
@@ -122,12 +144,12 @@ export async function getDashboardReport(
     .filter(p => p.payment_method === 'credit')
     .reduce((sum, p) => sum + Number(p.amount), 0)
 
-  // ── 2. Invoices today ─────────────────────────────────────
+  // ── 2. Invoices in range ──────────────────────────────────
   const { data: invoicesData } = await insforge.database
     .from('invoices')
     .select('total, discount, status, created_at')
-    .gte('created_at', todayStart)
-    .lte('created_at', todayEnd)
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
 
   const invoices = (invoicesData ?? []) as Array<{
     total: number
@@ -154,10 +176,12 @@ export async function getDashboardReport(
     .filter(inv => inv.status === 'refunded')
     .reduce((sum, inv) => sum + Number(inv.total), 0)
 
-  // ── 3. Outstanding & partially paid ───────────────────────
+  // ── 3. Outstanding & partially paid (date-filtered by range) ──
   const { data: unpaidInvoices } = await insforge.database
     .from('invoices')
     .select('id, total, status')
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
     .not('status', 'in', '(paid,refunded,cancelled)')
 
   const unpaid = (unpaidInvoices ?? []) as Array<{
@@ -219,8 +243,8 @@ export async function getDashboardReport(
   const { data: orderBatches } = await insforge.database
     .from('order_batches')
     .select('created_at, table_id')
-    .gte('created_at', todayStart)
-    .lte('created_at', todayEnd)
+    .gte('created_at', utcStart)
+    .lte('created_at', utcEnd)
     .not('status', 'eq', 'cancelled')
 
   const batches = (orderBatches ?? []) as Array<{
@@ -293,8 +317,8 @@ export async function getDashboardReport(
   const cleaningRooms = roomList.filter(r => r.status === 'cleaning').length
   const maintenanceRooms = roomList.filter(r => r.status === 'maintenance').length
 
-  // ── 9. Activity feed ──────────────────────────────────────
-  const activityFeed = await fetchRecentActivity(10)
+  // ── 9. Activity feed (date-filtered) ───────────────────────
+  const activityFeed = await fetchRecentActivity(10, utcStart, utcEnd)
 
   return {
     summary: {
@@ -327,10 +351,20 @@ export async function getDashboardReport(
 
 // ─── Activity Feed ───────────────────────────────────────────
 
-export async function fetchRecentActivity(limit = 20): Promise<ActivityItem[]> {
-  const { data, error } = await insforge.database
+export async function fetchRecentActivity(
+  limit = 20,
+  utcStart?: string,
+  utcEnd?: string,
+): Promise<ActivityItem[]> {
+  let query = insforge.database
     .from('activity_logs')
     .select('id, activity_type, entity_id, entity_label, status, location, amount, created_at, user_name')
+
+  if (utcStart && utcEnd) {
+    query = query.gte('created_at', utcStart).lte('created_at', utcEnd)
+  }
+
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(limit)
 
