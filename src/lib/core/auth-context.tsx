@@ -32,7 +32,7 @@ interface AuthContextType {
   user: User | null
   isAuthenticated: boolean
   isLoading: boolean
-  login: (email: string, password: string) => Promise<{ emailVerified: boolean }>
+  login: (email: string, password: string, rememberMe?: boolean) => Promise<{ emailVerified: boolean }>
   signup: (email: string, password: string, fullName?: string) => Promise<void>
   loginWithOAuth: (provider: 'google' | 'apple' | 'github' | 'facebook') => Promise<void>
   logout: () => Promise<void>
@@ -172,8 +172,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [refreshUser])
 
-  const login = useCallback(async (email: string, password: string) => {
-    const { data, error } = await signIn(email, password)
+  const login = useCallback(async (email: string, password: string, rememberMe?: boolean) => {
+    const { data, error } = await signIn(email, password, rememberMe)
     if (error) throw error
     if (data?.user) {
       const baseUser = mapInsForgeUser(data.user)
@@ -190,7 +190,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(fullUser)
 
       // Record the login time for 24-hour session tracking
-      recordLogin(fullUser.id)
+      // When rememberMe is false, session data goes to sessionStorage (cleared on browser close)
+      recordLogin(fullUser.id, rememberMe ?? true)
 
       return { emailVerified: true }
     }

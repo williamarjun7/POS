@@ -95,7 +95,7 @@ export function useLoginForm() {
     setUnverifiedEmail(undefined)
 
     try {
-      const { emailVerified } = await login(form.email.value, form.password.value)
+      const { emailVerified } = await login(form.email.value, form.password.value, form.rememberMe)
       if (!emailVerified) {
         setError('Please verify your email before signing in.')
         setUnverifiedEmail(form.email.value)
@@ -117,7 +117,11 @@ export function useLoginForm() {
     }))
   }, [])
 
-  return { form, step, error, unverifiedEmail, setUnverifiedEmail, updateField, handleSubmit, validate, touchAll, setStep, setError, isLocked, remainingLockSeconds, isCooldown, remainingCooldownSeconds }
+  const updateRememberMe = useCallback((rememberMe: boolean) => {
+    setForm(prev => ({ ...prev, rememberMe }))
+  }, [])
+
+  return { form, step, error, unverifiedEmail, setUnverifiedEmail, updateField, handleSubmit, validate, touchAll, setStep, setError, isLocked, remainingLockSeconds, isCooldown, remainingCooldownSeconds, updateRememberMe }
 }
 
 export function useSignupForm() {

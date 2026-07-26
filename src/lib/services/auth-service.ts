@@ -37,8 +37,8 @@ export async function signUp(email: string, password: string, fullName?: string)
   return result
 }
 
-export async function signIn(email: string, password: string) {
-  return insforge.auth.signInWithPassword({ email, password })
+export async function signIn(email: string, password: string, rememberMe?: boolean) {
+  return insforge.auth.signInWithPassword({ email, password, rememberMe })
 }
 
 export async function signInWithOAuth(provider: 'google' | 'apple' | 'github' | 'facebook') {

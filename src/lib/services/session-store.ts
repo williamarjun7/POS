@@ -3,8 +3,13 @@
  * ────────────
  * Client-side session metadata for 24-hour persistence and screen lock.
  *
- * This stores metadata about the session (login time, PIN, lock state)
- * in localStorage. The actual auth JWT token is managed by the InsForge SDK.
+ * This stores metadata about the session (login time, PIN, lock state).
+ * The actual auth JWT/refresh tokens are managed by the InsForge SDK
+ * via httpOnly cookies.
+ *
+ * Session persistence depends on the storage layer:
+ *   - localStorage (Remember Me ON):  persists across browser restarts
+ *   - sessionStorage (Remember Me OFF): cleared when the browser closes
  *
  * The 24-hour session is enforced by checking loginTimestamp.
  * The screen lock is a UI-only feature — it does NOT invalidate the
@@ -13,6 +18,7 @@
  */
 
 const STORAGE_KEY = 'pos_session_store'
+const REMEMBER_KEY = 'pos_remember_me'
 
 interface SessionData {
   /** ISO timestamp of the most recent login */
@@ -47,6 +53,8 @@ async function sha256(text: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
+/** ─── PIN & screen lock always use localStorage (persistent across restarts) ─── */
+
 function read(): SessionData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -63,16 +71,106 @@ function write(data: SessionData): void {
   } catch { /* localStorage full or unavailable */ }
 }
 
+/** ─── Session data (loginTimestamp, userId) uses rememberMe-aware storage ─── */
+
+/** Read session metadata from the correct storage layer based on rememberMe */
+function readSessionStorage(): Storage {
+  return isRememberMe() ? localStorage : sessionStorage
+}
+
+interface SessionMeta {
+  loginTimestamp: string | null
+  userId: string | null
+}
+
+function readSessionMeta(): SessionMeta {
+  try {
+    const storage = readSessionStorage()
+    const raw = storage.getItem(STORAGE_KEY)
+    if (!raw) return { loginTimestamp: null, userId: null }
+    const parsed = JSON.parse(raw)
+    return {
+      loginTimestamp: parsed.loginTimestamp ?? null,
+      userId: parsed.userId ?? null,
+    }
+  } catch {
+    return { loginTimestamp: null, userId: null }
+  }
+}
+
+function writeSessionMeta(meta: SessionMeta): void {
+  try {
+    const storage = readSessionStorage()
+    // Merge with existing data so we don't overwrite PIN/lock
+    const raw = storage.getItem(STORAGE_KEY)
+    const existing = raw ? JSON.parse(raw) : {}
+    storage.setItem(STORAGE_KEY, JSON.stringify({ ...existing, ...meta }))
+  } catch { /* storage full or unavailable */ }
+}
+
+function removeSessionData(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+    sessionStorage.removeItem(STORAGE_KEY)
+  } catch { /* ignore */ }
+}
+
+// ─── Remember Me flag ──────────────────────────────────────
+
+/**
+ * Store whether the user wants to be remembered.
+ * This flag itself is always stored in localStorage so it persists
+ * across restarts — we use it to decide which storage layer to read.
+ */
+export function setRememberMe(enabled: boolean): void {
+  try {
+    if (enabled) {
+      localStorage.setItem(REMEMBER_KEY, 'true')
+    } else {
+      localStorage.removeItem(REMEMBER_KEY)
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * Check if the user wants to be remembered.
+ */
+export function isRememberMe(): boolean {
+  try {
+    return localStorage.getItem(REMEMBER_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Remove the remember-me flag.
+ */
+export function clearRememberMe(): void {
+  try {
+    localStorage.removeItem(REMEMBER_KEY)
+  } catch { /* ignore */ }
+}
+
 // ─── Public API ────────────────────────────────────────────
 
 /**
  * Record a successful login.
  * Sets the login timestamp to now and associates the session with a user.
+ *
+ * @param userId - The authenticated user's ID
+ * @param rememberMe - Whether to persist session across browser restarts
+ *   - true:  stores in localStorage (survives browser close)
+ *   - false: stores in sessionStorage (cleared on browser close)
  */
-export function recordLogin(userId: string): void {
+export function recordLogin(userId: string, rememberMe: boolean): void {
+  setRememberMe(rememberMe)
+  writeSessionMeta({
+    loginTimestamp: new Date().toISOString(),
+    userId,
+  })
+  // Also unlock the screen on login (PIN/lock data is always in localStorage)
   const data = read()
-  data.loginTimestamp = new Date().toISOString()
-  data.userId = userId
   data.isLocked = false
   write(data)
 }
@@ -81,29 +179,51 @@ export function recordLogin(userId: string): void {
  * Clear the session (logout).
  */
 export function clearSession(): void {
-  const data = read()
-  data.loginTimestamp = null
-  data.userId = null
-  data.isLocked = false
-  // Keep the PIN so the user doesn't need to re-set it
-  write(data)
+  removeSessionData()
+  clearRememberMe()
 }
 
 /**
  * Check if the 24-hour session is still valid.
+ * Checks both localStorage (remember me) and sessionStorage (no remember me).
  */
 export function isSessionValid(): boolean {
-  const data = read()
-  if (!data.loginTimestamp) return false
-  const elapsed = Date.now() - new Date(data.loginTimestamp).getTime()
-  return elapsed < 24 * 60 * 60 * 1000 // 24 hours
+  // Check both storage layers — the user may have changed rememberMe
+  // between sessions, and we want to find valid data in either
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      const raw = storage.getItem(STORAGE_KEY)
+      if (!raw) continue
+      const parsed = JSON.parse(raw)
+      if (parsed.loginTimestamp) {
+        const elapsed = Date.now() - new Date(parsed.loginTimestamp).getTime()
+        if (elapsed < 24 * 60 * 60 * 1000) {
+          return true
+        }
+      }
+    } catch { /* continue */ }
+  }
+  return false
 }
 
 /**
  * Get the session's user ID.
  */
 export function getSessionUserId(): string | null {
-  return read().userId
+  // Check rememberMe storage first (the current preference)
+  const meta = readSessionMeta()
+  if (meta.userId) return meta.userId
+
+  // Fallback: check the other storage layer
+  const otherStorage = isRememberMe() ? sessionStorage : localStorage
+  try {
+    const raw = otherStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return parsed.userId ?? null
+  } catch {
+    return null
+  }
 }
 
 // ─── PIN management ────────────────────────────────────────

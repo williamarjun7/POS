@@ -29,8 +29,7 @@ const stagger = {
 }
 
 export function LoginPage() {
-  const { form, step, updateField, handleSubmit, touchAll, error, isLocked, remainingLockSeconds, isCooldown, unverifiedEmail } = useLoginForm()
-  const [rememberMe, setRememberMe] = useState(false)
+  const { form, step, updateField, handleSubmit, touchAll, updateRememberMe, error, isLocked, remainingLockSeconds, isCooldown, unverifiedEmail } = useLoginForm()
   const [resending, setResending] = useState(false)
   const [resendSent, setResendSent] = useState(false)
 
@@ -143,21 +142,21 @@ export function LoginPage() {
                 <div className="relative">
                   <input
                     type="checkbox"
-                    checked={rememberMe}
-                    onChange={() => setRememberMe(!rememberMe)}
+                    checked={form.rememberMe}
+                    onChange={() => updateRememberMe(!form.rememberMe)}
                     className="peer sr-only"
                   />
                   <div
                     className={cn(
                       'flex h-5 w-5 items-center justify-center rounded-md border-2 transition-all duration-200',
-                      rememberMe
+                      form.rememberMe
                         ? 'border-primary bg-primary shadow-sm shadow-primary/25'
                         : 'border-muted-foreground/30 bg-transparent group-hover:border-muted-foreground/50 group-hover:bg-muted/50'
                     )}
                   >
                     <motion.div
                       initial={false}
-                      animate={rememberMe ? { scale: 1, opacity: 1 } : { scale: 0, opacity: 0 }}
+                      animate={form.rememberMe ? { scale: 1, opacity: 1 } : { scale: 0, opacity: 0 }}
                       transition={{ type: 'spring', stiffness: 400, damping: 20 }}
                     >
                       <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />
