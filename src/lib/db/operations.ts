@@ -128,8 +128,12 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
     const runningTotal = unpaidItemTotalByTable[row.id] ?? undefined
     const paidAmount = tableBatches.reduce((s, b) => s + Number(b.paid_amount), 0)
 
-    // Derive status: if active batches exist, it's occupied; otherwise use DB value
-    const derivedStatus = hasActiveBatches ? 'occupied' as const : row.status
+    // Derive status: if active batches exist, it's occupied; otherwise use DB value,
+    // but treat a stale 'occupied' as 'available' since the old system used to set
+    // restaurant_tables.status='occupied' and never reset it.
+    // Staff-set manual statuses (reserved, cleaning, maintenance, disabled) are preserved.
+    const derivedStatus = hasActiveBatches ? 'occupied' as const
+      : row.status === 'occupied' ? 'available' as const : row.status
 
     return {
       ...rowToDashboardTable(row),

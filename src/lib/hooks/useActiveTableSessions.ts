@@ -149,7 +149,8 @@ export async function fetchActiveTableSessions(): Promise<ActiveTableSession[]> 
     const batchCount = tableBatches.length
     const runningTotal = unpaidTotalByTable[row.id] ?? 0
     const paidAmount = tableBatches.reduce((s, b) => s + Number(b.paid_amount), 0)
-    const displayStatus = isActive ? 'occupied' as const : row.status
+    const displayStatus = isActive ? 'occupied' as const
+      : row.status === 'occupied' ? 'available' as const : row.status
 
     return {
       tableId: row.id,
