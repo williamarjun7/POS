@@ -91,7 +91,7 @@ jobs:
 
       # ── Build Installer ───────────────────────────────────────
       - name: Build Windows installer
-        run: npx electron-builder --win --config
+        run: npx electron-builder --win --config --publish never
         env:
           CSC_LINK: ${{ steps.decode_csc.outputs.certificate_decoded == 'true' && 'certs/authenticode.p12' || '' }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
