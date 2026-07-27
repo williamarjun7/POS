@@ -144,7 +144,7 @@
           ]
         }
       ],
-      "icon": "public/favicon.png"
+      "icon": "public/icon.png"
     },
     "nsis": {
       "oneClick": false,

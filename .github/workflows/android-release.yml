@@ -6,7 +6,7 @@
 #
 # Pipeline:
 #   1. Checkout code
-#   2. Install Node.js + JDK 17
+#   2. Install Node.js + JDK 21
 #   3. Setup Android SDK
 #   4. Build React frontend + sync Capacitor
 #   5. Decode keystore from GitHub Secrets
@@ -55,12 +55,12 @@ jobs:
       - name: Install NPM dependencies
         run: npm ci
 
-      # ── Setup Java 17 (required for Gradle) ───────────────────
-      - name: Setup JDK 17
+      # ── Setup Java 21 (required for Gradle) ───────────────────
+      - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       # ── Setup Android SDK ────────────────────────────────────
       - name: Setup Android SDK
