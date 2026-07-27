@@ -71,10 +71,6 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dexie": "^4.4.4",
-    "electron": "^43.2.0",
-    "electron-builder": "^26.15.3",
-    "electron-store": "^11.0.2",
-    "electron-updater": "^6.8.9",
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.24.0",
     "node-thermal-printer": "^4.6.0",
@@ -95,6 +91,10 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "auto-launch": "^5.0.6",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-store": "^11.0.2",
+    "electron-updater": "^6.8.9",
     "autoprefixer": "^10.4.21",
     "concurrently": "^10.0.4",
     "cross-env": "^10.1.0",
@@ -112,10 +112,6 @@
   },
   "description": "A modern Point of Sale application built with React, TypeScript, and Vite.",
   "main": "dist-electron/main.js",
-  "directories": {
-    "doc": "docs",
-    "test": "tests"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/williamarjun7/POS.git"
