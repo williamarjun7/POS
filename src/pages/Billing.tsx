@@ -14,6 +14,7 @@ import {
 } from '@/lib/services/order-calculation-service'
 import type { OrderBatchItemRow } from '@/lib/db/types'
 import { showSuccess, showError } from "@/components/ui/toast"
+import { ensureCustomer, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger'
 import { printService } from '@/lib/services/print-service'
 import { useInvoice } from '@/lib/services/invoice-service'
 import { useInvoicePayments, recordPaymentSafe } from '@/lib/services/payment-service'
@@ -273,21 +274,31 @@ export function Billing() {
     if (updateError) {
       try { await insforge.database.from('payments').delete().eq('id', createdPayment.id) } catch { /* ignore */ }
       throw updateError
-    }
-
-    logActivitySafe({
-      activityType: 'payment_received',
-      entityId: id,
-      entityLabel: `Invoice ${invoice.invoice_number}`,
-      status: newStatus === 'paid' ? 'completed' : 'partial',
-      amount: payAmount,
-      details: `Payment of ${formatCurrency(payAmount)} via ${method}. Invoice ${newStatus === 'paid' ? 'fully paid' : 'partially paid'}.`,
-      userId: user?.id ?? undefined,
-      userName: user?.name ?? 'System',
-    })
+    }      logActivitySafe({
+        activityType: 'payment_received',
+        entityId: id,
+        entityLabel: `Invoice ${invoice.invoice_number}`,
+        status: newStatus === 'paid' ? 'completed' : 'partial',
+        amount: payAmount,
+        details: `Payment of ${formatCurrency(payAmount)} via ${method}. Invoice ${newStatus === 'paid' ? 'fully paid' : 'partially paid'}.`,
+        userId: user?.id ?? undefined,
+        userName: user?.name ?? 'System',
+      })
 
     // Invalidate all affected caches so Dashboard and other pages update immediately
     invalidatePaymentCaches()
+
+    // ═══ Credit gate: create/update customer ledger only for credit-related invoices ═══
+    // If the invoice has outstanding credit (totalCredit > 0), ensure a customer
+    // record exists and update their last_visit / backfill customer_id.
+    // This mirrors the same gate in POS.tsx — customer records exist only when
+    // there is an active credit relationship.
+    const invoiceCustomerName = invoice.customer_name?.trim()
+    if (hasRemainingCredit && invoiceCustomerName && invoiceCustomerName !== 'Walk-in') {
+      const batchedName = invoiceCustomerName
+      ensureCustomer(batchedName).catch(() => {})
+      updateCustomerAfterInvoice(batchedName, total, id).catch(() => {})
+    }
 
     return createdPayment
   }, [invoice, id, totalPaid, total, totalCredit, user, invalidatePaymentCaches])
@@ -485,6 +496,7 @@ export function Billing() {
       invoiceNumber: invoice.invoice_number ?? `INV-${id?.slice(0, 8)}`,
       date: invoice.created_at?.split('T')[0] ?? new Date().toLocaleDateString(),
       time: invoice.created_at?.split('T')[1]?.slice(0, 5) ?? new Date().toLocaleTimeString(),
+      cashierName: user?.name || undefined,
       items: invoiceItems.map(item => ({
         name: item.name,
         quantity: item.quantity,

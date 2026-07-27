@@ -416,6 +416,18 @@ export interface PrintSettingsRow {
   show_logo: boolean
   auto_print: boolean
   print_copies: number
+  google_review_url: string
+  enable_google_review_qr: boolean
+  kot_enabled: boolean
+  kot_print_copies: number
+  enable_instagram_qr: boolean
+  instagram_url: string
+  enable_tiktok_qr: boolean
+  tiktok_url: string
+  kot_show_customer: boolean
+  kot_show_staff: boolean
+  kitchen_printer_ip: string
+  kitchen_printer_port: number
   created_at: string
   updated_at: string
 }

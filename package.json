@@ -5,9 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && tsc -p electron/tsconfig.json && electron .\"",
     "build": "vite build",
+    "build:electron": "npm run build && tsc -p electron/tsconfig.json && electron-builder",
     "build:analyze": "ANALYZE_BUNDLE=true vite build",
     "preview": "vite preview",
+    "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && tsc -p electron/tsconfig.json && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "electron:build": "npm run build && tsc -p electron/tsconfig.json && electron-builder --win --config",
+    "electron:build:dir": "npm run build && tsc -p electron/tsconfig.json && electron-builder --win --dir",
+    "electron:compile": "tsc -p electron/tsconfig.json",
+    "electron:start": "electron .",
+    "electron:ci": "npm run build && tsc -p electron/tsconfig.json && electron-builder --win --config",
+    "release": "npm run release:patch",
+    "electron:release": "npm version patch --no-git-tag-version && npm run electron:build",
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -34,9 +44,14 @@
     "cap:open": "npx cap open android",
     "cap:build": "npm run build && npx cap sync android",
     "cap:android": "npm run cap:build && npx cap open android",
-    "version:patch": "npm version patch --no-git-tag-version && npx cap sync android",
-    "version:minor": "npm version minor --no-git-tag-version && npx cap sync android",
-    "version:major": "npm version major --no-git-tag-version && npx cap sync android"
+    "version:patch": "npm version patch --no-git-tag-version && node scripts/sync-android-version.mjs",
+    "version:minor": "npm version minor --no-git-tag-version && node scripts/sync-android-version.mjs",
+    "version:major": "npm version major --no-git-tag-version && node scripts/sync-android-version.mjs",
+    "cap:release": "node scripts/sync-android-version.mjs && cd android && gradlew.bat assembleRelease",
+    "cap:bundle": "node scripts/sync-android-version.mjs && cd android && gradlew.bat bundleRelease",
+    "release:patch": "npm version patch --no-git-tag-version && node scripts/release-tag.mjs",
+    "release:minor": "npm version minor --no-git-tag-version && node scripts/release-tag.mjs",
+    "release:major": "npm version major --no-git-tag-version && node scripts/release-tag.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",
@@ -47,6 +62,8 @@
     "@capacitor/network": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
+    "@capgo/capacitor-updater": "^8.51.2",
+    "@capgo/cli": "^8.31.1",
     "@insforge/sdk": "^1.4.4",
     "@radix-ui/react-slot": "^1.3.0",
     "@radix-ui/react-tooltip": "^1.2.12",
@@ -56,8 +73,13 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dexie": "^4.4.4",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-store": "^11.0.2",
+    "electron-updater": "^6.8.9",
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.24.0",
+    "node-thermal-printer": "^4.6.0",
     "pg": "^8.22.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
@@ -74,7 +96,10 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "auto-launch": "^5.0.6",
     "autoprefixer": "^10.4.21",
+    "concurrently": "^10.0.4",
+    "cross-env": "^10.1.0",
     "jsdom": "^29.1.1",
     "oxlint": "^1.71.0",
     "postcss": "^8.5.4",
@@ -84,10 +109,11 @@
     "tailwindcss-animate": "^1.0.7",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wait-on": "^9.1.0"
   },
   "description": "A modern Point of Sale application built with React, TypeScript, and Vite.",
-  "main": ".lighthouserc.js",
+  "main": "dist-electron/main.js",
   "directories": {
     "doc": "docs",
     "test": "tests"
@@ -102,5 +128,47 @@
   "bugs": {
     "url": "https://github.com/williamarjun7/POS/issues"
   },
-  "homepage": "https://github.com/williamarjun7/POS#readme"
+  "homepage": "https://github.com/williamarjun7/POS#readme",
+  "build": {
+    "appId": "com.highlandscafemotelinn.pos",
+    "productName": "Highlands Cafe & Motel Inn POS",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "public/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/favicon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Highlands Cafe & Motel Inn POS",
+      "installerIcon": "public/favicon.png",
+      "uninstallerIcon": "public/favicon.png",
+      "installerHeaderIcon": "public/favicon.png"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "williamarjun7",
+        "repo": "POS",
+        "releaseType": "release"
+      }
+    ]
+  }
 }

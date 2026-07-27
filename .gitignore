@@ -45,6 +45,14 @@ dist-ssr
 secrets.*
 !secrets.example.*
 
+# Electron output
+dist-electron/
+release/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+
 # Local config files
 *.local
 opencode.json
@@ -60,6 +68,11 @@ scripts/check-fk-indexes.mjs
 # Playwright E2E test artifacts
 playwright-report/
 test-results/
+
+# Android (local SDK config + keystore)
+local.properties
+android/keystore/
+android/keystore.properties
 
 # Windows artifacts
 nul

@@ -1,0 +1,118 @@
+# =============================================================================
+# Highlands Cafe & Motel Inn POS — Windows Desktop Release Build
+# =============================================================================
+#
+# Triggered by: Pushing a version tag (v*.*.*) or manually via workflow_dispatch.
+#
+# Pipeline:
+#   1. Checkout code
+#   2. Install Node.js
+#   3. Install dependencies
+#   4. Build React frontend + compile Electron TypeScript
+#   5. Build Windows NSIS installer via electron-builder
+#   6. Upload installer artifact
+#   7. Attach installer to existing GitHub Release
+#
+# Requirements (GitHub Secrets):
+#   (Optional) Code signing certificate:
+#   WIN_CSC_BASE64         — base64-encoded .pfx/.p12 certificate file
+#   WIN_CSC_KEY_PASSWORD   — certificate private key password
+#
+# Without signing, Windows SmartScreen will warn "Unknown publisher."
+# The installer will still work — user clicks "More info" → "Run anyway."
+# =============================================================================
+
+name: Windows Desktop Release Build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'          # e.g. v1.0.1, v2.3.4
+  workflow_dispatch:       # Manual trigger from GitHub UI
+    inputs:
+      version:
+        description: 'Version to release (e.g. 1.0.2)'
+        required: false
+
+jobs:
+  build:
+    name: Build Windows Installer
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Setup Node.js ─────────────────────────────────────────
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install NPM dependencies
+        run: npm ci
+
+      # ── Optionally decode code signing certificate ────────────
+      - name: Decode code signing certificate (if provided)
+        id: decode_csc
+        env:
+          WIN_CSC_BASE64: ${{ secrets.WIN_CSC_BASE64 }}
+        run: |
+          if [ -n "$WIN_CSC_BASE64" ]; then
+            mkdir -p certs
+            printf '%s' "$WIN_CSC_BASE64" | base64 --decode > certs/authenticode.p12
+            echo "certificate_decoded=true" >> $GITHUB_OUTPUT
+          else
+            echo "certificate_decoded=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Build Frontend ────────────────────────────────────────
+      - name: Build React + Vite frontend
+        run: npm run build
+        env:
+          VITE_INSFORGE_URL: ${{ secrets.VITE_INSFORGE_URL }}
+          VITE_INSFORGE_ANON_KEY: ${{ secrets.VITE_INSFORGE_ANON_KEY }}
+          VITE_INSFORGE_FUNCTIONS_URL: ${{ secrets.VITE_INSFORGE_FUNCTIONS_URL }}
+          VITE_FONEPAY_MERCHANT_CODE: ${{ secrets.VITE_FONEPAY_MERCHANT_CODE }}
+          VITE_FONEPAY_API_BASE_URL: ${{ secrets.VITE_FONEPAY_API_BASE_URL }}
+
+      - name: Compile Electron TypeScript
+        run: npm run electron:compile
+
+      # ── Build Installer ───────────────────────────────────────
+      - name: Build Windows installer
+        run: npx electron-builder --win --config
+        env:
+          CSC_LINK: ${{ steps.decode_csc.outputs.certificate_decoded == 'true' && 'certs/authenticode.p12' || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      # ── Upload Artifact ──────────────────────────────────────
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Highlands-POS-Windows-${{ github.ref_name }}
+          path: release/*.exe
+          if-no-files-found: error
+
+      # ── Attach to GitHub Release ──────────────────────────────
+      - name: Get version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Attach installer to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          files: release/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

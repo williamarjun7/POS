@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils"
 import { insforge } from "@/lib/services/auth-service"
 import { logActivitySafe } from "@/lib/services/activity-log-service"
 import { showSuccess, showError } from "@/components/ui/toast"
+import { ensureCustomer, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger'
 import { DialogButton } from "@/components/ui/ButtonVariants"
 import { toPaymentMethodKey } from "@/lib/payment-methods"
 import { processPaymentWithRecovery } from "@/lib/services/unified-payment-service"
@@ -253,6 +254,22 @@ export function RoomCheckoutDialog({
         amount: grandTotal,
         details: `Checkout — ${formatCurrency(grandTotal)} via ${payMethod}`,
       }).catch(() => {})
+
+      // ═══ Credit gate: create/update customer ledger for credit-related room checkouts ═══
+      // Only create a customer record when the payment involves credit (partial credit,
+      // full credit account, or outstanding balance). This keeps the Customers page
+      // as a Credit Ledger rather than a list of every checkout guest.
+      const isCreditRelated = (paymentResult.creditAmount && paymentResult.creditAmount > 0)
+        || (paymentResult.paymentMethod?.startsWith('Credit') ?? false)
+      if (isCreditRelated) {
+        const creditCustomerName = paymentResult.creditCustomerName?.trim() || guestName.trim()
+        if (creditCustomerName && creditCustomerName !== 'Walk-in') {
+          ensureCustomer(creditCustomerName).catch(() => {})
+          if (rpcResult.invoiceId) {
+            updateCustomerAfterInvoice(creditCustomerName, totalAfterDiscount, rpcResult.invoiceId).catch(() => {})
+          }
+        }
+      }
 
       showSuccess(`Room ${roomNum} checked out — ${formatCurrency(grandTotal)}`)
       setShowPostCheckout(true)

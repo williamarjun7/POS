@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { PageTransition } from '@/components/ui/PageTransition';
 import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
+import { BillPreviewDialog } from '@/components/pos/BillPreviewDialog';
 import { showSuccess, showError } from '@/components/ui/toast';
 import { RequirePermission } from '@/lib/core/PermissionGuards';
 import { ensureCustomer, recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
@@ -22,6 +23,8 @@ import { toPaymentMethodKey, getPaymentMethodLabel } from '@/lib/payment-methods
 import { useAuth } from '@/lib/core/auth-context';
 import { logActivitySafe } from '@/lib/services/activity-log-service';
 import { insforge } from '@/lib/services/auth-service';
+import { printService } from '@/lib/services/print-service';
+import { getPrintSettings } from '@/lib/services/print-settings';
 import { deductStockForSoldItems } from '@/lib/services/inventory-service';
 import { processPaymentWithRecovery } from '@/lib/services/unified-payment-service';
 import { updateAllCachesOnPayment } from '@/lib/services/cache-updater';
@@ -168,6 +171,7 @@ export function POS() {
   const [newCartItems, setNewCartItems] = useState<CartLine[]>([]);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
+  const [showBillPreview, setShowBillPreview] = useState(false);
   const [lastAdded, setLastAdded] = useState<string | null>(null);
   const [contextMenuItem, setContextMenuItem] = useState<string | null>(null);
   const [voidConfirm, setVoidConfirm] = useState<{ type: 'batch'; batchId: string; itemId: string; itemName: string } | { type: 'cart'; menuItemId: string; itemName: string } | null>(null);
@@ -680,6 +684,28 @@ export function POS() {
   //     double-mounting and rapid user interactions.
   const paymentProcessingRef = useRef(false)
 
+  // ─── Clear customer name when session becomes empty ──
+  // When all items are voided/removed and there are no unpaid batches,
+  // the POS session is effectively empty. Clear the customer name so
+  // reopening the table starts with a clean slate.
+  // IMPORTANT: Do NOT include customerNames in deps — doing so would cause
+  // the freshly typed name to be immediately cleared (empty cart at that
+  // point still has no items). The functional update reads the latest state.
+  useEffect(() => {
+    if (!selectedTableId) return;
+    const hasActiveCart = newCartItems.some(l => l.status !== 'voided');
+    const hasUnpaidBatches = activePreviousBatches.length > 0;
+    if (!hasActiveCart && !hasUnpaidBatches) {
+      setCustomerNames(prev => {
+        if (!prev[selectedTableId]) return prev;
+        const next = { ...prev };
+        delete next[selectedTableId];
+        return next;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newCartItems, activePreviousBatches, selectedTableId]);
+
   // ─── Rate limit for order placement ──────────────────
   const { checkLimit: checkOrderLimit } = useRateLimit({ cooldownMs: 2000, maxAttempts: 10 })
 
@@ -849,9 +875,15 @@ export function POS() {
     // ═══ Resolve customer name → ID BEFORE RPC (atomic invoice creation) ═══
     // This eliminates the client-side backfill race condition.
     // The RPC sets customer_id directly on the invoice at creation time.
+    //
+    // IMPORTANT: Only create a customer ledger record if there is a credit
+    // relationship. Fully paid cash/FonePay/QR walk-ins should NOT create
+    // customer records — the Customers page is a credit ledger, not a
+    // history of every POS transaction.
     const invoiceCustomerName = paymentResult.creditCustomerName || customerName || 'Walk-in';
+    const isCreditRelated = remainingBalance > 0 || creditAmount > 0 || isCreditPayment;
     let resolvedCustomerId: string | null | undefined;
-    if (invoiceCustomerName && invoiceCustomerName !== 'Walk-in' && invoiceCustomerName.trim()) {
+    if (invoiceCustomerName && invoiceCustomerName !== 'Walk-in' && invoiceCustomerName.trim() && isCreditRelated) {
       try {
         const cust = await ensureCustomer(invoiceCustomerName.trim());
         resolvedCustomerId = cust.id;
@@ -1059,7 +1091,10 @@ export function POS() {
       //   - updateCustomerAfterInvoice: update last_visit and backfill customer_id
       //     (only if pre-RPC resolution failed — otherwise already set atomically)
       //   - recordCreditCharge: track the credit charge on the customer record
-      if (invoiceCustomerName && invoiceCustomerName !== 'Walk-in' && invoiceCustomerName.trim()) {
+      //
+      // IMPORTANT: Only update customer ledger if there's a credit relationship.
+      // Fully paid cash/FonePay/QR walk-ins should not create customer records.
+      if (invoiceCustomerName && invoiceCustomerName !== 'Walk-in' && invoiceCustomerName.trim() && isCreditRelated) {
         // Always update last_visit, even if customer_id was set by the RPC
         if (!resolvedCustomerId) {
           // Pre-RPC resolution failed — try backfill as fallback
@@ -1246,6 +1281,32 @@ export function POS() {
       });
 
       showSuccess(`${displayOrderNumber} (${totalNewCartItems} items) placed!`);
+
+      // ── KOT (Kitchen Order Ticket) Auto-print ──────────────────────
+      // Fire-and-forget — doesn't block order placement or navigation.
+      if (getPrintSettings().kotEnabled && batchItems.length > 0) {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+        const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const tableOrRoom = posMode === 'tables'
+          ? `Table ${(selectedTableInfo as any)?.table_number ?? selectedTableId}`
+          : `Room ${(selectedTableInfo as any)?.room_number || (selectedTableInfo as any)?.number || selectedTableId}`;
+
+        // Fire-and-forget — errors are handled by printService internally
+        printService.printKot({
+          orderNumber: displayOrderNumber,
+          tableOrRoom,
+          customerName: customerName || undefined,
+          waiterName: user?.name || undefined,
+          date: dateStr,
+          time: timeStr,
+          items: activeCartItems.map(item => ({
+            name: item.name,
+            quantity: item.quantity,
+            notes: item.notes || undefined,
+          })),
+        });
+      }
       // Clear the cart — submitted items are now persisted in the database and
       // displayed in the Previous Batches section. The editable cart starts
       // fresh for the next batch.
@@ -2023,7 +2084,16 @@ export function POS() {
                         className="h-14 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-semibold hover:from-amber-400 hover:to-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-amber-500/20"><Receipt className="h-4 w-4" /> Pay Bill</motion.button>
                     </RequirePermission>
                   )}
-                  <button onClick={() => navigate('/orders')} className="h-12 rounded-lg border-2 border-border text-sm font-medium hover:bg-muted transition-colors">View Bills</button>
+                  {/* Desktop: View Bill with live amount */}
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setShowBillPreview(true)}
+                    disabled={!selectedTableId}
+                    className="h-12 rounded-lg border-2 border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    View Bill{totalRunning > 0 ? ` (Rs. ${totalRunning.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})` : ''}
+                  </motion.button>
                 </div>
 
                 {/* "Place Order" when no batches exist, "Create Another Order Batch" when batches exist */}
@@ -2190,7 +2260,9 @@ export function POS() {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {selectedTableId && (<button onClick={() => setShowPayment(true)} disabled={allUnpaidItemsForPayment.length === 0} className="h-14 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-semibold hover:from-amber-400 hover:to-amber-500 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"><Receipt className="h-4 w-4" /> Pay Bill</button>)}
-                <button onClick={() => navigate('/orders')} className="h-12 rounded-lg border-2 border-border text-sm font-medium hover:bg-muted transition-colors">View Bills</button>
+                <button onClick={() => setShowBillPreview(true)} disabled={!selectedTableId} className="h-12 rounded-lg border-2 border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                  View Bill{totalRunning > 0 ? ` (Rs. ${totalRunning.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})` : ''}
+                </button>
               </div>
               <button onClick={handlePlaceOrder} disabled={!selectedTableId || newCartItems.length === 0} className="w-full h-14 rounded-xl bg-emerald-500 text-background font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600 transition-all active:scale-[0.99] shadow-sm">                    {activePreviousBatches.length > 0 ? (
                       <>Create Another Order Batch</>
@@ -2209,6 +2281,20 @@ export function POS() {
           customerName={customerName || undefined} selectedTableId={selectedTableId}
           isRoomPayment={posMode === 'rooms'}
           onClose={() => setShowPayment(false)} onComplete={(invNum, result) => handlePaymentComplete(result)} />
+      )}
+
+      {/* ─── Bill Preview Dialog ─── */}
+      {showBillPreview && (
+        <BillPreviewDialog
+        cartItems={newCartItems}
+        batches={tableBatches}
+        customerName={customerName}
+        tableOrRoom={posMode === 'tables'
+          ? `Table ${(selectedTableInfo as any)?.table_number ?? selectedTableId}`
+          : `Room ${(selectedTableInfo as any)?.room_number || (selectedTableInfo as any)?.number || selectedTableId}`
+        }
+        onClose={() => setShowBillPreview(false)}
+        />
       )}
 
       {/* ─── Keyboard Shortcuts Modal ─── */}

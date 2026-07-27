@@ -1,0 +1,152 @@
+# =============================================================================
+# Highlands Cafe & Motel Inn POS — Android Release Build
+# =============================================================================
+#
+# Triggered by: Pushing a version tag (v*.*.*) or manually via workflow_dispatch.
+#
+# Pipeline:
+#   1. Checkout code
+#   2. Install Node.js + JDK 17
+#   3. Setup Android SDK
+#   4. Build React frontend + sync Capacitor
+#   5. Decode keystore from GitHub Secrets
+#   6. Build and sign release APK + AAB
+#   7. Upload artifacts
+#   8. Create GitHub Release with APK attached
+#
+# Requirements (GitHub Secrets):
+#   KEYSTORE_BASE64      — base64-encoded highlands-pos-release.keystore
+#   KEYSTORE_PASSWORD    — keystore password
+#   KEY_ALIAS            — key alias (default: highlands-pos)
+#   KEY_PASSWORD         — key password
+# =============================================================================
+
+name: Android Release Build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'          # e.g. v1.0.1, v2.3.4
+  workflow_dispatch:       # Manual trigger from GitHub UI
+    inputs:
+      version:
+        description: 'Version to release (e.g. 1.0.2)'
+        required: false
+
+jobs:
+  build:
+    name: Build and Sign Android APK + AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Setup Node.js ─────────────────────────────────────────
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install NPM dependencies
+        run: npm ci
+
+      # ── Setup Java 17 (required for Gradle) ───────────────────
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ── Setup Android SDK ────────────────────────────────────
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ── Decode keystore ───────────────────────────────────────
+      - name: Decode keystore from secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p android/keystore
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/keystore/highlands-pos-release.keystore
+
+      - name: Write keystore.properties
+        run: |
+          cat > android/keystore.properties << 'EOF'
+          storeFile=keystore/highlands-pos-release.keystore
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          EOF
+
+      # ── Build Web App ─────────────────────────────────────────
+      - name: Build React + Vite frontend
+        run: npm run build
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      # ── Gradle Build ─────────────────────────────────────────
+      - name: Build release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Build release AAB (App Bundle)
+        run: |
+          cd android
+          ./gradlew bundleRelease --no-daemon
+
+      # ── Capgo OTA Upload ─────────────────────────────────────
+      - name: Upload web bundle to Capgo (OTA update)
+        run: |
+          npx @capgo/cli bundle upload \
+            --apikey ${{ secrets.CAPGO_TOKEN }} \
+            --app-id com.highlandscafemotelinn.pos \
+            --bundle dist
+
+      # ── Upload Artifacts ─────────────────────────────────────
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Highlands-POS-APK-${{ github.ref_name }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload signed AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Highlands-POS-AAB-${{ github.ref_name }}
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      # ── Create GitHub Release ────────────────────────────────
+      - name: Get version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Highlands POS v${{ steps.version.outputs.version }}
+          body: |
+            ## Highlands Cafe & Motel Inn POS v${{ steps.version.outputs.version }}
+
+            ### Downloads
+            - 📱 [APK (Direct Install)](app-release.apk)
+            - 📦 [AAB (Google Play)](app-release.aab)
+
+            ### Changes
+            <!-- Add release notes here -->
+          files: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/bundle/release/app-release.aab
+          draft: true
+          prerelease: false

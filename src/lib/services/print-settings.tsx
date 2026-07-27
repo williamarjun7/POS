@@ -39,6 +39,26 @@ export interface PrintSettings {
   googleReviewUrl: string;
   /** Whether to show the Google Review QR code on receipts */
   enableGoogleReviewQr: boolean;
+  /** Whether to auto-print KOT (Kitchen Order Ticket) when order is placed */
+  kotEnabled: boolean;
+  /** Number of KOT copies to print */
+  kotPrintCopies: number;
+  /** Instagram URL for the Instagram QR code on receipts */
+  instagramUrl: string;
+  /** Whether to show the Instagram QR code on receipts */
+  enableInstagramQr: boolean;
+  /** TikTok URL for the TikTok QR code on receipts */
+  tiktokUrl: string;
+  /** Whether to show the TikTok QR code on receipts */
+  enableTiktokQr: boolean;
+  /** Whether to print customer name on Kitchen Order Tickets */
+  showCustomerOnKot: boolean;
+  /** Whether to print waiter/staff name on Kitchen Order Tickets */
+  showStaffOnKot: boolean;
+  /** Static IP address of the dedicated network kitchen printer */
+  kitchenPrinterIp: string;
+  /** TCP port for the kitchen printer (default: 9100 for ESC/POS) */
+  kitchenPrinterPort: number;
 }
 
 /** Raw DB row shape (snake_case) for the print_settings table */
@@ -52,6 +72,16 @@ interface PrintSettingsRow {
   print_copies: number;
   google_review_url: string;
   enable_google_review_qr: boolean;
+  kot_enabled: boolean;
+  kot_print_copies: number;
+  enable_instagram_qr: boolean;
+  instagram_url: string;
+  enable_tiktok_qr: boolean;
+  tiktok_url: string;
+  kot_show_customer: boolean;
+  kot_show_staff: boolean;
+  kitchen_printer_ip: string;
+  kitchen_printer_port: number;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +99,16 @@ const DEFAULT_SETTINGS: PrintSettings = {
   printCopies: 1,
   googleReviewUrl: 'https://g.page/r/CYSJDIQPF_uwEAE/review',
   enableGoogleReviewQr: true,
+  kotEnabled: false,
+  kotPrintCopies: 1,
+  instagramUrl: 'https://www.instagram.com/highlandscafemotel?utm_source=ig_web_button_share_sheet&igsh=ZDNlZDc0MzIxNw==',
+  enableInstagramQr: false,
+  tiktokUrl: 'https://www.tiktok.com/@highlandscafe1?is_from_webapp=1&sender_device=pc',
+  enableTiktokQr: false,
+  showCustomerOnKot: false,
+  showStaffOnKot: false,
+  kitchenPrinterIp: '',
+  kitchenPrinterPort: 9100,
 };
 
 /* ─── Mapper helpers ────────────────────────────────────────── */
@@ -83,6 +123,16 @@ function rowToSettings(row: PrintSettingsRow): PrintSettings {
     printCopies: row.print_copies,
     googleReviewUrl: row.google_review_url ?? DEFAULT_SETTINGS.googleReviewUrl,
     enableGoogleReviewQr: row.enable_google_review_qr ?? DEFAULT_SETTINGS.enableGoogleReviewQr,
+    kotEnabled: row.kot_enabled ?? DEFAULT_SETTINGS.kotEnabled,
+    kotPrintCopies: row.kot_print_copies ?? DEFAULT_SETTINGS.kotPrintCopies,
+    instagramUrl: row.instagram_url ?? DEFAULT_SETTINGS.instagramUrl,
+    enableInstagramQr: row.enable_instagram_qr ?? DEFAULT_SETTINGS.enableInstagramQr,
+    tiktokUrl: row.tiktok_url ?? DEFAULT_SETTINGS.tiktokUrl,
+    enableTiktokQr: row.enable_tiktok_qr ?? DEFAULT_SETTINGS.enableTiktokQr,
+    showCustomerOnKot: row.kot_show_customer ?? DEFAULT_SETTINGS.showCustomerOnKot,
+    showStaffOnKot: row.kot_show_staff ?? DEFAULT_SETTINGS.showStaffOnKot,
+    kitchenPrinterIp: row.kitchen_printer_ip ?? DEFAULT_SETTINGS.kitchenPrinterIp,
+    kitchenPrinterPort: row.kitchen_printer_port ?? DEFAULT_SETTINGS.kitchenPrinterPort,
   };
 }
 
@@ -100,6 +150,16 @@ function settingsToRow(
     print_copies: settings.printCopies,
     google_review_url: settings.googleReviewUrl,
     enable_google_review_qr: settings.enableGoogleReviewQr,
+    kot_enabled: settings.kotEnabled,
+    kot_print_copies: settings.kotPrintCopies,
+    enable_instagram_qr: settings.enableInstagramQr,
+    instagram_url: settings.instagramUrl,
+    enable_tiktok_qr: settings.enableTiktokQr,
+    tiktok_url: settings.tiktokUrl,
+    kot_show_customer: settings.showCustomerOnKot,
+    kot_show_staff: settings.showStaffOnKot,
+    kitchen_printer_ip: settings.kitchenPrinterIp,
+    kitchen_printer_port: settings.kitchenPrinterPort,
   };
 }
 
