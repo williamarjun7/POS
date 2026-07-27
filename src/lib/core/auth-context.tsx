@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import {
   signIn,
   signUp as signUpUser,
@@ -107,46 +107,87 @@ function mapInsForgeUser(insforgeUser: { id: string; email?: string; name?: stri
   }
 }
 
+// Module-level promise for Strict Mode double-mount synchronization.
+// When React Strict Mode double-mounts AuthProvider, the second mount's
+// refreshUser() call is blocked by refreshGuardRef. Instead of returning
+// immediately (which would set isLoading=false before the first mount's
+// refresh completes), the second mount awaits this promise so it waits
+// for the first mount's in-flight refreshUser() to finish first.
+// eslint-disable-next-line prefer-const
+let s_pendingRefresh: Promise<void> | null = null
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  // Guard against concurrent refreshUser() calls — the visibility change
+  // handler and initial mount can fire simultaneously, causing two parallel
+  // refresh attempts which both trigger 401s and log warnings.
+  const refreshGuardRef = useRef(false)
 
   const refreshUser = useCallback(async () => {
-    try {
-      const { data, error } = await getCurrentUser()
-      if (error) throw error
-      if (data?.user) {
-        const baseUser = mapInsForgeUser(data.user)
-        // Fetch full profile from user_profiles
-        const { data: profile } = await db.findById<UserProfileRow>('user_profiles', baseUser.id)
-        if (profile) {
-          setUser({
-            ...baseUser,
-            name: profile.name,
-            role: profile.role,
-          })
-        } else {
-          setUser(baseUser)
-        }
-      } else {
-        setUser(null)
+    // ── Guard: prevent concurrent refresh attempts ────────────
+    if (refreshGuardRef.current) {
+      // Strict Mode double-mount: another refreshUser() is already running
+      // from the first mount. Await it instead of returning immediately so
+      // setUser() completes before setIsLoading(false) runs.
+      if (s_pendingRefresh) {
+        await s_pendingRefresh
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message === ERR_NO_REFRESH_TOKEN) {
-        // No SDK session exists — clear the stale local session so we
-        // don't keep retrying and avoid the misleading warning.
-        clearSession()
-      } else {
-        console.warn('[Auth] refreshUser failed:', message)
-      }
-      setUser(null)
+      return
     }
+    refreshGuardRef.current = true
+
+    const promise = (async () => {
+      try {
+        const { data, error } = await getCurrentUser()
+        if (error) throw error
+        if (data?.user) {
+          const baseUser = mapInsForgeUser(data.user)
+          // Fetch full profile from user_profiles
+          const { data: profile } = await db.findById<UserProfileRow>('user_profiles', baseUser.id)
+          if (profile) {
+            setUser({
+              ...baseUser,
+              name: profile.name,
+              role: profile.role,
+            })
+          } else {
+            setUser(baseUser)
+          }
+        } else {
+          setUser(null)
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        // ANY auth error means the server-side session is invalid (expired,
+        // revoked, or never existed). Clear the stale local session data so
+        // we don't retry on every page load / visibility change and keep
+        // logging 401s.
+        // Previously only ERR_NO_REFRESH_TOKEN cleared the session, but token
+        // expiration errors (also 401) left stale data behind.
+        if (message === ERR_NO_REFRESH_TOKEN || message.includes('401') || message.includes('refresh')) {
+          clearSession()
+        } else {
+          // Non-auth errors (network, server 500, etc.) should be visible in DEV
+          // but are intentionally suppressed in production to avoid console noise.
+          // The stale local session is preserved so the next visibility change
+          // retries — if the server has recovered, the session restores silently.
+          if (import.meta.env.DEV) console.warn('[Auth] refreshUser failed:', message)
+        }
+        setUser(null)
+      } finally {
+        refreshGuardRef.current = false
+      }
+    })()
+
+    s_pendingRefresh = promise
+    await promise
+    s_pendingRefresh = null
   }, [])
 
   useEffect(() => {
     ;(async () => {
-      // Check if we have a valid 24-hour session stored
+      // Check if we have a valid session stored (24h for normal, 30d for remember me)
       const hasValidSession = isSessionValid()
       const storedUserId = getSessionUserId()
 
@@ -161,15 +202,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })()
   }, [refreshUser])
 
-  // Listen for auth state changes via the SDK's built-in session management
+  // ── Continuous session expiry check (runs every 60s) ─────────────
+  // Ensures the session expires as soon as its lifetime is reached,
+  // even if the application stays open continuously.
   useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isSessionValid()) {
+        // Session has expired — log out and clear state
+        clearSession()
+        setUser(null)
+      }
+    }, 60_000) // Every 60 seconds
+
+    return () => clearInterval(interval)
+  }, [])
+
+  // Listen for auth state changes via the SDK's built-in session management
+  // Uses a 500ms debounce to avoid rapid fire on consecutive tab switches
+  useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        refreshUser()
+        // Debounce: if the user rapidly switches tabs, only the last
+        // visibility-change-to-visible triggers a refresh
+        if (debounceTimer) clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(() => refreshUser(), 500)
       }
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      if (debounceTimer) clearTimeout(debounceTimer)
+    }
   }, [refreshUser])
 
   const login = useCallback(async (email: string, password: string, rememberMe?: boolean) => {
@@ -189,9 +254,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const fullUser = { ...baseUser, name: profile.name, role: profile.role }
       setUser(fullUser)
 
-      // Record the login time for 24-hour session tracking
-      // When rememberMe is false, session data goes to sessionStorage (cleared on browser close)
-      recordLogin(fullUser.id, rememberMe ?? true)
+      // Record the login time with expiration based on rememberMe
+      // - Normal (rememberMe=false): session expires in 24 hours
+      // - Remember Me (rememberMe=true): session expires in 30 days
+      // All session data is stored in localStorage (survives browser restarts).
+      recordLogin(fullUser.id, rememberMe ?? false)
 
       return { emailVerified: true }
     }
@@ -266,6 +333,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   )
 }
 
+// eslint-disable-next-line react/only-export-components
 export function useAuth() {
   const context = useContext(AuthContext)
   if (!context) {

@@ -4,10 +4,7 @@ import {
   Plus,
   MoreHorizontal,
   Trash2,
-  Receipt,
   Calculator,
-  TrendingDown,
-  Layers,
   Calendar,
   Search,
   Check,
@@ -17,7 +14,6 @@ import {
   Hash,
   DollarSign,
   Sparkles,
-  X,
 } from "lucide-react"
 import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
@@ -134,9 +130,17 @@ export function Expenses() {
     return price * qty
   }, [form.unitPrice, form.quantity])
 
-  // ── KPIs ──
+  // ── Computed data (order matters — no TDZ violations) ──
+  // Filtered by date range FIRST (dependencies of KPIs below)
+  const dateFilteredExpenses = useMemo(() => {
+    return expenses.filter(e => e.date >= dateRange.startDate && e.date <= dateRange.endDate)
+  }, [expenses, dateRange.startDate, dateRange.endDate])
+
   // Range-filtered KPIs
-  const rangeExpenses = dateFilteredExpenses.reduce((s, e) => s + e.amount, 0)
+  const rangeExpenses = useMemo(
+    () => dateFilteredExpenses.reduce((s, e) => s + e.amount, 0),
+    [dateFilteredExpenses],
+  )
   const rangeCount = dateFilteredExpenses.length
   // All-time KPIs (for reference)
   const totalAllTime = useMemo(() => expenses.reduce((s, e) => s + e.amount, 0), [expenses])
@@ -148,11 +152,6 @@ export function Expenses() {
     const q = categorySearch.toLowerCase()
     return EXPENSE_CATEGORIES.filter(c => c.label.toLowerCase().includes(q) || c.id.includes(q))
   }, [categorySearch])
-
-  // ── Filtered by category AND date range ──
-  const dateFilteredExpenses = useMemo(() => {
-    return expenses.filter(e => e.date >= dateRange.startDate && e.date <= dateRange.endDate)
-  }, [expenses, dateRange.startDate, dateRange.endDate])
 
   const filtered = useMemo(() => {
     let filtered = dateFilteredExpenses

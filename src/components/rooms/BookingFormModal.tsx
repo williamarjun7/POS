@@ -62,7 +62,6 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
   const [discount, setDiscount] = useState(0);
   const [idType, setIdType] = useState(booking?.idType ?? 'citizenship');
   const [idNumber, setIdNumber] = useState(booking?.idNumber ?? '');
-  const [paymentMethod, setPaymentMethod] = useState(booking?.paymentMethod ?? 'cash');
   const [notes, setNotes] = useState(booking?.specialRequests ?? '');
   const [nameError, setNameError] = useState('');
   const [phoneError, setPhoneError] = useState('');
@@ -219,6 +218,11 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
         orderBatchIds: [],
         notes: `Booking payment — Room ${roomLabel} (${pendingBookingData.guestName})`,
         sourcePage: 'booking',
+        invoiceItems: [{
+          name: `Room ${roomLabel} — ${nights} night${nights !== 1 ? 's' : ''}`,
+          quantity: nights,
+          unitPrice: (room.price || room.pricePerNight || 0),
+        }],
         paymentReference: `BK-${crypto.randomUUID()}`,
       })
 
@@ -243,16 +247,8 @@ export function BookingFormModal({ room, booking, mode = 'reserve', onClose }: B
           .eq('id', rpcInvoiceId)
           .catch(() => {})
 
-        // Insert invoice items for the room charge
-        const nightsCalc = nights
-        const nightlyRateCalc = room.price || room.pricePerNight || 0
-        db.insertMany('invoice_items', [{
-          invoice_id: rpcInvoiceId,
-          name: `Room ${roomLabel} — ${nightsCalc} night${nightsCalc !== 1 ? 's' : ''}`,
-          quantity: nightsCalc,
-          unit_price: nightlyRateCalc,
-          total_price: pendingBookingData.totalAmount,
-        }]).catch(() => {})
+        // Invoice items are already inserted atomically by the RPC.
+        // The client-side insert is removed — items are guaranteed with the invoice.
 
         // Link payment to booking
         await insforge.database

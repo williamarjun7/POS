@@ -43,8 +43,12 @@ interface FonepayQRDialogProps {
    * Called ONCE when payment is confirmed (successfully processed).
    * The caller should process payment persistence, printing, and close.
    * The dialog handles its own brief success animation before calling this.
+   *
+   * @param prn - The FonePay PRN (Payment Reference Number) that was used
+   *              to generate the QR. Must be saved as gatewayReference so
+   *              the payment recovery mechanism can verify gateway status.
    */
-  onSuccess: () => void
+  onSuccess: (prn: string) => void
   onCancel: () => void
   customerName?: string
   invoiceNumber?: string
@@ -94,6 +98,14 @@ export function FonepayQRDialog({
   const successHandledRef = useRef(false)
   /** Already expired — don't start new polling if component re-renders */
   const expiredRef = useRef(false)
+  /**
+   * Tracks the amount for which a QR was already generated.
+   * Prevents React Strict Mode double-mount from generating a new QR
+   * with a different PRN while the customer is scanning the first one.
+   * State and refs persist through Strict Mode's unmount/remount cycle,
+   * so this guard survives the cleanup.
+   */
+  const generatedAmountRef = useRef<number | null>(null)
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
@@ -108,6 +120,23 @@ export function FonepayQRDialog({
   // This saves ~2-3s because the QR was generated in the background
   // while the user was still on the review screen choosing a payment method.
   //
+  // ═══ Strict Mode ═══
+  // React Strict Mode double-mounts in development:
+  //   1st mount: effects run → INIT → QR generated → POLL_START → customer scans
+  //   Cleanup:   POLL_START cleanup (WS + polling killed)
+  //   2nd mount: effects re-run → INIT would generate NEW QR (different PRN)
+  //
+  // PROBLEM 1 (previous): Customer paid first QR, but second mount's new PRN
+  //   overwrote state → polling searched wrong PRN → payment lost.
+  //   FIX 1: generatedAmountRef prevents second mount from regenerating.
+  //
+  // PROBLEM 2 (this fix): First mount's async hadn't completed before cleanup.
+  //   A local `mounted` flag was set to `false` on cleanup, so when the async
+  //   DID complete, it skipped setting qrData/status → stuck on "generating".
+  //   FIX 2: Use cancelledRef (survives double-mount) instead of local `mounted`.
+  //   No cleanup needed — cancelledRef handles explicit cancel via handleCancel.
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
   // Console logs show the FonePay gateway returns empty qrMessage on the
   // FIRST call with a new PRN, and the actual QR on the SECOND call with
   // that SAME PRN.  This retry loop keeps using the same PRN so the
@@ -119,7 +148,15 @@ export function FonepayQRDialog({
     // Skip generation if we already have pre-generated data
     if (canUsePreGenerated) return
 
-    let mounted = true
+    // ═══ Strict Mode double-mount guard ═══
+    // State and refs survive the unmount/remount cycle. If we already
+    // generated a QR for this amount in the first mount, skip regeneration
+    // so the same PRN is reused and the customer's payment is found.
+    if (generatedAmountRef.current === amount) {
+      log('STRICT_MODE_GUARD', `Skipping re-generation — QR already active for ${amount}`)
+      return
+    }
+    generatedAmountRef.current = amount
 
     const initQR = async () => {
       log('INIT', 'Starting QR generation')
@@ -144,7 +181,7 @@ export function FonepayQRDialog({
       const MAX_ATTEMPTS = 2
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        if (!mounted || cancelledRef.current) return
+        if (cancelledRef.current) return
 
         try {
           const data = await generateFonepayQR({
@@ -152,7 +189,7 @@ export function FonepayQRDialog({
             prn,
             remarks1: `Highlands Cafe POS\n${invoiceNumber || customerName || 'POS Payment'}`,
           })
-          if (!mounted || cancelledRef.current) return
+          if (cancelledRef.current) return
 
           log('QR_GENERATED', { prn: prn.slice(0, 8), attempt })
 
@@ -181,7 +218,7 @@ export function FonepayQRDialog({
           setStatus('displaying')
           return
         } catch (err) {
-          if (!mounted) return
+          if (cancelledRef.current) return
           // Auth/network errors surface immediately — don't retry
           if (err instanceof FonepayError &&
               (err.code === 'FUNCTION_ERROR' || err.code === 'FONEPAY_API_ERROR')) {
@@ -195,7 +232,7 @@ export function FonepayQRDialog({
     }
 
     initQR().catch((err) => {
-      if (!mounted) return
+      if (cancelledRef.current) return
       log('QR_GENERATION_ERROR', err)
       setErrorMessage(
         err instanceof FonepayError
@@ -207,12 +244,10 @@ export function FonepayQRDialog({
       setStatus('error')
     })
 
-    return () => {
-      mounted = false
-    }
-    // Only regenerate on explicit props that change the QR content.
-    // invoiceNumber is excluded because it is baked into the remark at
-    // generation time; regenerating would create a duplicate PRN error.
+    // No cleanup needed: cancelledRef handles the explicit cancel case.
+    // Strict Mode double-mount is handled by generatedAmountRef.
+    // Removing the `mounted` flag prevents the async from being abandoned
+    // mid-flight when Strict Mode simulates unmount/remount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amount, orderId, customerName])
 
@@ -362,7 +397,7 @@ export function FonepayQRDialog({
     return () => {
       if (countdownRef.current) clearInterval(countdownRef.current)
     }
-  }, [status === 'success']) // only re-create when exiting success state
+  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Fire onSuccess after success animation (separate effect, not clobbered by polling cleanup) ──
   useEffect(() => {
@@ -370,13 +405,16 @@ export function FonepayQRDialog({
 
     const timer = setTimeout(() => {
       if (!cancelledRef.current) {
-        log('ON_SUCCESS_CALLED', 'Handing off to parent')
-        onSuccess()
+        // Pass the FonePay PRN as gatewayReference so the parent can
+        // save it immediately for crash-safe payment recovery.
+        const prn = qrData?.paymentRefId || ''
+        log('ON_SUCCESS_CALLED', { prn: prn.slice(0, 8) })
+        onSuccess(prn)
       }
     }, 600)
 
     return () => clearTimeout(timer)
-  }, [status, onSuccess])
+  }, [status, onSuccess, qrData?.paymentRefId])
 
   // ─── Callbacks ───────────────────────────────────────────
   const handleCancel = useCallback(() => {
@@ -401,6 +439,7 @@ export function FonepayQRDialog({
     cancelledRef.current = false
     successHandledRef.current = false
     expiredRef.current = false
+    generatedAmountRef.current = null   // Reset Strict Mode guard so regeneration works
     setQrVerified(false)
     setErrorMessage('')
 

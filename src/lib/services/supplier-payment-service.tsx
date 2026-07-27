@@ -68,7 +68,7 @@ async function fetchSupplierPaymentsFromDb(
       .lte('payment_date', endDate);
   }
 
-  const { data, error } = await query;
+  const { data } = await query;
   return (data ?? []).map((row: unknown) => rowToSupplierPayment(row as SupplierPaymentRow));
 }
 

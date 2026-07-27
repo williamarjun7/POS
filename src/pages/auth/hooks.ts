@@ -107,7 +107,7 @@ export function useLoginForm() {
       setError(err?.message ?? 'Invalid email or password. Please try again.')
       setStep('error')
     }
-  }, [validate, checkLimit, isLocked, remainingLockSeconds, login, form.email.value, form.password.value, navigate])
+  }, [validate, checkLimit, isLocked, remainingLockSeconds, login, form.email.value, form.password.value, form.rememberMe, navigate])
 
   const touchAll = useCallback(() => {
     setForm(prev => ({

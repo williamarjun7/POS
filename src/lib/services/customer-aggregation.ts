@@ -35,8 +35,6 @@ import { useQuery } from '@tanstack/react-query'
 import { insforge } from '@/lib/services/auth-service'
 import { getPaymentMethodLabel } from '@/lib/payment-methods'
 import type {
-  CustomerRow,
-  InvoiceRow,
   PaymentRow,
 } from '@/lib/db/types'
 
@@ -120,7 +118,10 @@ function buildPaidMap(payments: PaymentRow[]): Map<string, number> {
  * Compute ALL statistics for a single customer.
  *
  * Outstanding Credit is computed as:
- *   Remaining Balance = Invoice Total - Discount - SUM(non-credit payments)
+ *   Remaining Balance = Invoice Total - SUM(non-credit payments)
+ *
+ * Note: invoice.total is ALREADY the post-discount net amount (per DB schema).
+ * The discount is embedded in total — DO NOT subtract discount again.
  *
  * This is calculated across ALL non-cancelled invoices (not just unpaid ones)
  * because credit-settled invoices (status='paid' via cash+credit) still have
@@ -164,13 +165,13 @@ export async function computeCustomerStats(
     paidByInvoice = buildPaidMap(realPaymentsOnly(payments))
   }
 
-  // Outstanding Credit = SUM(invoice.total - discount - real payments) across ALL non-cancelled invoices
-  // This correctly captures credit portions on settled invoices.
+  // Outstanding Credit = SUM(invoice.total - real payments) across ALL non-cancelled invoices
+  // invoice.total is already the post-discount net amount — DO NOT subtract discount again.
   let outstandingCredit = 0
   let outstandingInvoiceCount = 0
   for (const inv of nonCancelledInvoices) {
     const paid = paidByInvoice.get(inv.id) ?? 0
-    const remaining = Math.max(0, Number(inv.total) - Number(inv.discount) - paid)
+    const remaining = Math.max(0, Number(inv.total) - paid)
     if (remaining > 0) {
       outstandingCredit += remaining
       outstandingInvoiceCount++
@@ -271,13 +272,13 @@ export async function computeAllCustomerStats(
     // Total Spent = sum of all invoice totals
     const totalSpent = custInvoices.reduce((sum, inv) => sum + Number(inv.total), 0)
 
-    // Outstanding = SUM(total - discount - real payments) across ALL invoices
-    // This correctly captures credit portions on settled invoices.
+    // Outstanding = SUM(invoice.total - real payments) across ALL invoices
+    // invoice.total is already the post-discount net amount — DO NOT subtract discount again.
     let outstandingCredit = 0
     let outstandingInvoiceCount = 0
     for (const inv of custInvoices) {
       const paid = paidByInvoice.get(inv.id) ?? 0
-      const remaining = Math.max(0, Number(inv.total) - Number(inv.discount) - paid)
+      const remaining = Math.max(0, Number(inv.total) - paid)
       if (remaining > 0) {
         outstandingCredit += remaining
         outstandingInvoiceCount++
@@ -316,10 +317,11 @@ export interface OverallOutstanding {
  * Compute the total outstanding balance across ALL customers.
  * Used by the Customers page header stats and Dashboard.
  *
- * Outstanding = SUM(invoice.total - discount - non-credit payments) across ALL
- * non-cancelled invoices that have a valid customer_id.  Orphan invoices
- * (customer_id IS NULL) are excluded to avoid inflating customer KPIs with
- * Walk-in or unlinked records.
+ * Outstanding = SUM(invoice.total - non-credit payments) across ALL
+ * non-cancelled invoices that have a valid customer_id.
+ * invoice.total is already the post-discount net amount — DO NOT subtract discount again.
+ * Orphan invoices (customer_id IS NULL) are excluded to avoid inflating
+ * customer KPIs with Walk-in or unlinked records.
  *
  * @param startDate - Optional Kathmandu-local start date (YYYY-MM-DD) to filter invoices
  * @param endDate   - Optional Kathmandu-local end date (YYYY-MM-DD) to filter invoices
@@ -368,7 +370,7 @@ export async function computeOverallOutstanding(
 
   for (const inv of invoiceList) {
     const paid = paidByInvoice.get(inv.id) ?? 0
-    const outstanding = Math.max(0, Number(inv.total) - Number(inv.discount) - paid)
+    const outstanding = Math.max(0, Number(inv.total) - paid)
     if (outstanding > 0) {
       totalOutstanding += outstanding
       if (inv.customer_id) customersWithDebt.add(inv.customer_id)

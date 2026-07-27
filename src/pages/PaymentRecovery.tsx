@@ -15,11 +15,10 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useNavigate } from 'react-router-dom'
 import {
-  Shield, RefreshCw, AlertTriangle, CheckCircle, Clock,
-  ExternalLink, Loader2, Search, X, ArrowLeft, FileWarning,
-  Ban, Trash2, Info, Activity,
+  RefreshCw, AlertTriangle, CheckCircle, Clock,
+  Loader2, Search, X, FileWarning,
+  Ban, Info, Activity,
 } from 'lucide-react'
 import { PageTransition } from '@/components/ui/PageTransition'
 import { PageHeader } from '@/components/PageHeader'
@@ -27,17 +26,14 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { Button } from '@/components/ui/button'
 import { showSuccess, showError } from '@/components/ui/toast'
 import { formatCurrency } from '@/lib/utils'
-import { useAuth } from '@/lib/core/auth-context'
 import { RequirePermission } from '@/lib/core/PermissionGuards'
 import {
   loadPendingPayments,
   loadFailedPayments,
-  retryPendingPayment,
-  completePendingPayment,
   countPendingPayments,
   type PendingPaymentRecord,
 } from '@/lib/services/pending-payment-store'
-import { runPaymentRecovery, retryFailedPayment, type RecoveryResult } from '@/lib/services/payment-recovery'
+import { runPaymentRecovery, retryFailedPayment } from '@/lib/services/payment-recovery'
 import {
   runReconciliation,
   getReconciliationSummary,
@@ -86,8 +82,6 @@ function statusColor(status: string): 'success' | 'warning' | 'destructive' | 'd
 // ─── Component ───────────────────────────────────────────────
 
 export function PaymentRecovery() {
-  const navigate = useNavigate()
-  const { user } = useAuth()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
 
   // Data states
@@ -102,7 +96,6 @@ export function PaymentRecovery() {
   }>({ pendingCount: 0, failedCount: 0, invoicesWithoutPayments: 0 })
 
   // UI states
-  const [loading, setLoading] = useState(true)
   const [recovering, setRecovering] = useState(false)
   const [reconciling, setReconciling] = useState(false)
   const [retryingId, setRetryingId] = useState<string | null>(null)
@@ -154,7 +147,7 @@ export function PaymentRecovery() {
       }
 
       await loadData()
-    } catch (err) {
+    } catch {
       showError('Recovery process failed')
     } finally {
       setRecovering(false)
@@ -169,7 +162,7 @@ export function PaymentRecovery() {
       setReconciliationReport(report)
       showSuccess(`Reconciliation complete: ${report.summary.totalScanned} items scanned${autoRepair ? `, ${report.summary.repairsSucceeded} repaired` : ''}`)
       await loadData()
-    } catch (err) {
+    } catch {
       showError('Reconciliation process failed')
     } finally {
       setReconciling(false)
@@ -187,7 +180,7 @@ export function PaymentRecovery() {
         showError(`Retry failed: ${result.detail}`)
       }
       await loadData()
-    } catch (err) {
+    } catch {
       showError('Retry failed')
     } finally {
       setRetryingId(null)
@@ -200,7 +193,7 @@ export function PaymentRecovery() {
       await completePendingPayment(record.paymentReference)
       showSuccess('Payment record dismissed')
       await loadData()
-    } catch (err) {
+    } catch {
       showError('Failed to dismiss record')
     }
   }

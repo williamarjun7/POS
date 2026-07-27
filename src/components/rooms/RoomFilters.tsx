@@ -64,6 +64,7 @@ export function RoomFilters({ filters, onChange, roomTypes }: RoomFiltersProps) 
   );
 }
 
+// eslint-disable-next-line react/only-export-components
 export function applyFilters(rooms: Room[], filters: FiltersState): Room[] {
   return rooms.filter((room) => {
     if (filters.search && !room.room_number?.toLowerCase().includes(filters.search.toLowerCase())) {

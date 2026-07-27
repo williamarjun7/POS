@@ -202,6 +202,7 @@ async function saveToDb(settings: PrintSettings): Promise<void> {
 let _cachedSettings: PrintSettings = loadFromStorage();
 
 /** Synchronous snapshot for non-React code. Always up-to-date. */
+// eslint-disable-next-line react/only-export-components
 export function getPrintSettings(): PrintSettings {
   return _cachedSettings;
 }
@@ -314,6 +315,7 @@ export function PrintSettingsProvider({ children }: { children: React.ReactNode 
 
 /* ─── Hook ──────────────────────────────────────────────────── */
 
+// eslint-disable-next-line react/only-export-components
 export function usePrintSettings(): PrintSettingsContextValue {
   const ctx = useContext(PrintSettingsContext);
   if (!ctx) {

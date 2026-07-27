@@ -19,7 +19,7 @@ import { showSuccess, showError } from "@/components/ui/toast"
 import { RequirePermission } from "@/lib/core/PermissionGuards"
 import { BaseModal } from "@/components/ui/modal"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
-import { FormInput, FormSelect, FormTextarea, FormActions } from "@/components/ui/form-field"
+import { FormInput, FormTextarea, FormActions } from "@/components/ui/form-field"
 import { useServerPagination } from "@/lib/hooks/useServerPagination"
 import { usePaymentsList } from '@/lib/services/payment-service'
 import { logActivitySafe } from '@/lib/services/activity-log-service'
@@ -249,11 +249,6 @@ export function Finance() {
 
   useEffect(() => {
     loadPageData()
-    // Background refresh every 15s while tab is visible
-    const interval = setInterval(() => {
-      if (!document.hidden) loadPageData()
-    }, 15_000)
-    return () => clearInterval(interval)
   }, [loadPageData])
 
   // Map DB rows to frontend Invoice type

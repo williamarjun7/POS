@@ -1,8 +1,7 @@
-import { useState } from "react"
 import { motion } from "framer-motion"
 import { cn, formatCurrency } from "@/lib/utils"
 import {
-  CreditCard, Wallet, X, ArrowLeft,
+  CreditCard, Wallet,
   Loader2, CheckCircle,
 } from "lucide-react"
 

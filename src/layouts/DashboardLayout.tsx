@@ -1,7 +1,6 @@
 import { useState } from "react"
 import { Outlet } from "react-router-dom"
 import { motion, AnimatePresence } from "framer-motion"
-import { cn } from "@/lib/utils"
 import { Sidebar } from "@/layouts/Sidebar"
 import { TopNav } from "@/layouts/TopNav"
 import { RouteTransition } from "@/components/RouteTransition"

@@ -124,7 +124,7 @@ export function useRateLimit(options?: RateLimitOptions): RateLimitResult {
       setRemainingLockSeconds(0)
       attemptRef.current = 0
     }, lockDurationMs)
-  }, [lockDurationMs])
+  }, [clearCooldown, lockDurationMs])
 
   const checkLimit = useCallback((): boolean => {
     const now = Date.now()

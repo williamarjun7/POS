@@ -49,9 +49,13 @@ secrets.*
 *.local
 opencode.json
 
-# Scripts with hardcoded secrets — do NOT commit credentials in these
+# Scripts with hardcoded secrets or DB credentials — do NOT commit
 scripts/create-owner-account.mjs
 scripts/verify-owner-email.mjs
+scripts/run-diagnostics.mjs
+scripts/apply-drop-indexes.mjs
+scripts/fix-advisor-issues.mjs
+scripts/check-fk-indexes.mjs
 
 # Playwright E2E test artifacts
 playwright-report/

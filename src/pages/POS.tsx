@@ -5,12 +5,11 @@ import {
   Coffee, Egg, UtensilsCrossed, Wine, Search, X, Plus, Minus,
   User as UserIcon, Table2, ChevronLeft, ChevronRight, ShoppingCart,
   Grid3X3, ArrowLeft, Receipt, Trash2, Keyboard, Zap, Lock, ChevronDown, BedDouble,
-  MoreVertical, Ban,
+  Ban,
 } from 'lucide-react';
 import { PageTransition } from '@/components/ui/PageTransition';
 import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
 import { showSuccess, showError } from '@/components/ui/toast';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RequirePermission } from '@/lib/core/PermissionGuards';
 import { ensureCustomer, recordCreditCharge, updateCustomerAfterInvoice } from '@/lib/services/customer-ledger';
 import { useMenuCategories, useMenuItems } from '@/lib/api/menu.hooks';
@@ -23,7 +22,6 @@ import { toPaymentMethodKey, getPaymentMethodLabel } from '@/lib/payment-methods
 import { useAuth } from '@/lib/core/auth-context';
 import { logActivitySafe } from '@/lib/services/activity-log-service';
 import { insforge } from '@/lib/services/auth-service';
-import { insertInvoiceItems } from '@/lib/services/invoice-items-service';
 import { deductStockForSoldItems } from '@/lib/services/inventory-service';
 import { processPaymentWithRecovery } from '@/lib/services/unified-payment-service';
 import { updateAllCachesOnPayment } from '@/lib/services/cache-updater';
@@ -32,7 +30,6 @@ import { formatCurrency } from '@/lib/utils';
 import { TABLE_STATUS_LABELS, TABLE_STATUS_COLORS } from '@/lib/constants';
 import {
   calculateTotalWithCart,
-  collectBillableItems,
   hasBillableItems,
   getBillableBatches,
   isBatchBillable,
@@ -389,7 +386,7 @@ export function POS() {
       queryClient.invalidateQueries({ queryKey: ['analytics'] });
 
       showSuccess('Item voided successfully');
-    } catch (err) {
+    } catch {
       showError('Failed to void item');
     }
   }
@@ -518,7 +515,7 @@ export function POS() {
         }
       }
     } catch { /* ignore corrupt sessionStorage */ }
-  }, []);
+  }, [searchParams]);
 
   // Save session state on changes (debounced 500ms)
   const cartSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -594,7 +591,7 @@ export function POS() {
   }, [fetchedBatches, selectedTableId]);
 
   // ─── Previous batches for selected table ─────────
-  const tableBatches = selectedTableId ? (orderBatches[selectedTableId] || []) : [];
+  const tableBatches = useMemo(() => selectedTableId ? (orderBatches[selectedTableId] || []) : [], [selectedTableId, orderBatches]);
   // ─── Filter for display: only show billable batches ───
   // This ensures that after full payment, the Previous Batches section
   // disappears and the table looks like a fresh start.
@@ -873,7 +870,13 @@ export function POS() {
     //   4. On failure: keeping persisted state for automatic startup recovery
     //
     // The payment reference serves as the idempotency key — reused on retries.
-    const paymentReference = `PAY-${crypto.randomUUID()}`
+    // For FonePay payments, the payment_reference was already pre-generated
+    // by handleFonepaySuccess (format: FP-{prn}) and a pending_payments record
+    // was saved BEFORE the success review screen. Reuse it so that
+    // processPaymentWithRecovery skips savePendingPayment (the pending_payments
+    // record already exists) and the RPC uses the same FP-{prn} reference for
+    // idempotency + gateway verification.
+    const paymentReference = paymentResult.paymentReference || `PAY-${crypto.randomUUID()}`
 
     // Declare before try-block so they're accessible in post-RPC closures and showSuccess
     let invoiceId: string | undefined
@@ -901,7 +904,15 @@ export function POS() {
         sourcePage: 'pos',
         creditAmount: paymentResult.creditAmount,
         creditCustomerName: paymentResult.creditCustomerName,
-        gatewayReference: undefined,
+        // For FonePay payments (paymentReference starts with 'FP-'), the PRN
+        // IS the payment reference prefixed with FP- (format: FP-{prn}).
+        // Extract the PRN and use it as gatewayReference so the recovery
+        // mechanism can verify gateway status. Non-FonePay payments remain
+        // unchanged (gatewayReference = undefined).
+        gatewayReference: paymentResult.paymentReference?.startsWith('FP-')
+          ? paymentResult.paymentReference.replace('FP-', '')
+          : undefined,
+        invoiceItems: invoiceItemsList.length > 0 ? invoiceItemsList : undefined,
         paymentReference,
       })
 
@@ -926,39 +937,13 @@ export function POS() {
         isNewInvoice: rpcResult.isNewInvoice,
         paymentId: rpcResult.paymentId,
         batchUpdateCount: rpcResult.batchUpdateCount,
+        itemInsertCount: rpcResult.itemInsertCount,
         timingMs: rpcResult.timingMs,
       })
 
-      // ── Invoice items insertion (CRITICAL for Finance display) ──
-      // This must happen BEFORE navigation so the Finance page sees invoice_items.
-      // The RPC creates the invoice with totals but does NOT insert line items.
-      // We do it here synchronously (no fire-and-forget) so it's guaranteed.
-      // Retry up to 3 times with exponential backoff for resilience.
-      if (invoiceItemsList.length > 0) {
-        let inserted = false
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          try {
-            const insertedItems = await insertInvoiceItems(invoiceId, invoiceItemsList)
-            logPayment('invoice_items_inserted', { invoiceId, itemCount: insertedItems.length })
-            inserted = true
-            break
-          } catch (iiErr) {
-            if (attempt < 3) {
-              const delay = 500 * Math.pow(2, attempt - 1)
-              if (import.meta.env.DEV) {
-                console.warn(`[PAYMENT] Invoice items insert attempt ${attempt}/3 failed, retrying in ${delay}ms:`, iiErr instanceof Error ? iiErr.message : iiErr)
-              }
-              await new Promise(resolve => setTimeout(resolve, delay))
-            } else {
-              // Non-critical for payment integrity — invoice totals are already correct.
-              // Log and continue; the invoice still shows the correct total in Finance.
-              if (import.meta.env.DEV) {
-                console.error('[PAYMENT] Failed to insert invoice items after 3 attempts:', iiErr instanceof Error ? iiErr.message : iiErr)
-              }
-            }
-          }
-        }
-      }
+      // Invoice items are now inserted ATOMICALLY inside the process_payment RPC.
+      // The client-side retry loop is removed — items are guaranteed to exist
+      // alongside the invoice. The Finance page will always show line items.
 
       // ── Split payments: insert additional payment records for extra methods ──
       // The RPC only records the FIRST payment method. Any additional methods
@@ -1049,6 +1034,7 @@ export function POS() {
     // for payment integrity — they handle display history, customer linking,
     // inventory tracking, and invoice line items. Failures are logged and
     // retried with exponential backoff to ensure eventual consistency.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const customerOpsPromise = (async () => {
       const MAX_RETRIES = 3;
       const BASE_DELAY_MS = 500;

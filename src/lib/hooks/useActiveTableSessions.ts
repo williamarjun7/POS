@@ -184,6 +184,5 @@ export function useActiveTableSessions() {
     queryKey: TABLE_SESSIONS_KEY,
     queryFn: fetchActiveTableSessions,
     staleTime: 15_000,
-    refetchInterval: 30_000,
   })
 }

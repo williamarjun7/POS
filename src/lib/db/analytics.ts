@@ -22,12 +22,6 @@ export interface RevenueByPeriodData {
   dayBuckets: Record<string, number>
 }
 
-/** Kathmandu-local date string (Asia/Kathmandu = UTC+5:45). */
-function kathmanduDateStr(date?: Date): string {
-  const d = date ?? new Date()
-  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kathmandu' })
-}
-
 function kathmanduStartUTC(kathmanduDate: string): string {
   return new Date(kathmanduDate + 'T00:00:00+05:45').toISOString()
 }

@@ -119,6 +119,12 @@ export interface PendingPaymentPayload {
   creditCustomerName?: string
   /** Notes */
   notes?: string
+  /** Invoice line items (inserted atomically by the RPC) */
+  invoiceItems?: Array<{
+    name: string
+    quantity: number
+    unitPrice: number
+  }>
 }
 
 // ─── DB Row (snake_case) ────────────────────────────────────
@@ -275,18 +281,6 @@ async function updateDbRecord(id: string, updates: Record<string, unknown>): Pro
     .eq('id', id)
 
   if (error) throw new Error(`Failed to update pending payment: ${error.message}`)
-}
-
-/**
- * Delete a pending payment record from the DB.
- */
-async function deleteDbRecord(id: string): Promise<void> {
-  const { error } = await insforge.database
-    .from('pending_payments')
-    .delete()
-    .eq('id', id)
-
-  if (error) throw new Error(`Failed to delete pending payment: ${error.message}`)
 }
 
 /**
@@ -546,10 +540,4 @@ export async function markPaymentProcessing(paymentReference: string): Promise<v
   })
 }
 
-// ─── Dev-only logging ───────────────────────────────────────
 
-function log(...args: unknown[]) {
-  if (import.meta.env.DEV) {
-    console.log('[PENDING_PAYMENT]', ...args)
-  }
-}

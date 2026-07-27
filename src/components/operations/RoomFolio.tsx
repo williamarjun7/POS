@@ -14,20 +14,18 @@
  * - "Checkout" button to settle the folio
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { motion } from "framer-motion"
-import { cn } from "@/lib/utils"
 import { insforge } from "@/lib/services/auth-service"
 import { useNavigate } from "react-router-dom"
-import { showSuccess, showError } from "@/components/ui/toast"
 import { DialogButton } from "@/components/ui/ButtonVariants"
 import { formatCurrency } from "@/lib/utils"
 import type { Room, Booking } from "@/types"
 import {
   X, CalendarDays, Sofa, Percent, Wallet, LogOut,
-  Coffee, Egg, UtensilsCrossed, Wine, Receipt,
-  IndianRupee, ShoppingCart, BedDouble, Clock,
-  Banknote, CreditCard,
+  Coffee, Egg, UtensilsCrossed, Wine,
+  IndianRupee, ShoppingCart, BedDouble,
+  Banknote,
 } from "lucide-react"
 
 // ─── Types ───────────────────────────────────────────────────

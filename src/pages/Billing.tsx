@@ -31,7 +31,6 @@ import {
   type FonepayWSStatus,
 } from "@/lib/services/fonepay-service"
 import { getPaymentMethodLabel, toPaymentMethodKey } from "@/lib/payment-methods"
-import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
 import { PaymentBreakdown } from "@/components/payments/PaymentBreakdown"
 import { ConfirmDialog } from "@/components/ConfirmDialog"
 import type { PaymentMethod } from "@/types"
@@ -61,7 +60,6 @@ export function Billing() {
   const { user } = useAuth()
 
   const queryClient = useQueryClient()
-
   // ─── React Query data fetching ─────────────────────────
   const { data: invoice, isLoading: invoiceLoading, error: invoiceError } = useInvoice(id)
   const { data: paymentsData = [] } = useInvoicePayments(id)
@@ -96,7 +94,7 @@ export function Billing() {
         }
       })
       .catch(() => {})
-  }, [id, invoice?.invoice_number, invoice?.total])
+  }, [id, invoice, invoice?.invoice_number, invoice?.total])
 
   // Fetch order batch items for this invoice to calculate voided items
   useEffect(() => {
@@ -292,7 +290,7 @@ export function Billing() {
     invalidatePaymentCaches()
 
     return createdPayment
-  }, [invoice, id, totalPaid, total, user, invalidatePaymentCaches])
+  }, [invoice, id, totalPaid, total, totalCredit, user, invalidatePaymentCaches])
 
   // ─── Fonepay QR flow ──────────────────────────────────────
   const startFonepayPayment = useCallback(async () => {

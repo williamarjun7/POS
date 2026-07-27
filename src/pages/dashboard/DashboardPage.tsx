@@ -33,8 +33,8 @@ import {
   TrendingUp, ChevronRight, Users,
   ArrowRight, DollarSign, Timer,
   BedDouble, Clock, Banknote,
-  Smartphone, QrCode, CreditCard, CircleDollarSign,
-  LayoutGrid, List, Percent,
+  Smartphone, QrCode, CircleDollarSign,
+  LayoutGrid, List,
 } from 'lucide-react';
 import {
   useDashboardTables,
@@ -267,9 +267,9 @@ export default function DashboardPage() {
     navigate(`/pos?table=${table.id}`);
   };
 
-  const handleRoomPos = (room: Room) => {
+  const handleRoomPos = useCallback((room: Room) => {
     navigate(`/pos?room=${room.id}`);
-  };
+  }, [navigate]);
 
   const handleRoomAction = useCallback(async (room: Room, action: string, booking?: Booking | null) => {
     switch (action) {
@@ -366,7 +366,7 @@ export default function DashboardPage() {
         setConfirmAction({ type: 'status', room, status: 'available', booking });
         break;
     }
-  }, [updateStatus, navigate]);
+  }, [updateStatus, handleRoomPos]);
 
   const getTimestamp = () => Date.now();
 

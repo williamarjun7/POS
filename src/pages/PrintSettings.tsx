@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Printer, Phone, FileText, Ruler, Image, Copy, RefreshCw, Receipt, CheckCircle2, Cloud, AlertCircle } from 'lucide-react';
+import { Printer, Phone, Ruler, Image, Copy, RefreshCw, Receipt, CheckCircle2, Cloud, AlertCircle } from 'lucide-react';
 import { PageTransition } from '@/components/ui/PageTransition';
 import { FormToggle } from '@/components/ui/form-field';
 import { usePrintSettings, type PaperSize } from '@/lib/services/print-settings';

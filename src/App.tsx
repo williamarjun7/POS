@@ -130,7 +130,7 @@ function AuthAwareSessionTimeout() {
   const { showWarning, timeLeft, dismissWarning, logout } = useSessionTimeout()
   const { user } = useAuth()
   const { isLocked, unlockWithPin } = useScreenLock()
-  const [loggingOut, setLoggingOut] = useState(false)
+  const [, setLoggingOut] = useState(false)
 
   const handleLogout = useCallback(async () => {
     setLoggingOut(true)

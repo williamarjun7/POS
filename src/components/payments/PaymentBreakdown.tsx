@@ -125,7 +125,7 @@ export function PaymentBreakdown({
     propPayments ? undefined : invoiceId,
   )
 
-  const rawEntries = propPayments ?? fetchedPayments ?? []
+  const rawEntries = useMemo(() => propPayments ?? fetchedPayments ?? [], [propPayments, fetchedPayments])
   const entries = rawEntries.slice(0, maxItems)
   const remaining = rawEntries.length - maxItems
 
@@ -309,6 +309,7 @@ export function PaymentBreakdown({
 
 // ─── Standalone helper to format a single payment line ──────
 
+// eslint-disable-next-line react/only-export-components
 export function formatPaymentLine(method: string, amount: number): string {
   return `${getPaymentMethodLabel(method)} (${formatCurrency(amount)})`
 }

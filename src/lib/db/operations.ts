@@ -78,6 +78,8 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
     if (b.table_id) batchToTable.set(b.id, b.table_id)
   }
 
+  // Track which batches have at least one billable item
+  const hasBillableItemsByBatch = new Set<string>()
   const unpaidItemTotalByTable: Record<string, number> = {}
   if (batchIds.length > 0) {
     const { data: itemsData } = await insforge.database
@@ -93,7 +95,12 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
     }>
 
     for (const item of items) {
-      if (item.status !== 'paid' && item.status !== 'credit' && item.status !== 'cancelled' && item.status !== 'voided') {
+      const isBillable = item.status !== 'paid' && item.status !== 'credit' &&
+        item.status !== 'cancelled' && item.status !== 'voided'
+
+      if (isBillable) {
+        hasBillableItemsByBatch.add(item.batch_id)
+
         const tableId = batchToTable.get(item.batch_id)
         if (tableId) {
           unpaidItemTotalByTable[tableId] = (unpaidItemTotalByTable[tableId] ?? 0) +
@@ -103,9 +110,15 @@ export async function fetchDashboardTables(): Promise<DashboardTable[]> {
     }
   }
 
-  // 4. Group batches by table for session metadata
+  // 4. Group batches by table for session metadata.
+  //    Exclude orphan batches that have 0 billable items — these can happen when
+  //    a batch is stuck in 'pending' status with all items voided/cancelled,
+  //    which would falsely keep the table marked as 'occupied'.
   const batchesByTable = new Map<string, typeof batches>()
   for (const batch of batches) {
+    // Skip batches with no billable items — they don't contribute to occupancy
+    if (!hasBillableItemsByBatch.has(batch.id)) continue
+
     const tid = batch.table_id!
     if (!batchesByTable.has(tid)) batchesByTable.set(tid, [])
     batchesByTable.get(tid)!.push(batch)

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { insforge } from "@/lib/services/auth-service"
@@ -8,8 +8,8 @@ import { DialogButton } from "@/components/ui/ButtonVariants"
 import type { Room } from "@/types"
 import type { Booking } from "@/lib/services/booking-service"
 import {
-  X, CalendarDays, CalendarRange, Clock, ArrowRightFromLine,
-  BedDouble, History, User, IndianRupee, Search,
+  X, Clock, ArrowRightFromLine,
+  BedDouble, History, User, Search,
   Hotel, CheckCircle,
 } from "lucide-react"
 

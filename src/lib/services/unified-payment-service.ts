@@ -28,7 +28,7 @@
  *   If RPC fails at any point, the pending_payments row remains for startup recovery.
  */
 
-import { savePendingPayment, completePendingPayment, failPendingPayment }
+import { savePendingPayment, completePendingPayment, failPendingPayment, getPendingPayment }
   from '@/lib/services/pending-payment-store'
 import { callProcessPayment, type ProcessPaymentParams, type ProcessPaymentResult }
   from '@/lib/services/process-payment-rpc'
@@ -66,6 +66,12 @@ export interface UnifiedPaymentInput {
   batchIds: string[]
   /** Order batch IDs for invoice linking */
   orderBatchIds: string[]
+  /** Invoice line items to be inserted atomically by the RPC */
+  invoiceItems?: Array<{
+    name: string
+    quantity: number
+    unitPrice: number
+  }>
   /** Gateway reference (FonePay PRN) for recovery verification */
   gatewayReference?: string
   /** Credit amount if applicable */
@@ -156,48 +162,70 @@ export async function processPaymentWithRecovery(
   // ═══════════════════════════════════════════════════════════════
   // Only needed for gateway payments where the remote gateway has confirmed
   // the transaction but the invoice hasn't been created yet.
+  //
+  // IDEMPOTENCY: If a pending_payments record for this paymentReference
+  // ALREADY EXISTS (pre-saved by handleFonepaySuccess before the success
+  // review screen), skip saving a new one. This ensures crash recovery:
+  //   - Browser crash after gateway confirmation but before Skip/Print
+  //   → pending_payments record exists → recovered on startup.
+  //   - Browser crash after Skip/Print but before RPC completes
+  //   → pending_payments record exists → recovered on startup.
   // ═══════════════════════════════════════════════════════════════
 
   if (needsRecovery) {
-    const payload: PendingPaymentPayload = {
-      invoiceNumber: input.invoiceNumber,
-      customerName: input.customerName,
-      tableId: input.tableId,
-      subtotal: input.subtotal,
-      discount: input.discount,
-      total: input.total,
-      invoiceStatus: input.invoiceStatus,
-      paymentMethod: input.paymentMethod,
-      paidAmount: input.paidAmount,
-      paymentReference,
-      userId: input.userId ?? null,
-      paidItemIds: input.paidItemIds,
-      itemPaidStatus: input.itemPaidStatus,
-      batchIds: input.batchIds,
-      orderBatchIds: input.orderBatchIds,
-      gatewayReference: input.gatewayReference,
-      creditAmount: input.creditAmount,
-      creditCustomerName: input.creditCustomerName,
-      notes: input.notes,
-    }
+    // Check if a pending payment was already saved (e.g. by FonePay flow)
+    const existingPending = await getPendingPayment(paymentReference)
+      .catch(() => null)
 
-    try {
-      await savePendingPayment(payload)
-    } catch (err) {
-      // Persistence failed — this is critical because we lose recovery capability.
-      // Log and abort; the gateway has confirmed payment but we can't persist.
-      const errMsg = err instanceof Error ? err.message : 'Failed to persist pending payment'
-      trackPaymentEvent('payment_failed', {
-        paymentReference,
-        errorMessage: errMsg,
+    if (!existingPending) {
+      const payload: PendingPaymentPayload = {
+        invoiceNumber: input.invoiceNumber,
+        customerName: input.customerName,
         tableId: input.tableId,
-        elapsedMs: Math.round(performance.now() - startTime),
-      })
-      return {
-        success: false,
-        error: errMsg,
-        errorCode: 'PERSISTENCE_ERROR',
+        subtotal: input.subtotal,
+        discount: input.discount,
+        total: input.total,
+        invoiceStatus: input.invoiceStatus,
+        paymentMethod: input.paymentMethod,
+        paidAmount: input.paidAmount,
         paymentReference,
+        userId: input.userId ?? null,
+        paidItemIds: input.paidItemIds,
+        itemPaidStatus: input.itemPaidStatus,
+        batchIds: input.batchIds,
+        orderBatchIds: input.orderBatchIds,
+        invoiceItems: input.invoiceItems,
+        gatewayReference: input.gatewayReference,
+        creditAmount: input.creditAmount,
+        creditCustomerName: input.creditCustomerName,
+        notes: input.notes,
+      }
+
+      try {
+        await savePendingPayment(payload)
+      } catch (err) {
+        // Persistence failed — this is critical because we lose recovery capability.
+        // Log and abort; the gateway has confirmed payment but we can't persist.
+        const errMsg = err instanceof Error ? err.message : 'Failed to persist pending payment'
+        trackPaymentEvent('payment_failed', {
+          paymentReference,
+          errorMessage: errMsg,
+          tableId: input.tableId,
+          elapsedMs: Math.round(performance.now() - startTime),
+        })
+        return {
+          success: false,
+          error: errMsg,
+          errorCode: 'PERSISTENCE_ERROR',
+          paymentReference,
+        }
+      }
+    } else {
+      // Pending payment already exists (pre-saved by handleFonepaySuccess).
+      // Log and continue — the RPC call will use the same paymentReference
+      // for idempotency, and completePendingPayment will clean up on success.
+      if (import.meta.env.DEV) {
+        console.log('[PAYMENT] Pending payment already exists, skipping save:', paymentReference)
       }
     }
   }
@@ -229,6 +257,7 @@ export async function processPaymentWithRecovery(
       itemPaidStatus: input.itemPaidStatus,
       batchIds: input.batchIds,
       orderBatchIds: input.orderBatchIds,
+      invoiceItems: input.invoiceItems,
     } as ProcessPaymentParams)
   } catch (err) {
     // RPC threw an exception (network error, timeout, etc.)
@@ -360,6 +389,7 @@ export async function retryPaymentProcess(
       itemPaidStatus: payload.itemPaidStatus || 'paid',
       batchIds: payload.batchIds || [],
       orderBatchIds: payload.orderBatchIds || [],
+      invoiceItems: payload.invoiceItems,
     })
 
     if (rpcResult.success) {

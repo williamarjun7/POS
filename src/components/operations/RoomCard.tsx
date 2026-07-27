@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils"
 import { SmartDropdown } from "@/components/ui/SmartDropdown"
 import { QuickActionButton } from "./shared"
 import { SmallButton } from "@/components/ui/ButtonVariants"
-import type { Room, RoomStatus, HousekeepingTask, MaintenanceRequest } from "@/types"
+import type { Room, HousekeepingTask, MaintenanceRequest } from "@/types"
 import {
   Calendar, Sparkles, Wrench,
   CheckCheck,

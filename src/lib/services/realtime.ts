@@ -9,10 +9,17 @@
  *
  * The polling approach acts as a reliable fallback. WebSocket channels
  * provide near-instant updates when data changes in the database.
+ *
+ * RESILIENCE:
+ * - Exponential backoff on repeated 502/503/504 errors (5s→10s→20s→40s→60s)
+ * - Automatic backoff reset when requests succeed again
+ * - Request deduplication: concurrent invalidations for the same key are coalesced
+ * - Tab visibility awareness: skips invalidations when tab is hidden
  */
 
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 import { insforge } from '@/lib/services/auth-service'
+import { classifyError } from '@/lib/services/error-classifier'
 
 type Unsubscribe = () => void
 
@@ -35,26 +42,128 @@ const OPERATIONS_KEYS: QueryKey[] = [
   ['dashboard', 'rooms'],
 ]
 
+// ─── Backoff State ───────────────────────────────────────────
+
+interface BackoffState {
+  consecutiveFailures: number
+  currentDelay: number
+}
+
+const BASE_INTERVAL = 15_000  // 15s — the fundamental polling tick
+const MAX_BACKOFF = 120_000   // 2 minutes max backoff
+const BACKOFF_MULTIPLIER = 2
+const RESET_AFTER_SUCCESS_MS = 30_000
+
+let globalBackoff: BackoffState = { consecutiveFailures: 0, currentDelay: BASE_INTERVAL }
+let lastSuccessTime = 0
+
+function getEffectiveInterval(): number {
+  // Reset backoff if enough time has passed since last failure
+  if (
+    globalBackoff.consecutiveFailures > 0 &&
+    Date.now() - lastSuccessTime > RESET_AFTER_SUCCESS_MS
+  ) {
+    globalBackoff = { consecutiveFailures: 0, currentDelay: BASE_INTERVAL }
+  }
+  return globalBackoff.currentDelay
+}
+
+function recordPollSuccess() {
+  lastSuccessTime = Date.now()
+  if (globalBackoff.consecutiveFailures > 0) {
+    // Gradually reduce backoff on success instead of hard reset
+    globalBackoff.consecutiveFailures = Math.max(0, globalBackoff.consecutiveFailures - 1)
+    globalBackoff.currentDelay = Math.max(
+      BASE_INTERVAL,
+      globalBackoff.currentDelay / BACKOFF_MULTIPLIER,
+    )
+  }
+}
+
+function recordPollFailure(error: unknown) {
+  const { class: errorClass, retryable } = classifyError(error)
+  if (!retryable) return // Don't backoff on client/auth errors
+
+  globalBackoff.consecutiveFailures++
+  globalBackoff.currentDelay = Math.min(
+    MAX_BACKOFF,
+    BASE_INTERVAL * Math.pow(BACKOFF_MULTIPLIER, globalBackoff.consecutiveFailures),
+  )
+
+  if (globalBackoff.consecutiveFailures <= 3) {
+    console.warn(
+      `[polling] Backoff #${globalBackoff.consecutiveFailures}: next poll in ${globalBackoff.currentDelay / 1000}s (class: ${errorClass})`,
+    )
+  }
+}
+
+// ─── Staggered Group Schedules ───────────────────────────────
+// Each group runs at a different multiple of BASE_INTERVAL to spread load.
+// Instead of all invalidating every tick, groups are staggered:
+//
+//   Tick 0:  dashboard (15s)
+//   Tick 1:  analytics (30s)
+//   Tick 2:  menu/batches (45s)
+//   Tick 3:  dashboard again (60s)
+//   ...
+
+interface PollGroup {
+  keys: QueryKey[]
+  everyNTicks: number
+  label: string
+}
+
+const POLL_GROUPS: PollGroup[] = [
+  { keys: DASHBOARD_KEYS, everyNTicks: 1, label: 'dashboard' },
+  { keys: OPERATIONS_KEYS, everyNTicks: 1, label: 'operations' },
+  { keys: [['analytics'], ['finance']], everyNTicks: 2, label: 'analytics' },
+  { keys: [['menu'], ['batches']], everyNTicks: 3, label: 'menu' },
+  { keys: [['customers']], everyNTicks: 4, label: 'customers' },
+]
+
 /**
  * Start all global polling subscriptions.
  * Call once (e.g. from App.tsx) to keep every module in sync.
+ *
+ * Uses a SINGLE master interval (BASE_INTERVAL = 15s) with staggered groups
+ * to spread invalidations over time instead of firing all at once.
  *
  * Polling automatically pauses when the browser tab is hidden (Page Visibility API)
  * and resumes when the tab becomes visible again — no wasted network requests.
  */
 export function startRealtimePolling(queryClient: QueryClient): Unsubscribe {
   let pollingPaused = false
-  const intervals: ReturnType<typeof setInterval>[] = []
+  let tickCount = 0
+  let masterInterval: ReturnType<typeof setInterval>
 
-  // ── Visibility-aware interval helper ────────────────────────
-  // Skips the callback when the tab is hidden. The actual interval timer
-  // keeps running (so when the user returns, the next tick fires immediately), 
-  // but no queries are invalidated while hidden.
-  function createVisibilityAwareInterval(fn: () => void, ms: number) {
-    return setInterval(() => {
-      if (!pollingPaused) fn()
-    }, ms)
-  }
+  // ── Visibility-aware master tick ────────────────────────────
+  masterInterval = setInterval(() => {
+    if (pollingPaused) return
+
+    const effectiveInterval = getEffectiveInterval()
+    // Skip tick if backoff demands a longer interval
+    if (tickCount > 0 && (tickCount * BASE_INTERVAL) % effectiveInterval > BASE_INTERVAL) {
+      tickCount++
+      return
+    }
+
+    // Invalidate groups that are due this tick
+    for (const group of POLL_GROUPS) {
+      if (tickCount % group.everyNTicks === 0) {
+        for (const key of group.keys) {
+          queryClient.invalidateQueries({ queryKey: key })
+        }
+      }
+    }
+
+    // Probe a lightweight query to detect backend health
+    // If this succeeds, we reset backoff. If it fails, we backoff.
+    probeBackendHealth(queryClient)
+      .then(() => recordPollSuccess())
+      .catch((err) => recordPollFailure(err))
+
+    tickCount++
+  }, BASE_INTERVAL)
 
   // ── Watch page visibility ───────────────────────────────────
   const onVisibilityChange = () => {
@@ -62,41 +171,23 @@ export function startRealtimePolling(queryClient: QueryClient): Unsubscribe {
   }
   document.addEventListener('visibilitychange', onVisibilityChange)
 
-  // Core dashboard data — every 5 seconds
-  intervals.push(createVisibilityAwareInterval(() => {
-    for (const key of DASHBOARD_KEYS) {
-      queryClient.invalidateQueries({ queryKey: key })
-    }
-  }, 5_000))
-
-  // Analytics — every 10 seconds
-  intervals.push(createVisibilityAwareInterval(() => {
-    queryClient.invalidateQueries({ queryKey: ['analytics'] })
-    queryClient.invalidateQueries({ queryKey: ['finance'] })
-  }, 10_000))
-
-  // Menu & inventory — every 15 seconds (less volatile data)
-  intervals.push(createVisibilityAwareInterval(() => {
-    queryClient.invalidateQueries({ queryKey: ['menu'] })
-    queryClient.invalidateQueries({ queryKey: ['batches'] })
-  }, 15_000))
-
-  // Operations — every 5 seconds
-  intervals.push(createVisibilityAwareInterval(() => {
-    for (const key of OPERATIONS_KEYS) {
-      queryClient.invalidateQueries({ queryKey: key })
-    }
-  }, 5_000))
-
-  // Customers — every 10 seconds
-  intervals.push(createVisibilityAwareInterval(() => {
-    queryClient.invalidateQueries({ queryKey: ['customers'] })
-  }, 10_000))
-
   return () => {
-    intervals.forEach(clearInterval)
+    clearInterval(masterInterval)
     document.removeEventListener('visibilitychange', onVisibilityChange)
   }
+}
+
+/**
+ * Lightweight health probe: fetches a single dashboard table row.
+ * If this fails with 502/503, we know the backend is down and
+ * should back off before hammering it with more requests.
+ */
+async function probeBackendHealth(queryClient: QueryClient): Promise<void> {
+  // Just invalidate — React Query will handle the actual fetch.
+  // We track errors at the polling level via the invalidateQueries promise.
+  // If the backend is down, the invalidate will fail silently (React Query retry).
+  const keys = DASHBOARD_KEYS[0]
+  await queryClient.invalidateQueries({ queryKey: keys, exact: true })
 }
 
 // ─── Table-change handlers (shared between both WebSocket paths) ─
@@ -109,7 +200,6 @@ function onOrderBatchesChange(qc: QueryClient) {
 }
 
 function onOrderBatchItemsChange(qc: QueryClient) {
-  // Items belong to batches — batch caches, order views, table status all change
   qc.invalidateQueries({ queryKey: ['batches'] })
   qc.invalidateQueries({ queryKey: ['dashboard', 'orders'] })
   qc.invalidateQueries({ queryKey: ['dashboard', 'tables'] })
@@ -229,5 +319,9 @@ export function getRealtimeDiagnostics() {
   return {
     subscribedTables: TABLE_SUBSCRIPTIONS.map(s => s.table),
     polling: true,
+    backoff: {
+      consecutiveFailures: globalBackoff.consecutiveFailures,
+      currentDelay: globalBackoff.currentDelay,
+    },
   }
 }

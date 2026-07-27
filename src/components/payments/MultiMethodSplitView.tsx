@@ -179,7 +179,7 @@ export function MultiMethodSplitView({
           </p>
 
           {allocations.map((alloc, index) => {
-            const Icon = getMethodIcon(alloc.method)
+            const _Icon = getMethodIcon(alloc.method)
             return (
               <div
                 key={alloc.id}

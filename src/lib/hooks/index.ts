@@ -81,11 +81,6 @@ function rowToFrontendBatch(
   }
 }
 
-const batchKeys = {
-  all: ['batches'] as const,
-  byTable: (tableId: string) => ['batches', 'table', tableId] as const,
-}
-
 /**
  * Fetch all order batches and their items for a specific entity (table or room).
  * Used to restore previous orders when selecting an occupied table or room.
@@ -157,7 +152,6 @@ export function useDashboardTables() {
     queryKey: dashboardKeys.tables(),
     queryFn: fetchDashboardTables,
     staleTime: 15_000,
-    refetchInterval: 30_000,
   })
 }
 
@@ -166,7 +160,6 @@ export function useRooms() {
     queryKey: dashboardKeys.rooms(),
     queryFn: fetchRooms,
     staleTime: 15_000,
-    refetchInterval: 30_000,
   })
 }
 
@@ -204,7 +197,6 @@ export function useOrders(startDate?: string, endDate?: string) {
     queryKey: [...dashboardKeys.orders(), startDate, endDate],
     queryFn: () => fetchOrders(startDate, endDate),
     staleTime: 10_000,
-    refetchInterval: 15_000,
   })
 }
 
@@ -245,7 +237,6 @@ export function useQueueAnalytics() {
     queryKey: analyticsKeys.queue(),
     queryFn: fetchQueueAnalytics,
     staleTime: 30_000,
-    refetchInterval: 30_000,
   })
 }
 
@@ -262,7 +253,6 @@ export function useLowStockProducts() {
     queryKey: analyticsKeys.lowStock(),
     queryFn: fetchLowStockProducts,
     staleTime: 60_000,
-    refetchInterval: 120_000,
   })
 }
 
@@ -394,7 +384,6 @@ export function useHousekeepingTasks() {
     queryKey: housekeepingKeys.all,
     queryFn: fetchHousekeepingTasks,
     staleTime: 15_000,
-    refetchInterval: 30_000,
   })
 }
 
@@ -403,7 +392,6 @@ export function useMaintenanceRequests() {
     queryKey: maintenanceKeys.all,
     queryFn: fetchMaintenanceRequests,
     staleTime: 15_000,
-    refetchInterval: 30_000,
   })
 }
 

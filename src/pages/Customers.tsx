@@ -25,8 +25,8 @@ import { computeAllCustomerStats } from "@/lib/services/customer-aggregation"
 import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/filters/DateFilterBar"
 import { PosPaymentDialog, type PaymentResult } from "@/components/payments"
 import {
-  Plus, Edit, Trash2, Phone, Mail, Search, Filter, X, Check,
-  CreditCard, TrendingUp, Loader2, CheckCircle2, Users
+  Plus, Edit, Trash2, Phone, Mail, Search, Filter, X,
+  CreditCard, TrendingUp, CheckCircle2, Users
 } from "lucide-react"
 import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
 import { CustomerProfile } from "@/components/customers/CustomerProfile"
@@ -49,12 +49,6 @@ const fadeUp = pageTransitionFast
 function getInitials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
 }
-
-function formatDateTime(dateStr: string) {
-  const d = new Date(dateStr)
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-}
-
 
 
 function daysSince(dateStr: string) {
@@ -365,7 +359,7 @@ export function Customers() {
   // on a later page after changing the filtering criteria.
   useEffect(() => {
     setCustomerPage(0)
-  }, [statusFilter, search, spendMin, spendMax])
+  }, [statusFilter, search, spendMin, spendMax, setCustomerPage])
 
   const hasFilters = search.trim() || spendMin || spendMax
 
@@ -479,12 +473,11 @@ export function Customers() {
       }
 
       // Convert to OrderItem[] for PosPaymentDialog (each invoice = one item)
-      // Outstanding = total - discount - real payments
+      // Outstanding = total - real payments (total is already post-discount)
       const items: PosPaymentItem[] = invoices
         .map((inv: any) => {
           const paid = paidByInvoice.get(inv.id) ?? 0
-          const discount = Number(inv.discount ?? 0)
-          const outstanding = Math.max(0, Number(inv.total) - discount - paid)
+          const outstanding = Math.max(0, Number(inv.total) - paid)
           return {
             id: inv.id,
             item_name: `Invoice ${inv.invoice_number}`,
@@ -602,17 +595,17 @@ export function Customers() {
         const totalPaid = (payData ?? [])
           .reduce((s: number, p: any) => s + Number(p.amount), 0)
 
-        // Fetch actual invoice total + discount from DB
+        // Fetch actual invoice total from DB
         const { data: invRow } = await insforge.database
           .from('invoices')
-          .select('total, discount')
+          .select('total')
           .eq('id', invId)
           .single()
 
         if (!invRow) continue
         const invoiceTotal = Number((invRow as any).total)
-        const invoiceDiscount = Number((invRow as any).discount ?? 0)
-        const remaining = Math.max(0, invoiceTotal - invoiceDiscount - totalPaid)
+        // total is already post-discount — don't subtract discount again
+        const remaining = Math.max(0, invoiceTotal - totalPaid)
         const newStatus = remaining <= 0 ? 'paid' : 'partial'
 
         await insforge.database
@@ -681,7 +674,7 @@ export function Customers() {
       setPosPaymentCustomer(null)
       setPosPaymentItems([])
     }
-  }, [posPaymentCustomer, posPaymentItems, queryClient, viewingCustomer, refreshCustomerPage, refreshCustomers, fetchCustomerStats])
+  }, [posPaymentCustomer, posPaymentItems, queryClient, viewingCustomer, refreshCustomerPage, refreshCustomers, dateRange.startDate, dateRange.endDate])
 
   const columns: Column<CustomerRow>[] = [
     {

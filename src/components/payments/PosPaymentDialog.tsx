@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';import { ArrowLeft, Banknote, QrCode, CreditCard, Percent, DollarSign,
-  Users, Smartphone, Check, AlertCircle, Loader2, Printer, User,
+  Users, Smartphone, Check, AlertCircle, Loader2, Printer,
 } from 'lucide-react';
 
 // ─── Dev logging ────────────────────────────────────────────
@@ -54,8 +54,7 @@ function buildPrintData(
     total: inv.grandTotal,
     paymentBreakdown: breakdown,
   }
-}
-import { showSuccess, showError } from '@/components/ui/toast';
+}  import { showSuccess, showError } from '@/components/ui/toast';
 import { printService } from '@/lib/services/print-service';
 import { getPaymentMethodLabel } from '@/lib/payment-methods';
 import type { InvoiceData as PrintInvoiceData } from '@/components/printing/InvoiceTemplate';
@@ -69,6 +68,7 @@ import {
   generateQRDataURL,
   type PreGeneratedQRData,
 } from '@/lib/services/fonepay-service';
+import { savePendingPayment } from '@/lib/services/pending-payment-store';
 import { SplitPaymentDialog } from './SplitPaymentDialog';
 import { CreditAccountPayment } from './CreditAccountPayment';
 import { ReceptionQRDialog } from './ReceptionQRDialog';
@@ -87,6 +87,8 @@ interface OrderItem {
   quantity: number;
   unit_price: number;
   payment_status: string;
+  /** Batch ID this item belongs to. Present on items from POS.tsx batches (allUnpaidItemsForPayment), may be absent on cart-only items. */
+  batch_id?: string;
 }
 
 interface InvoiceData {
@@ -127,6 +129,13 @@ export interface PaymentResult {
   /** The subtotal of items being paid in THIS transaction.
    *  For split payments, this is the selected items' subtotal. */
   paidSubtotal?: number;
+  /**
+   * Pre-generated payment reference for idempotent processing.
+   * Used by FonePay payments where the pending_payments record was
+   * already saved by handleFonepaySuccess() BEFORE the success screen.
+   * When present, processPaymentWithRecovery skips savePendingPayment().
+   */
+  paymentReference?: string;
 }
 
 interface PosPaymentDialogProps {
@@ -185,8 +194,8 @@ export function PosPaymentDialog({
   const [discountValue, setDiscountValue] = useState(0);
   const [cashReceived, setCashReceived] = useState('');
 
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string } | null>(null);
+  const [_customerSearch, _setCustomerSearch] = useState('');
+  const [selectedCustomer] = useState<{ id: string; name: string } | null>(null);
 
   const [splitContext, setSplitContext] = useState<{
     selectedItemIds: string[]
@@ -196,8 +205,8 @@ export function PosPaymentDialog({
   const [showSuccessView, setShowSuccess] = useState(false);
   const [pendingCreditInfo, setPendingCreditInfo] = useState<{ amount: number; customerName: string } | undefined>(undefined);
 
-  const [customersList, setCustomersList] = useState<Array<{id:string;name:string;phone:string|null}>>([]);
-  const [customersLoading, setCustomersLoading] = useState(false);
+  const [_customersList, setCustomersList] = useState<Array<{id:string;name:string;phone:string|null}>>([]);
+  const [_customersLoading, setCustomersLoading] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [partialContext, setPartialContext] = useState<{
     partialAmount: number
@@ -206,6 +215,20 @@ export function PosPaymentDialog({
   } | null>(null);
   const [pendingPartialCredit, setPendingPartialCredit] = useState<{ amount: number; method: string; shouldPrint: boolean } | null>(null);
   const fonepayInvoiceNumberRef = useRef<string | null>(null);
+  /**
+   * ═══ CRITICAL: Pre-saved payment reference for FonePay ═══
+   * When FonePay gateway confirms payment, handleFonepaySuccess() saves a
+   * pending_payments record IMMEDIATELY (before the success review screen).
+   * This ensures crash-safe recovery — if the browser crashes between the
+   * success screen and the cashier clicking Skip/Print, the payment is NOT lost
+   * and will be recovered on next startup via runPaymentRecovery().
+   *
+   * The reference is passed through PaymentResult.paymentReference so that
+   * processPaymentWithRecovery() can skip savePendingPayment() (it's already
+   * saved) and reuse the same FonePay PRN as both payment_reference and
+   * gateway_reference for idempotency + recovery verification.
+   */
+  const fonepayPaymentRefRef = useRef<string | null>(null)
   // ─── Pre-generated FonePay QR (background generation while on review) ──
   const preGeneratedQrRef = useRef<PreGeneratedQRData | null>(null)
   const preGenLoadingRef = useRef(false)
@@ -272,7 +295,7 @@ export function PosPaymentDialog({
       // when collecting existing outstanding balances.
       methods = methods.filter(m => ['cash', 'reception_qr', 'fonepay'].includes(m.key));
     }
-    if (!!splitContext) {
+    if (splitContext) {
       // In split mode, hide 'split' (you're already splitting) but show 'partial' for partial payments on selected items
       methods = methods.filter(m => m.key !== 'split');
     }
@@ -390,14 +413,6 @@ export function PosPaymentDialog({
       });
     return () => { cancelled = true; };
   }, []);
-  const filteredCustomers = useMemo(() => {
-    if (!customerSearch.trim()) return [];
-    const q = customerSearch.toLowerCase();
-    return customersList.filter(
-      c => c.name.toLowerCase().includes(q) || (c.phone ?? '').toLowerCase().includes(q)
-    );
-  }, [customersList, customerSearch]);
-
 
   // ─── Guard: close dialog immediately if there are no unpaid items ───
   // NOTE: This is intentionally AFTER all useMemo/useEffect/useCallback
@@ -556,7 +571,29 @@ export function PosPaymentDialog({
     }
     simulatePayment(`Credit (${name})`)
   };
-  const handleFonepaySuccess = () => {
+
+  /**
+   * ═══ CRITICAL: FonePay gateway confirmation handler ═══
+   * Called by FonepayQRDialog when the FonePay gateway confirms that the
+   * customer has successfully paid. The PRN (Payment Reference Number) is
+   * the gateway transaction identifier for this QR session.
+   *
+   * CRITICAL BEHAVIOR CHANGE (Root Cause Fix):
+   *   BEFORE: We showed the success screen and deferred persistence until
+   *   the cashier clicked Skip/Print. If the browser crashed during the
+   *   success screen, the payment was PERMANENTLY LOST — the FonePay gateway
+   *   had confirmed the transaction but no database record existed.
+   *
+   *   NOW: We save a pending_payments record IMMEDIATELY on gateway confirmation,
+   *   BEFORE showing the success screen. This guarantees crash-safe recovery:
+   *   even if the browser crashes during the review screen, the payment will
+   *   be recovered on the next startup via runPaymentRecovery().
+   *
+   * @param prn - The FonePay PRN from the QR session. Saved as both
+   *              paymentReference (idempotency key) and gatewayReference
+   *              (for recovery gateway verification).
+   */
+  const handleFonepaySuccess = async (prn: string) => {
     if (!checkLimit()) return;
 
     if (splitContext) {
@@ -614,15 +651,75 @@ export function PosPaymentDialog({
       return
     }
 
-    // Full payment via Fonepay — show the success review screen (like Cash does)
-    // instead of auto-finalizing. The cashier sees the invoice summary with
-    // Print/Skip buttons before the payment is committed.
-    log('FONEPAY_SUCCESS', 'Showing success review');
+    // Full payment via Fonepay — IMMEDIATELY save pending_payments record
+    // BEFORE showing the success review screen. This closes the vulnerability
+    // window where a browser crash would lose the gateway-confirmed payment.
+    // ═══════════════════════════════════════════════════════════════════════
+    log('FONEPAY_SUCCESS', 'Gateway confirmed — saving pending payment before success screen');
 
     const year = new Date().getFullYear();
     const fonepayInvoice = fonepayInvoiceNumberRef.current;
     fonepayInvoiceNumberRef.current = null;
     const invNum = fonepayInvoice || `INV-${year}-${String(Date.now()).slice(-6)}`;
+
+    // Use the FonePay PRN as both paymentReference (for RPC idempotency)
+    // and gatewayReference (for recovery gateway verification).
+    // The FP- prefix distinguishes FonePay payments in the payments.reference column.
+    const paymentReference = `FP-${prn}`
+
+    // Build the pending payment payload with ALL context needed for recovery
+    const pendingPayload = {
+      invoiceNumber: invNum,
+      customerName: initialCustomerName || 'Walk-in',
+      tableId: selectedTableId,
+      subtotal,
+      discount: discountAmount,
+      total: grandTotal,
+      invoiceStatus: 'paid',
+      paymentMethod: 'fonepay',
+      paidAmount: grandTotal,
+      paymentReference,
+      userId: null, // Filled by POS.tsx handlePaymentComplete
+      paidItemIds: items.map(i => i.id),
+      itemPaidStatus: 'paid',
+      // Extract batch IDs from items that have them. Recovery needs these to
+      // call the RPC — without batch IDs, the RPC validation gate rejects the
+      // payment with 'At least one batch must be specified for payment.'
+      batchIds: [...new Set(items.map(i => i.batch_id).filter(Boolean))] as string[],
+      orderBatchIds: [...new Set(items.map(i => i.batch_id).filter(Boolean))] as string[],
+      gatewayReference: prn,  // ═══ CRITICAL: PRN for gateway verification during recovery
+      notes: `Payment via FonePay QR (PRN: ${prn.slice(0, 8)}...)`,
+      invoiceItems: items.map(i => ({
+        name: i.item_name,
+        quantity: i.quantity,
+        unitPrice: Number(i.unit_price),
+      })),
+      sourcePage: 'pos' as const,
+    }
+
+    try {
+      // ═══ CRITICAL: Persist pending_payments BEFORE showing success screen ═══
+      // This is the fix for Payment Reconciliation Failure. The pending_payments
+      // record ensures that if the browser crashes during the success review,
+      // the payment will be recovered on next startup.
+      await savePendingPayment(pendingPayload)
+      log('FONEPAY_PENDING_SAVED', { paymentReference, prn: prn.slice(0, 8) })
+
+      // Store for passthrough to processPaymentWithRecovery
+      fonepayPaymentRefRef.current = paymentReference
+    } catch (err) {
+      // CRITICAL: Failed to persist gateway-confirmed payment.
+      // This is a data-loss scenario — the FonePay gateway has confirmed the
+      // payment but we can't save the recovery context. Show a loud error.
+      const errMsg = err instanceof Error ? err.message : 'Failed to save pending payment'
+      log('FONEPAY_PENDING_SAVE_FAILED', errMsg)
+      showError(
+        `CRITICAL: Payment was confirmed by FonePay but the system could not save it. ` +
+        `Please contact support immediately and provide the PRN: ${prn.slice(0, 8)}... ` +
+        `DO NOT close this page or navigate away. Error: ${errMsg}`
+      )
+      return
+    }
 
     const inv: InvoiceData = {
       invoiceNumber: invNum,
@@ -644,6 +741,7 @@ export function PosPaymentDialog({
     setPendingCreditInfo(undefined)
     setPendingPartialCredit(null)
     setSubmittingPayment(false)
+    // ═══ Success screen shown ONLY AFTER pending payment is saved ═══
     setShowSuccess(true)
   };
 
@@ -784,6 +882,13 @@ export function PosPaymentDialog({
 
     // Otherwise, complete normally with optional credit info
     const result = getPaymentResult(completedInvoice, pendingCreditInfo)
+    // If this is a FonePay payment that already saved a pending_payments
+    // record (via handleFonepaySuccess), pass the pre-generated reference
+    // so processPaymentWithRecovery skips savePendingPayment().
+    if (fonepayPaymentRefRef.current) {
+      result.paymentReference = fonepayPaymentRefRef.current
+      fonepayPaymentRefRef.current = null // consume
+    }
     safeComplete(completedInvoice.invoiceNumber, result)
 
     if (shouldPrint) {

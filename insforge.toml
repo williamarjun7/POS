@@ -14,5 +14,11 @@ require_special_char = false
 [storage]
 max_file_size_mb = 50
 
+[realtime]
+# Tables published for WebSocket realtime subscriptions.
+# The frontend subscribes to postgres_changes on these tables
+# via subscribeToPostgresChanges() in src/lib/services/realtime.ts.
+publication = "supabase_realtime"
+
 [schedules]
 retention_days = 7

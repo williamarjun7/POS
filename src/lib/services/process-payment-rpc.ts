@@ -26,7 +26,6 @@
  */
 
 import { insforge } from '@/lib/services/auth-service'
-import type { PaymentMethod } from '@/types'
 
 // ─── Error Codes (mapped from RPC response) ─────────────
 
@@ -73,6 +72,12 @@ export interface ProcessPaymentParams {
   itemPaidStatus: string
   batchIds: string[]
   orderBatchIds: string[]
+  /** Invoice line items to be inserted atomically by the RPC */
+  invoiceItems?: Array<{
+    name: string
+    quantity: number
+    unitPrice: number
+  }>
 }
 
 export interface ProcessPaymentResult {
@@ -83,10 +88,13 @@ export interface ProcessPaymentResult {
   invoiceNumber?: string
   paymentId?: string | null
   batchUpdateCount?: number
+  /** Number of invoice_items inserted atomically inside the RPC */
+  itemInsertCount?: number
   timingMs?: {
     total: number
     idempotency: number
     invoice: number
+    invoice_items?: number
     payment: number
     batchItems: number
     batchStatus: number
@@ -158,6 +166,13 @@ export async function callProcessPayment(
       p_item_paid_status: params.itemPaidStatus,
       p_batch_ids: params.batchIds,
       p_order_batch_ids: params.orderBatchIds,
+      p_invoice_items: params.invoiceItems && params.invoiceItems.length > 0
+        ? params.invoiceItems.map(i => ({
+            name: i.name,
+            quantity: i.quantity,
+            unit_price: i.unitPrice,
+          }))
+        : [],
     })
 
     const elapsedMs = Math.round(performance.now() - startTime)

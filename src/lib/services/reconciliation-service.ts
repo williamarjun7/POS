@@ -18,10 +18,8 @@
  */
 
 import { insforge } from '@/lib/services/auth-service'
-import { callProcessPayment, type ProcessPaymentParams } from '@/lib/services/process-payment-rpc'
-import { loadPendingPayments, loadFailedPayments, completePendingPayment, retryPendingPayment } from '@/lib/services/pending-payment-store'
+import { loadPendingPayments, loadFailedPayments, retryPendingPayment } from '@/lib/services/pending-payment-store'
 import { trackPaymentEvent } from '@/lib/services/payment-monitoring'
-import type { PendingPaymentPayload } from '@/lib/services/pending-payment-store'
 
 // ─── Types ───────────────────────────────────────────────────
 

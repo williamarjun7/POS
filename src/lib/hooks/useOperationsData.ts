@@ -81,7 +81,6 @@ export function useOperationsData() {
     queryKey: OPERATIONS_KEY,
     queryFn: fetchAllOperationsData,
     staleTime: 15_000,
-    refetchInterval: 30_000,
   })
 }
 

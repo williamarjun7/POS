@@ -7,7 +7,6 @@ import {
   Trash2,
   GripVertical,
   Tag,
-  Layers,
   AlertCircle,
   Eye,
   EyeOff,
@@ -20,7 +19,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { EmptyState } from "@/components/EmptyState"
 import { cn } from "@/lib/utils"
 import { showSuccess, showError } from "@/components/ui/toast"
-import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
+import { pageTransitionFast } from "@/lib/animations/presets"
 import { useExpenseCategories, slugify } from "@/lib/services/expense-category-service"
 
 /* ─── Category color mapping (same as Expenses.tsx) ──────── */

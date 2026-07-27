@@ -18,8 +18,6 @@ import { useState, useEffect, useCallback, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { insforge } from "@/lib/services/auth-service"
-import { getNextInvoiceNumber } from "@/lib/services/sequence-service"
-import { insertInvoiceItems } from "@/lib/services/invoice-items-service"
 import { logActivitySafe } from "@/lib/services/activity-log-service"
 import { showSuccess, showError } from "@/components/ui/toast"
 import { DialogButton } from "@/components/ui/ButtonVariants"
@@ -203,10 +201,7 @@ export function RoomCheckoutDialog({
     const actualPaid = paymentResult.paidAmount ?? grandTotal
 
     try {
-      // 1. Generate invoice number
-      const invNumber = await getNextInvoiceNumber()
-
-      // 2. Create invoice via unified payment service
+      // 1. Create invoice via unified payment service
       const rpcResult = await processPaymentWithRecovery({
         tableId: '',
         customerName: guestName,
@@ -224,6 +219,7 @@ export function RoomCheckoutDialog({
         notes: `Room checkout ${roomNum} via ${payMethod}`,
         sourcePage: 'room_checkout',
         bookingId: booking?.id,
+        invoiceItems: invoiceItemsList.length > 0 ? invoiceItemsList : undefined,
         paymentReference: `CHK-${crypto.randomUUID()}`,
       })
 
@@ -231,12 +227,8 @@ export function RoomCheckoutDialog({
         throw new Error(rpcResult.error || 'Payment processing failed')
       }
 
-      // 3. Insert invoice items
-      if (invoiceItemsList.length > 0 && rpcResult.invoiceId) {
-        await insertInvoiceItems(rpcResult.invoiceId, invoiceItemsList).catch((iiErr) => {
-          console.error('[CHECKOUT] Failed to insert invoice items:', iiErr instanceof Error ? iiErr.message : iiErr)
-        })
-      }
+      // 3. Invoice items are inserted ATOMICALLY inside the process_payment RPC.
+      //    No client-side fallback needed — items are guaranteed with the invoice.
 
       // 4. Update booking to checked_out
       // NOTE: Step 4 (order batch updates) is SKIPPED because the

@@ -140,14 +140,6 @@ function daysAgoDate(days: number): string {
   return d.toISOString().split('T')[0]
 }
 
-function toISOStart(dateStr: string): string {
-  return `${dateStr}T00:00:00Z`
-}
-
-function toISOEnd(dateStr: string): string {
-  return `${dateStr}T23:59:59Z`
-}
-
 /**
  * Convert a Kathmandu-local date string to the correct UTC range boundaries.
  * Kathmandu is UTC+5:45, so:
@@ -240,7 +232,6 @@ async function fetchFinancialSummary(): Promise<FinancialSummary> {
 
   const expenseRows = (expensesData ?? []) as Array<{ amount: number }>
   const totalExpenses = expenseRows.reduce((sum, e) => sum + Number(e.amount), 0)
-  const expenseCount = expenseRows.length
 
   // 4. Customer credit outstanding (computed from invoices, NOT stale credit_balance)
   // Outstanding credit = SUM(invoice.total - real payments) for unpaid invoices.
@@ -642,7 +633,6 @@ export function useFinancialSummary() {
     queryKey: financeKeys.summary(),
     queryFn: fetchFinancialSummary,
     staleTime: 30_000,
-    refetchInterval: 60_000,
   })
 }
 
@@ -657,7 +647,6 @@ export function useFinancialSummaryForRange(startDate?: string, endDate?: string
     queryKey: financeKeys.summaryForRange(startDate, endDate),
     queryFn: () => fetchFinancialSummaryForRange(startDate, endDate),
     staleTime: 30_000,
-    refetchInterval: 60_000,
   })
 }
 
@@ -747,7 +736,6 @@ export function useTodayExpenses() {
         .reduce((sum, e) => sum + Number(e.amount), 0)
     },
     staleTime: 30_000,
-    refetchInterval: 60_000,
   })
 }
 
@@ -759,7 +747,6 @@ export function useCashFlow() {
     queryKey: financeKeys.cashFlow(),
     queryFn: fetchCashFlow,
     staleTime: 30_000,
-    refetchInterval: 60_000,
   })
 }
 

@@ -30,12 +30,6 @@ interface DashboardTableRow {
   [key: string]: unknown
 }
 
-// ─── Helpers ─────────────────────────────────────────────────
-
-function todayStr(): string {
-  return new Date().toISOString().split('T')[0]
-}
-
 // ─── Public API ──────────────────────────────────────────────
 
 /**

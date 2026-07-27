@@ -289,6 +289,7 @@ export interface UseBookingsReturn {
   refresh: () => Promise<void>;
 }
 
+// eslint-disable-next-line react/only-export-components
 export function useBookings(): UseBookingsReturn {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -374,14 +375,17 @@ export function useBookings(): UseBookingsReturn {
 
 export { CANCELLABLE_STATUSES, DELETABLE_STATUSES, ACTIVE_STATUSES };
 
+// eslint-disable-next-line react/only-export-components
 export function canCancelBooking(status: BookingStatus): boolean {
   return CANCELLABLE_STATUSES.includes(status);
 }
 
+// eslint-disable-next-line react/only-export-components
 export function canDeleteBooking(status: BookingStatus): boolean {
   return DELETABLE_STATUSES.includes(status);
 }
 
+// eslint-disable-next-line react/only-export-components
 export function isActiveBooking(status: BookingStatus): boolean {
   return ACTIVE_STATUSES.includes(status);
 }

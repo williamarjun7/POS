@@ -15,7 +15,7 @@ const statements = sql
 
 for (const stmt of statements) {
   try {
-    const result = execSync(`npx insforge db query "${stmt.replace(/"/g, '\\"')}" 2>&1`, {
+    execSync(`npx insforge db query "${stmt.replace(/"/g, '\\"')}" 2>&1`, {
       cwd: process.cwd(),
       maxBuffer: 10 * 1024 * 1024,
     });

@@ -12,7 +12,7 @@ import { useState, useMemo, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Phone, Mail, MapPin, Calendar, Clock, Edit, Plus,
-  CreditCard, TrendingUp, Wallet, ShoppingBag, Star,
+  CreditCard, TrendingUp, Wallet, ShoppingBag,
   FileText, ArrowUpRight, ArrowDownRight,
   AlertTriangle, CheckCircle2,
   ChevronRight, Loader2, UtensilsCrossed,
@@ -146,7 +146,7 @@ interface CustomerProfileData {
   error: string | null
 }
 
-function useCustomerProfileData(customer: Customer | null, refreshKey: number = 0): CustomerProfileData {
+function useCustomerProfileData(customer: Customer | null, _refreshKey: number = 0): CustomerProfileData {
   const [orders, setOrders] = useState<CustomerOrder[]>([])
   const [invoices, setInvoices] = useState<CustomerInvoice[]>([])
   const [payments, setPayments] = useState<CustomerPayment[]>([])
@@ -155,7 +155,6 @@ function useCustomerProfileData(customer: Customer | null, refreshKey: number = 
   const [error, setError] = useState<string | null>(null)
 
   // Fetch customer stats and ledger from shared aggregation service
-  const stats = useCustomerStats(customer?.id)
   const ledgerData = useCustomerLedgerData(customer?.id)
 
   const fetchData = useCallback(async () => {
@@ -350,7 +349,7 @@ function useCustomerProfileData(customer: Customer | null, refreshKey: number = 
     } finally {
       setLoading(false)
     }
-  }, [customer, refreshKey, ledgerData])
+  }, [customer, ledgerData])
 
   useEffect(() => {
     fetchData()

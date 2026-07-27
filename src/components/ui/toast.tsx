@@ -110,16 +110,19 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   )
 }
 
+// eslint-disable-next-line react/only-export-components
 export function useToast() {
   const context = useContext(ToastContext)
   if (!context) throw new Error('useToast must be used within a ToastProvider')
   return context
 }
 
+// eslint-disable-next-line react/only-export-components
 export function showSuccess(message: string) {
   globalAddToast?.(message, 'success')
 }
 
+// eslint-disable-next-line react/only-export-components
 export function showError(message: string) {
   globalAddToast?.(message, 'error')
 }

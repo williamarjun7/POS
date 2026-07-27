@@ -17,7 +17,7 @@ import { insforge } from '@/lib/services/auth-service'
 
 // ─── Types ───────────────────────────────────────────────────
 
-export interface AutoCreditResult {
+export type AutoCreditResult = {
   success: true
   creditAmount: number
   customerName: string

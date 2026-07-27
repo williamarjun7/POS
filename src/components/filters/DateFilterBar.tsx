@@ -17,11 +17,13 @@ export interface DateFilterState {
   customEndDate?: string;
 }
 
+// eslint-disable-next-line react/only-export-components
 export function kathmanduDateString(date?: Date): string {
   const d = date ?? new Date();
   return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kathmandu' });
 }
 
+// eslint-disable-next-line react/only-export-components
 export function getDateRange(filter: DateFilterState): DateRange {
   const now = new Date();
   const today = kathmanduDateString(now);

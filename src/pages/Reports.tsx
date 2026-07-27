@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import { motion } from "framer-motion"
 import {
   Download,
@@ -168,13 +168,6 @@ export function Reports() {
 
   useEffect(() => {
     fetchStats()
-
-    // Background refresh every 30s (pauses when tab hidden)
-    const interval = setInterval(() => {
-      if (!document.hidden) fetchStats()
-    }, 30_000)
-
-    return () => clearInterval(interval)
   }, [fetchStats])
 
   const uniqueCategories = useMemo(() => ["All", ...new Set(reports.map((r) => r.category))], [])

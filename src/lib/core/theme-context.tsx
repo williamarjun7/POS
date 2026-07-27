@@ -18,8 +18,10 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
 
+// eslint-disable-next-line react/only-export-components
 export const DEFAULT_ACCENT: Accent = { h: 0, s: 0 }
 
+// eslint-disable-next-line react/only-export-components
 export const ACCENT_PRESETS: { name: string; h: number; s: number }[] = [
   { name: 'Default', h: 0, s: 0 },
   { name: 'Slate', h: 215, s: 25 },
@@ -150,6 +152,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   )
 }
 
+// eslint-disable-next-line react/only-export-components
 export function useTheme() {
   const ctx = useContext(ThemeContext)
   if (!ctx) throw new Error('useTheme must be used within a ThemeProvider')
