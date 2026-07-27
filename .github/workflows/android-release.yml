@@ -91,6 +91,9 @@ jobs:
         run: npx cap sync android
 
       # ── Gradle Build ─────────────────────────────────────────
+      - name: Make Gradlew executable
+        run: chmod +x android/gradlew
+
       - name: Build release APK
         run: |
           cd android
