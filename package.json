@@ -151,10 +151,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Highlands Cafe & Motel Inn POS",
-      "installerIcon": "public/icon.png",
-      "uninstallerIcon": "public/icon.png",
-      "installerHeaderIcon": "public/icon.png"
+      "shortcutName": "Highlands Cafe & Motel Inn POS"
     },
     "publish": [
       {
