@@ -62,24 +62,7 @@ export async function getUsbPrinters(): Promise<UsbPrinterInfo[]> {
 
     return printers;
   } catch {
-    try {
-      const usb = await import('usb');
-      const devices = usb.getDeviceList();
-      for (const device of devices) {
-        const desc = device.deviceDescriptor;
-        if (KNOWN_VENDOR_IDS.has(desc.idVendor) || KNOWN_PRODUCT_IDS.has(desc.idProduct)) {
-          printers.push({
-            name: device.deviceDescriptor?.iProduct
-              ? `USB Printer (${desc.idVendor.toString(16)}:${desc.idProduct.toString(16)})`
-              : 'ZYWELL ZY-Q822',
-            vendorId: desc.idVendor.toString(16),
-            productId: desc.idProduct.toString(16),
-            connected: true,
-          });
-        }
-      }
-    } catch { /* usb module unavailable */ }
-
+    // usb module is not installed — rely on node-thermal-printer detection only
     if (printers.length === 0) {
       printers.push({ name: 'No USB printer detected', connected: false });
     }

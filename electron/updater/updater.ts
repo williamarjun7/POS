@@ -113,15 +113,13 @@ export function installUpdate(): void {
 }
 
 /**
- * Get the current version and update status.
+ * Get the current version.
  */
 export function getUpdateStatus(): {
   currentVersion: string;
-  isUpdating: boolean;
 } {
   return {
     currentVersion: autoUpdater.currentVersion?.format() || 'unknown',
-    isUpdating: autoUpdater.isUpdating(),
   };
 }
 

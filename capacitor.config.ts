@@ -23,12 +23,6 @@ const config: CapacitorConfig = {
       resize: 'body',
       resizeOnFullScreen: true,
     },
-    CapacitorUpdater: {
-      autoUpdate: true,
-      // Capgo production URL — set your app-specific URL after creating the app
-      // in the Capgo dashboard. Example:
-      // updateUrl: 'https://capgo.app/api/auto_update/com.highlandscafemotelinn.pos',
-    },
   },
   android: {
     allowMixedContent: false,

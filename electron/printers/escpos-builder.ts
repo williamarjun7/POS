@@ -265,13 +265,9 @@ export class EscposBuilder {
   // ── Barcode / QR (advanced printers) ──────────────
 
   /** Print a QR code (if printer supports it) */
-  qrCode(data: string, size = 6): this {
-    const model: [number, number, number, number] = [0x1D, 0x28, 0x6B, 0x04];
-    const store: [number, number, number, number, number] = [0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30];
-    const print: [number, number, number] = [0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30];
-
-    // Simplified — full QR via ESC/POS requires pL/pH calculation
-    // For production, use printer's native QR command set
+  qrCode(data: string, _size = 6): this {
+    // Simplified — full QR via ESC/POS requires pL/pH calculation.
+    // For production, use printer's native QR command set.
     this.buf.push(encode(`[QR: ${data}]`));
     this.buf.push(Buffer.from([LF]));
     return this;

@@ -101,14 +101,6 @@ jobs:
           cd android
           ./gradlew bundleRelease --no-daemon
 
-      # ── Capgo OTA Upload ─────────────────────────────────────
-      - name: Upload web bundle to Capgo (OTA update)
-        run: |
-          npx @capgo/cli bundle upload \
-            --apikey ${{ secrets.CAPGO_TOKEN }} \
-            --app-id com.highlandscafemotelinn.pos \
-            --bundle dist
-
       # ── Upload Artifacts ─────────────────────────────────────
       - name: Upload signed APK
         uses: actions/upload-artifact@v4

@@ -19,7 +19,6 @@ both Android and Windows builds are produced automatically and attached to a Git
 | `KEYSTORE_PASSWORD` | Android APK/AAB signing | Keystore password |
 | `KEY_ALIAS` | Android APK/AAB signing | Key alias (default: `highlands-pos`) |
 | `KEY_PASSWORD` | Android APK/AAB signing | Key password |
-| `CAPGO_TOKEN` | Android OTA updates | Capgo dashboard → Settings → API Tokens |
 | `VITE_INSFORGE_URL` | Frontend build | InsForge project settings |
 | `VITE_INSFORGE_ANON_KEY` | Frontend build | InsForge project settings |
 | `VITE_INSFORGE_FUNCTIONS_URL` | Frontend build | InsForge project settings |
@@ -118,7 +117,6 @@ GitHub Actions will trigger automatically:
 - [ ] **APK** — attached to GitHub Release
 - [ ] **AAB** — attached to GitHub Release
 - [ ] **EXE** — attached to GitHub Release
-- [ ] **Capgo** — OTA bundle uploaded for Android
 - [ ] Release published (not draft)
 
 ### Manual Verification
@@ -178,5 +176,4 @@ npm run release:patch
 | `npm run release:patch` fails with "git not clean" | Commit or stash your changes first |
 | Android build fails in CI | Verify `KEYSTORE_BASE64` secret is correct |
 | Windows build fails in CI | Check `windows-latest` runner logs — often a missing native dependency |
-| Capgo upload fails | Verify `CAPGO_TOKEN` is set in GitHub Secrets |
 | Release not created | Check that the tag was pushed: `git push origin --tags` |
