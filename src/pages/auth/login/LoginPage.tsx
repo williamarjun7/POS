@@ -196,21 +196,6 @@ export function LoginPage() {
           </motion.div>
         </motion.form>
 
-        {/* Signup link */}
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.45, duration: 0.4 }}
-          className="mt-6 text-center text-sm text-muted-foreground"
-        >
-          Don't have an account?{' '}
-          <Link
-            to="/signup"
-            className="font-medium text-primary underline-offset-4 after:absolute after:bottom-0 after:left-0 after:h-px after:w-full after:origin-right after:scale-x-0 after:bg-primary after:transition-transform after:duration-300 hover:after:origin-left hover:after:scale-x-100 relative"
-          >
-            Sign up
-          </Link>
-        </motion.p>
 
         {/* Footer */}
         <motion.div

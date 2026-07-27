@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Printer, Phone, Ruler, Image, Copy, RefreshCw, Receipt, CheckCircle2, Cloud, AlertCircle } from 'lucide-react';
+import { Printer, Phone, Ruler, Image, Copy, RefreshCw, Receipt, CheckCircle2, Cloud, AlertCircle, QrCode, Globe } from 'lucide-react';
 import { PageTransition } from '@/components/ui/PageTransition';
 import { FormToggle } from '@/components/ui/form-field';
 import { usePrintSettings, type PaperSize } from '@/lib/services/print-settings';
@@ -149,6 +149,55 @@ export function PrintSettingsPage() {
                   +
                 </button>
               </div>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Google Review QR Card */}
+        <motion.div variants={pageTransitionFast} className="rounded-xl border bg-card p-6 shadow-sm transition-all hover:shadow-md">
+          <div className="mb-5 flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+              <QrCode className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            </div>
+            <h2 className="text-base font-semibold">Google Review QR</h2>
+          </div>
+          <p className="mb-4 text-xs text-muted-foreground">
+            A dynamic QR code linking to your Google Review page will appear on printed receipts.
+          </p>
+
+          <div className="space-y-4">
+            {/* Enable toggle */}
+            <div className="flex items-center justify-between rounded-xl border border-border p-4 transition-all hover:bg-muted/50">
+              <div className="flex items-center gap-3">
+                <Globe className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">Enable Review QR on Receipts</p>
+                  <p className="text-xs text-muted-foreground">Show Google Review QR code in the footer of printed invoices</p>
+                </div>
+              </div>
+              <FormToggle
+                label=""
+                checked={settings.enableGoogleReviewQr}
+                onChange={(v) => update({ enableGoogleReviewQr: v })}
+              />
+            </div>
+
+            {/* Review URL */}
+            <div>
+              <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+                <QrCode className="h-3.5 w-3.5 text-muted-foreground" />
+                Google Review URL
+              </label>
+              <input
+                type="url"
+                value={settings.googleReviewUrl}
+                onChange={e => update({ googleReviewUrl: e.target.value })}
+                placeholder="https://g.page/r/CYSJDIQPF_uwEAE/review"
+                className="h-11 w-full rounded-xl border border-border bg-background px-4 text-sm outline-none transition-all focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 font-mono text-xs"
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                The QR code encodes this URL. Update if your Google Business Profile review link changes.
+              </p>
             </div>
           </div>
         </motion.div>

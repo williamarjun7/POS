@@ -35,6 +35,10 @@ export interface PrintSettings {
   autoPrint: boolean;
   /** Number of print copies */
   printCopies: number;
+  /** Google Review URL for the review QR code on receipts */
+  googleReviewUrl: string;
+  /** Whether to show the Google Review QR code on receipts */
+  enableGoogleReviewQr: boolean;
 }
 
 /** Raw DB row shape (snake_case) for the print_settings table */
@@ -46,6 +50,8 @@ interface PrintSettingsRow {
   show_logo: boolean;
   auto_print: boolean;
   print_copies: number;
+  google_review_url: string;
+  enable_google_review_qr: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +67,8 @@ const DEFAULT_SETTINGS: PrintSettings = {
   showLogo: true,
   autoPrint: false,
   printCopies: 1,
+  googleReviewUrl: 'https://g.page/r/CYSJDIQPF_uwEAE/review',
+  enableGoogleReviewQr: true,
 };
 
 /* ─── Mapper helpers ────────────────────────────────────────── */
@@ -73,6 +81,8 @@ function rowToSettings(row: PrintSettingsRow): PrintSettings {
     showLogo: row.show_logo,
     autoPrint: row.auto_print,
     printCopies: row.print_copies,
+    googleReviewUrl: row.google_review_url ?? DEFAULT_SETTINGS.googleReviewUrl,
+    enableGoogleReviewQr: row.enable_google_review_qr ?? DEFAULT_SETTINGS.enableGoogleReviewQr,
   };
 }
 
@@ -88,6 +98,8 @@ function settingsToRow(
     show_logo: settings.showLogo,
     auto_print: settings.autoPrint,
     print_copies: settings.printCopies,
+    google_review_url: settings.googleReviewUrl,
+    enable_google_review_qr: settings.enableGoogleReviewQr,
   };
 }
 

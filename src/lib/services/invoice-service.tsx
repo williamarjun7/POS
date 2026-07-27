@@ -1,15 +1,3 @@
-/**
- * InvoiceService
- * ───────────────
- * DB-backed read for invoices with basic financial fields.
- *
- * Table: public.invoices
- * RLS: authenticated users can SELECT
- *
- * Note: Invoice line items live in public.invoice_items and are not
- * joined here. The Finance page displays invoice-level data (totals,
- * statuses) and item counts from a separate query.
- */
 
 import { useState, useEffect, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'

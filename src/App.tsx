@@ -63,7 +63,6 @@ const NotFound = lazy(() => import('@/pages/NotFound').then(m => ({ default: m.N
 
 // Auth pages
 const LoginPage = lazy(() => import('@/pages/auth/login/LoginPage').then(m => ({ default: m.LoginPage })))
-const SignupPage = lazy(() => import('@/pages/auth/signup/SignupPage').then(m => ({ default: m.SignupPage })))
 const ForgotPasswordPage = lazy(() => import('@/pages/auth/forgot-password/ForgotPasswordPage').then(m => ({ default: m.ForgotPasswordPage })))
 const VerifyCodePage = lazy(() => import('@/pages/auth/verify-code/VerifyCodePage').then(m => ({ default: m.VerifyCodePage })))
 const ResetPasswordPage = lazy(() => import('@/pages/auth/reset-password/ResetPasswordPage').then(m => ({ default: m.ResetPasswordPage })))
@@ -192,9 +191,6 @@ export default function App() {
               <Route element={<RouteTransition><Outlet /></RouteTransition>}>
               <Route path="/login" element={
                 <LazyRoute><LoginPage /></LazyRoute>
-              } />
-              <Route path="/signup" element={
-                <LazyRoute><SignupPage /></LazyRoute>
               } />
               <Route path="/verify-email" element={
                 <LazyRoute><VerifyEmailPage /></LazyRoute>

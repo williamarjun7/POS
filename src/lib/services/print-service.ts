@@ -7,7 +7,7 @@
  *   import { printService } from '@/lib/services/print-service';
  *
  *   // Print customer invoice
- *   printService.printInvoice(invoiceData);
+ *   await printService.printInvoice(invoiceData);
  *
  * Extensible for future:
  *   - Thermal printer direct output via WebUSB / Network
@@ -16,6 +16,7 @@
 
 import type { InvoiceData } from '@/components/printing/InvoiceTemplate';
 import { getPrintSettings } from '@/lib/services/print-settings';
+import QRCode from 'qrcode';
 
 /* ─── Image pre-loading ─────────────────────────────────────── */
 
@@ -38,16 +39,54 @@ function urlToDataUri(src: string): Promise<string> {
     .catch(() => src); // fallback to raw URL if fetch fails
 }
 
-// Eagerly pre-load images into base64 data URIs
+// Eagerly pre-load logo into base64 data URI
 let logoDataUri = '';
-let reviewDataUri = '';
 
 const logoUrl = new URL('@/assets/logo.png', import.meta.url).href;
-const reviewUrl = new URL('@/assets/review.png', import.meta.url).href;
 
 // Kick off async pre-load; assign synchronously so the cache is warm
 urlToDataUri(logoUrl).then((uri) => { logoDataUri = uri; });
-urlToDataUri(reviewUrl).then((uri) => { reviewDataUri = uri; });
+
+/* ─── Dynamic QR code generation ───────────────────────────── */
+
+/**
+ * Generates a Google Review QR code data URI from the configured settings.
+ * Returns an empty string if QR is disabled or URL is empty.
+ */
+let reviewQrDataUri = '';
+let lastReviewUrl = '';
+let lastReviewEnabled = false;
+
+async function generateReviewQr(): Promise<void> {
+  const settings = getPrintSettings();
+  const url = settings.googleReviewUrl?.trim();
+  const enabled = settings.enableGoogleReviewQr;
+
+  // Skip if nothing changed
+  if (url === lastReviewUrl && enabled === lastReviewEnabled && reviewQrDataUri) return;
+
+  lastReviewUrl = url ?? '';
+  lastReviewEnabled = enabled;
+
+  if (!enabled || !url) {
+    reviewQrDataUri = '';
+    return;
+  }
+
+  try {
+    reviewQrDataUri = await QRCode.toDataURL(url, {
+      width: 512,
+      margin: 4,
+      color: { dark: '#000000', light: '#ffffff' },
+      errorCorrectionLevel: 'M',
+    });
+  } catch {
+    reviewQrDataUri = '';
+  }
+}
+
+// Pre-generate on module load with current settings
+generateReviewQr();
 
 /* ─── Render helpers ────────────────────────────────────────── */
 
@@ -90,62 +129,73 @@ function renderInvoiceHtml(invoice: InvoiceData): string {
   const hasPaymentBreakdown = invoice.paymentBreakdown && invoice.paymentBreakdown.length > 0;
   const showLogo = getPrintSettings().showLogo;
   const imgLogo = logoDataUri || logoUrl;
-  const imgReview = reviewDataUri || reviewUrl;
+  const imgReview = reviewQrDataUri;
   const paperSize = getPrintSettings().paperSize;
   const pageSize = paperSize === 'A4' ? '210mm 297mm' : `${paperSize} auto`;
   const bodyWidth = paperSize === 'A4' ? '190mm' : paperSize;
   const phone = escapeHtml(getPrintSettings().phone);
   const pan = escapeHtml(getPrintSettings().pan);
 
+  const reviewSection = imgReview
+    ? `
+    <div style="font-size:14px;font-weight:700;margin-bottom:1mm;letter-spacing:1px">&#9733;&#9733;&#9733;&#9733;&#9733;</div>
+    <div style="font-size:12px;font-weight:600;margin-bottom:0.5mm">Enjoyed your visit?</div>
+    <div style="font-size:11px;font-weight:500;margin-bottom:2mm;line-height:1.4">Please scan the QR code below to leave us a Google Review.</div>
+    <div style="padding:1.5mm">
+      <img src="${imgReview}" alt="Google Review QR" style="height:35mm;width:35mm;margin:0 auto;image-rendering:crisp-edges;background:#fff" />
+    </div>
+    <div style="font-size:11px;font-weight:500;margin-top:1mm;line-height:1.5">Thank you for supporting Highlands Cafe &amp; Motel Inn.</div>`
+    : `<div style="font-size:12px;font-weight:500;margin-bottom:2mm">Thank You For Visiting!</div>`;
+
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8" /><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
 <style>
   @page { size: ${pageSize}; margin: 0; }
-  body { margin:0; padding:4mm 3mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:'Courier New',Courier,monospace; font-size:10px; line-height:1.4; color:#000; background:#fff; }
+  body { margin:0; padding:4mm 3mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
   img { display:block; }
   .center { text-align:center; }
-  .divider { border-top:1px dashed #aaa; margin:2mm 0; }
+  .divider { border-top:1px dashed #000; margin:2.5mm 0; }
   .row { display:flex; justify-content:space-between; }
-  .item { margin-bottom:1mm; }
+  .item { margin-bottom:1.2mm; }
   .item-row { display:flex; justify-content:space-between; align-items:baseline; }
-  .item-name { flex:1; font-weight:500; padding-right:2mm; }
-  .item-qty { width:12mm; text-align:right; font-size:9px; }
-  .item-amount { width:18mm; text-align:right; font-weight:500; }
-  .sub-line { padding-left:4mm; font-size:8px; color:#555; }
-  .note { color:#888; font-style:italic; }
-  .totals { margin-top:1mm; }
-  .totals .row { font-size:9px; margin-bottom:0.5mm; }
-  .total-line { border-top:1px solid #000; margin-top:1mm; padding-top:1mm; display:flex; justify-content:space-between; font-weight:700; font-size:12px; }
+  .item-name { flex:1; font-weight:500; padding-right:2mm; font-size:12px; }
+  .item-qty { width:12mm; text-align:right; font-size:12px; font-weight:500; }
+  .item-amount { width:18mm; text-align:right; font-weight:500; font-size:12px; }
+  .sub-line { padding-left:4mm; font-size:10px; font-weight:500; }
+  .note { font-style:italic; }
+  .totals { margin-top:2mm; }
+  .totals .row { font-size:12px; font-weight:500; margin-bottom:0.5mm; }
+  .total-line { border-top:1.5px solid #000; margin-top:1.5mm; padding-top:1.5mm; display:flex; justify-content:space-between; font-weight:800; font-size:18px; }
   @media print { body { margin:0; padding:4mm 3mm; } }
 </style></head>
 <body>
   <div class="center">
-    ${showLogo ? `<img src="${imgLogo}" alt="Logo" style="height:18mm;margin:0 auto 1.5mm" />` : ''}
-    <div style="font-size:14px;font-weight:700">Highlands Cafe &amp; Motel Inn</div>
-    <div style="font-size:8px;color:#555;margin-top:0.5mm">Premium Stays &bull; Great Coffee</div>
-    <div style="font-size:8px;color:#555;margin-top:1mm">Birendranagar-8, Khajura<br />Surkhet, Nepal<br />Phone: ${phone}<br />PAN: ${pan}</div>
+    ${showLogo ? `<img src="${imgLogo}" alt="Logo" style="height:18mm;margin:0 auto 2mm" />` : ''}
+    <div style="font-size:18px;font-weight:700;letter-spacing:0.5px">Highlands Cafe &amp; Motel Inn</div>
+    <div style="font-size:12px;font-weight:500;margin-top:1mm">Premium Stays &bull; Great Coffee</div>
+    <div style="font-size:11px;font-weight:500;margin-top:1.5mm;line-height:1.5">Birendranagar-8, Khajura<br />Surkhet, Nepal<br />Phone: ${phone}<br />PAN: ${pan}</div>
   </div>
   <div class="divider"></div>
-  <div style="margin-bottom:2mm">
-    <div style="font-weight:700">Invoice #${escapeHtml(invoice.invoiceNumber)}</div>
-    <div class="row" style="font-size:8px;color:#555"><span>Date : ${escapeHtml(invoice.date)}</span><span>Time : ${escapeHtml(invoice.time)}</span></div>
+  <div style="margin-bottom:2.5mm">
+    <div style="font-weight:600;font-size:13px">Invoice #${escapeHtml(invoice.invoiceNumber)}</div>
+    <div class="row" style="font-size:12px;font-weight:500;margin-top:0.5mm"><span>Date : ${escapeHtml(invoice.date)}</span><span>Time : ${escapeHtml(invoice.time)}</span></div>
   </div>
   <div class="divider"></div>
-  <div class="row" style="font-weight:700;font-size:9px;border-bottom:1px dashed #999;padding-bottom:1mm;margin-bottom:1mm">
+  <div class="row" style="font-weight:600;font-size:12px;border-bottom:1px dashed #000;padding-bottom:1.5mm;margin-bottom:1.5mm">
     <span style="flex:1">Item</span><span style="width:12mm;text-align:right">Qty</span><span style="width:18mm;text-align:right">Amount</span>
   </div>
   ${itemsToHtml(invoice.items)}
   <div class="divider"></div>
   ${hasPaymentBreakdown ? `
-  <div style="margin-bottom:1mm">
-    <div style="font-weight:700;font-size:9px;margin-bottom:0.5mm">Payment</div>
+  <div style="margin-bottom:1.2mm">
+    <div style="font-weight:600;font-size:12px;margin-bottom:0.8mm">Payment</div>
     ${(invoice.paymentBreakdown ?? []).map(p => {
       const label = getPaymentMethodLabel(p.method);
       const hasPmtDiscount = (p.discount ?? 0) > 0;
-      return `<div class="row" style="font-size:9px;margin-bottom:0.5mm">
+      return `<div class="row" style="font-size:12px;font-weight:500;margin-bottom:0.5mm">
         <span>${escapeHtml(label)}</span>
-        <span>${hasPmtDiscount ? `<span style="color:#c00;font-size:8px">-${fmt(p.discount)} </span>` : ''}${fmt(p.amount)}</span>
+        <span>${hasPmtDiscount ? `<span style="color:#c00;font-size:11px;font-weight:600">-${fmt(p.discount)} </span>` : ''}${fmt(p.amount)}</span>
       </div>`;
     }).join('')}
   </div>
@@ -156,10 +206,9 @@ function renderInvoiceHtml(invoice: InvoiceData): string {
     <div class="total-line"><span>TOTAL</span><span>${fmt(invoice.total)}</span></div>
   </div>
   <div class="divider"></div>
-  <div class="center" style="margin-top:2mm">
-    <div style="font-size:10px;font-weight:500;margin-bottom:1.5mm">Thank You For Visiting!</div>
-    <img src="${imgReview}" alt="Review QR" style="height:16mm;margin:0 auto 1.5mm" />
-    <div style="font-size:8px;color:#555">highlandscafemotelinn.com</div>
+  <div class="center" style="margin-top:2.5mm">
+    ${reviewSection}
+    <div style="font-size:11px;font-weight:500;margin-top:${imgReview ? '2mm' : '1mm'};line-height:1.5">highlandscafemotelinn.com</div>
   </div>
 </body>
 </html>`;
@@ -209,7 +258,14 @@ function printViaIframe(html: string): void {
 /* ─── Public API ────────────────────────────────────────────── */
 
 export const printService = {
-  printInvoice(invoice: InvoiceData): void {
+  /**
+   * Print an invoice receipt.
+   * Generates a fresh Google Review QR code if settings have changed,
+   * then renders and prints the receipt via an iframe.
+   */
+  async printInvoice(invoice: InvoiceData): Promise<void> {
+    // Ensure the QR is up-to-date before rendering
+    await generateReviewQr();
     printViaIframe(renderInvoiceHtml(invoice));
   },
 };

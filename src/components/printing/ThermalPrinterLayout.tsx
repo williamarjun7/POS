@@ -65,9 +65,10 @@ export function ThermalPrinterLayout({ children, className = '' }: ThermalPrinte
         width: '80mm',
         maxWidth: '80mm',
         padding: '4mm 3mm',
-        fontFamily: "'Courier New', 'Courier', monospace",
-        fontSize: '10px',
+        fontFamily: "system-ui, 'Segoe UI', Arial, sans-serif",
+        fontSize: '12px',
         lineHeight: 1.4,
+        fontVariantNumeric: 'tabular-nums',
         color: '#000',
         backgroundColor: '#fff',
       }}
