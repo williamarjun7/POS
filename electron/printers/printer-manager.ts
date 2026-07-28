@@ -50,6 +50,8 @@ class PrinterManager {
   private healthInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
+    console.log('[PRINTER] PrinterManager initializing...');
+
     // Register the processing function with the queue
     printQueue.setProcessFunction(() => this.processNextJob());
 
@@ -59,9 +61,12 @@ class PrinterManager {
     // Process any leftover queued jobs from previous session on startup
     setTimeout(() => {
       if (printQueue.hasQueuedJobs()) {
+        console.log('[PRINTER] Found queued jobs from previous session, reprocessing...');
         printQueue.setProcessFunction(() => this.processNextJob());
       }
     }, 0);
+
+    console.log('[PRINTER] ✓ PrinterManager initialized');
   }
 
   // ─── Submit ──────────────────────────────────────
@@ -97,18 +102,18 @@ class PrinterManager {
   }
 
   /**
-   * Submit a test receipt.
+   * Submit a test receipt with live business data.
    */
-  submitTestReceipt(paperSize: EscposPaperSize = '80mm'): string {
-    const buffer = this.buildTestReceiptBuffer(paperSize);
+  submitTestReceipt(paperSize: EscposPaperSize = '80mm', testData?: any): string {
+    const buffer = this.buildTestReceiptBuffer(paperSize, testData);
     return this.enqueue('test_receipt', buffer, 'TEST-RECEIPT');
   }
 
   /**
-   * Submit a test KOT.
+   * Submit a test KOT with live business data.
    */
-  submitTestKot(paperSize: EscposPaperSize = '80mm'): string {
-    const buffer = this.buildTestKotBuffer(paperSize);
+  submitTestKot(paperSize: EscposPaperSize = '80mm', testData?: any): string {
+    const buffer = this.buildTestKotBuffer(paperSize, testData);
     return this.enqueue('test_kot', buffer, 'TEST-KOT');
   }
 
@@ -195,6 +200,10 @@ class PrinterManager {
 
   /**
    * Execute a print job using the appropriate transport.
+   *
+   * Routing logic:
+   *   KOT / test_kot → TCP/IP (kitchen printer, mandatory)
+   *   Receipt-type jobs → USB first, then TCP/IP fallback if kitchen printer configured
    */
   private async printJob(job: PrintJobMeta): Promise<{ success: boolean; error?: string }> {
     const buffer = Buffer.from(job.escposBase64, 'base64');
@@ -202,21 +211,28 @@ class PrinterManager {
 
     try {
       if (job.type === 'kot' || job.type === 'test_kot') {
-        // Kitchen printer: TCP/IP
+        // Kitchen printer: TCP/IP (mandatory — no USB fallback for KOT)
         if (!config.kitchen.ip) {
+          console.warn('[PRINTER] KOT print failed: kitchen printer IP not configured in electron-store');
+          console.warn('[PRINTER]   → Go to Print Settings, enter IP, and the config syncs automatically');
           return { success: false, error: 'Kitchen printer IP not configured' };
         }
+        console.log(`[PRINTER] Printing KOT via TCP: ${config.kitchen.ip}:${config.kitchen.port}`);
         const { printTcp } = await import('./tcp-transport.js');
         return await printTcp(buffer, { ip: config.kitchen.ip, port: config.kitchen.port });
       } else {
-        // Receipt / invoice / bill_preview / test_receipt: USB
+        // Receipt / invoice / bill_preview / test_receipt
+        // USB only — no TCP fallback for receipt-type jobs
+        console.log('[PRINTER] Attempting USB print for', job.type, '...');
         const { printUsb } = await import('./usb-transport.js');
         return await printUsb(buffer);
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Print execution failed';
+      console.error('[PRINTER] Print job exception:', msg);
       return {
         success: false,
-        error: err instanceof Error ? err.message : 'Print execution failed',
+        error: msg,
       };
     }
   }
@@ -238,18 +254,18 @@ class PrinterManager {
   }
 
   /**
-   * Build ESC/POS buffer for a test receipt.
+   * Build ESC/POS buffer for a test receipt with live business data.
    */
-  private buildTestReceiptBuffer(paperSize: EscposPaperSize): string {
-    const buffer = buildTestReceipt(paperSize);
+  private buildTestReceiptBuffer(paperSize: EscposPaperSize, testData?: any): string {
+    const buffer = buildTestReceipt(paperSize, testData);
     return buffer.toString('base64');
   }
 
   /**
-   * Build ESC/POS buffer for a test KOT.
+   * Build ESC/POS buffer for a test KOT with live business data.
    */
-  private buildTestKotBuffer(paperSize: EscposPaperSize): string {
-    const buffer = buildTestKot(paperSize);
+  private buildTestKotBuffer(paperSize: EscposPaperSize, testData?: any): string {
+    const buffer = buildTestKot(paperSize, testData);
     return buffer.toString('base64');
   }
 
@@ -258,12 +274,18 @@ class PrinterManager {
    */
   private async refreshStatus(): Promise<void> {
     const config = getLocalPrinterConfig();
+    console.log('[PRINTER] Refreshing printer status...');
+    console.log('[PRINTER]   Kitchen config:', config.kitchen.ip ? `${config.kitchen.ip}:${config.kitchen.port}` : 'not configured');
+
     const [receipt, kitchen] = await Promise.all([
       checkUsbPrinter(),
       config.kitchen.ip
         ? checkKitchenStatus(config.kitchen.ip, config.kitchen.port)
         : Promise.resolve({ connected: false, error: 'Not configured' }),
     ]);
+
+    console.log('[PRINTER]   USB printer:', receipt.connected ? '✓ connected' : '✗ disconnected', receipt.name || '');
+    console.log('[PRINTER]   Kitchen printer:', kitchen.connected ? '✓ connected' : '✗ disconnected');
 
     this._lastStatus = {
       receipt: {
@@ -279,6 +301,7 @@ class PrinterManager {
       },
     };
 
+    console.log('[PRINTER] Status updated:', JSON.stringify(this._lastStatus));
     this.notify();
   }
 
@@ -287,6 +310,8 @@ class PrinterManager {
    * When printers come back online, queued/failed jobs are retried.
    */
   private startHealthChecks(): void {
+    console.log('[PRINTER] Starting health checks (30s interval)...');
+
     // Initial status check
     this.refreshStatus();
 
@@ -296,6 +321,7 @@ class PrinterManager {
       // If there are queued or failed jobs and printer appears online, retry
       const hasWork = printQueue.hasQueuedJobs() || printQueue.hasFailedJobs();
       if (hasWork && !printQueue.isProcessing()) {
+        console.log('[PRINTER] Queued/failed jobs detected, checking printer availability...');
         const config = getLocalPrinterConfig();
 
         // Check if at least one printer is available
@@ -306,9 +332,12 @@ class PrinterManager {
         const receiptOnline = (await checkUsbPrinter()).connected;
 
         if (kitchenOnline || receiptOnline) {
+          console.log('[PRINTER] Printer(s) online, retrying failed/queued jobs...');
           // Retry failed jobs and process queued ones
           printQueue.retryAll();
           printQueue.setProcessFunction(() => this.processNextJob());
+        } else {
+          console.log('[PRINTER] No printers available yet, will retry later');
         }
       }
     }, 30_000);

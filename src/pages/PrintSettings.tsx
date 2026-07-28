@@ -65,6 +65,23 @@ export function PrintSettingsPage() {
     return () => clearInterval(interval);
   }, [isDesktop]);
 
+  // ── Sync kitchen printer IP/port to electron-store on every change (debounced) ──
+  // Without this, the printer manager (main process) reads empty IP/port
+  // from electron-store and prints fail with "Kitchen printer IP not configured"
+  useEffect(() => {
+    if (!isDesktop) return;
+    const api = getElectronAPI();
+    const timer = setTimeout(() => {
+      api.setKitchenPrinterConfig({
+        ip: settings.kitchenPrinterIp,
+        port: settings.kitchenPrinterPort,
+      }).catch((err: any) => {
+        console.warn('[PrintSettings] Failed to sync kitchen printer config to electron-store:', err?.message || err);
+      });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [isDesktop, settings.kitchenPrinterIp, settings.kitchenPrinterPort]);
+
   const handleToggleAutoLaunch = useCallback(async () => {
     if (!isDesktop) return;
     setAutoLaunchLoading(true);

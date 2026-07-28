@@ -29,6 +29,11 @@ import QRCode from 'qrcode';
  * when print() fires.
  */
 function urlToDataUri(src: string): Promise<string> {
+  // If Vite inlined the asset as a data URI (small images), use it directly.
+  // Calling fetch() on a data: URI triggers CSP connect-src violations because
+  // `data:` is not in the Content-Security-Policy connect-src directive.
+  if (src.startsWith('data:')) return Promise.resolve(src);
+
   return fetch(src)
     .then((res) => res.blob())
     .then((blob) => {
@@ -403,10 +408,8 @@ async function printWithRetry(
         const delay = baseDelayMs * attempt; // Linear backoff: 600, 1200, 1800
         await new Promise(r => setTimeout(r, delay));
       } else {
-        // Final attempt failed — silently swallow
-        if (import.meta.env.DEV) {
-          console.warn('[PRINT] All retries exhausted:', err instanceof Error ? err.message : String(err));
-        }
+        // Final attempt failed — log for diagnostics
+        console.warn('[PRINT] All retries exhausted:', err instanceof Error ? err.message : String(err));
       }
     }
   }
@@ -443,13 +446,17 @@ export type PrintDocumentType = 'invoice' | 'kot' | 'bill_preview' | 'test_recei
  *
  * @param html - The fully rendered HTML document to print
  * @param type - The type of document being printed
+ * @param data - Optional structured data for native ESC/POS printing (InvoiceData, KotData, etc.)
  */
-export function routePrintDocument(html: string, type: PrintDocumentType): void {
-  const targetPrinter = type === 'kot' || type === 'test_kot'
-    ? 'kitchen'
-    : 'receipt'
-
+export async function routePrintDocument(
+  html: string,
+  type: PrintDocumentType,
+  data?: InvoiceData | KotData,
+): Promise<void> {
   if (import.meta.env.DEV) {
+    const targetPrinter = type === 'kot' || type === 'test_kot'
+      ? 'kitchen'
+      : 'receipt'
     console.log(`[PRINT] Routing ${type} → ${targetPrinter} printer`)
   }
 
@@ -458,18 +465,124 @@ export function routePrintDocument(html: string, type: PrintDocumentType): void 
   // and send directly to the printer manager via IPC.
   if (isElectron()) {
     try {
-      getElectronAPI().printSubmit(type, html);
-      return;
-    } catch (err) {
-      if (import.meta.env.DEV) {
-        console.warn('[PRINT] Electron print failed, falling back to iframe:', err);
+      const api = getElectronAPI();
+      const s = getPrintSettings();
+      const escposPaper = s.paperSize === 'A4' ? '80mm' : s.paperSize as '58mm' | '80mm';
+
+      switch (type) {
+        case 'test_receipt':
+          console.log('[PRINT] Sending test receipt to native ESC/POS printer...');
+          {
+            const now = new Date();
+            await api.printSubmitTest('receipt', undefined, {
+              businessName: 'Highlands Cafe & Motel Inn',
+              address: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
+              phone: s.phone,
+              pan: s.pan,
+              paperSize: escposPaper,
+              date: now.toLocaleDateString('en-GB'),
+              time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            });
+          }
+          return;
+
+        case 'test_kot':
+          console.log('[PRINT] Sending test KOT to native ESC/POS printer...');
+          {
+            const now = new Date();
+            await api.printSubmitTest('kot', undefined, {
+              businessName: 'Highlands Cafe & Motel Inn',
+              address: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
+              phone: s.phone,
+              pan: s.pan,
+              paperSize: escposPaper,
+              date: now.toLocaleDateString('en-GB'),
+              time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            });
+          }
+          return;
+
+        case 'invoice': {
+          const inv = data as InvoiceData;
+          if (!inv) break; // No data — fall back to iframe
+          console.log('[PRINT] Sending invoice to native ESC/POS printer...');
+          await api.printSubmitInvoice({
+            businessName: 'Highlands Cafe & Motel Inn',
+            businessAddress: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
+            phone: s.phone,
+            pan: s.pan,
+            invoiceNumber: inv.invoiceNumber,
+            date: inv.date,
+            time: inv.time,
+            cashier: inv.cashierName,
+            table: inv.tableOrRoom,
+            items: inv.items,
+            subtotal: inv.subtotal,
+            discount: inv.discount,
+            total: inv.total,
+            paymentMethod: inv.paymentBreakdown?.[0]?.method,
+            paymentBreakdown: inv.paymentBreakdown,
+            showLogo: s.showLogo,
+            paperSize: escposPaper,
+          });
+          return;
+        }
+
+        case 'bill_preview': {
+          const inv = data as InvoiceData;
+          if (!inv) break;
+          console.log('[PRINT] Sending bill preview to native ESC/POS printer...');
+          await api.printSubmitBillPreview(inv.invoiceNumber, {
+            businessName: 'Highlands Cafe & Motel Inn',
+            businessAddress: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
+            phone: s.phone,
+            pan: s.pan,
+            invoiceNumber: inv.invoiceNumber,
+            date: inv.date,
+            time: inv.time,
+            cashier: inv.cashierName,
+            table: inv.tableOrRoom,
+            items: inv.items,
+            subtotal: inv.subtotal,
+            discount: inv.discount,
+            total: inv.total,
+            showLogo: false,
+            paperSize: escposPaper,
+          });
+          return;
+        }
+
+        case 'kot': {
+          const kot = data as KotData;
+          if (!kot) break; // No data — fall back to iframe
+          console.log('[PRINT] Sending KOT to native ESC/POS printer...');
+          await api.printSubmitKot({
+            businessName: 'Highlands Cafe & Motel Inn',
+            orderNumber: kot.orderNumber,
+            tableOrRoom: kot.tableOrRoom,
+            date: kot.date,
+            time: kot.time,
+            customerName: kot.customerName,
+            waiterName: kot.waiterName,
+            items: kot.items,
+            paperSize: escposPaper,
+            showCustomer: s.showCustomerOnKot ?? false,
+            showStaff: s.showStaffOnKot ?? false,
+          }, kot.orderNumber);
+          return;
+        }
+
+        default:
+          console.warn('[PRINT] Unknown document type:', type);
+          break;
       }
+    } catch (err) {
+      console.warn('[PRINT] Electron print failed, falling back to iframe:', err);
       // Fall through to iframe fallback
     }
   }
 
-  // ── Browser fallback ─────────────────────────────────────
-  // Both targets use the same iframe mechanism for now.
+  // ── Browser / iframe fallback ─────────────────────────────
   printViaIframe(html)
 }
 
@@ -526,7 +639,7 @@ export const printService = {
     // Ensure all QRs are up-to-date before rendering
     await generateAllQrs();
     const html = renderInvoiceHtml(invoice);
-    await printWithRetry(() => { routePrintDocument(html, 'invoice'); });
+    await printWithRetry(() => { routePrintDocument(html, 'invoice', invoice); });
   },
 
   /**
@@ -545,7 +658,7 @@ export const printService = {
         const html = renderKotHtml(kot, settings.paperSize, settings.showCustomerOnKot, settings.showStaffOnKot);
         // Small delay between copies to allow the print dialog to process
         if (i > 0) await new Promise(r => setTimeout(r, 800));
-        routePrintDocument(html, 'kot');
+        routePrintDocument(html, 'kot', kot);
       }
     });
   },
@@ -627,6 +740,6 @@ export const printService = {
 </body>
 </html>`;
 
-    fireAndForget(() => { routePrintDocument(html, 'bill_preview'); });
+    fireAndForget(() => { routePrintDocument(html, 'bill_preview', invoice); });
   },
 };

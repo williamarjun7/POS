@@ -54,11 +54,11 @@ export function registerIpcHandlers(): void {
     return printerManager.submitKot(data, reference);
   });
 
-  ipcMain.handle('print:submit-test', (_event, type: 'receipt' | 'kot', paperSize?: string): string => {
+  ipcMain.handle('print:submit-test', (_event, type: 'receipt' | 'kot', paperSize?: string, testData?: any): string => {
     if (type === 'receipt') {
-      return printerManager.submitTestReceipt((paperSize as any) || '80mm');
+      return printerManager.submitTestReceipt((paperSize as any) || '80mm', testData);
     }
-    return printerManager.submitTestKot((paperSize as any) || '80mm');
+    return printerManager.submitTestKot((paperSize as any) || '80mm', testData);
   });
 
   ipcMain.handle('print:submit-bill-preview', (_event, reference: string, data: any): string => {

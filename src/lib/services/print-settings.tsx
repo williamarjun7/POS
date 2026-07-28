@@ -169,16 +169,23 @@ function loadFromStorage(): PrintSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return { ...DEFAULT_SETTINGS, ...parsed };
+      }
     }
-  } catch { /* ignore corrupt data */ }
+  } catch (e) {
+    console.warn('[PrintSettings] Corrupt localStorage data, using defaults:', e);
+  }
   return { ...DEFAULT_SETTINGS };
 }
 
 function saveToStorage(settings: PrintSettings): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-  } catch { /* storage full or unavailable — silently ignore */ }
+  } catch (e) {
+    console.error('[PrintSettings] Failed to save to localStorage:', e);
+  }
 }
 
 /* ─── DB load / save ────────────────────────────────────────── */
@@ -196,17 +203,23 @@ async function loadFromDb(): Promise<PrintSettings | null> {
       .maybeSingle();
 
     if (error) {
-      // Permission denied (42501), 401 (not authenticated), or table doesn't exist
-      // — use local defaults without flooding the console.
-      if (error.code !== '42501' && error.code !== '401') {
-        console.warn('[PrintSettings] DB load failed:', error.message);
-      } else if (import.meta.env.DEV) {
-        console.info('[PrintSettings] Using local defaults (DB load not available)');
+      // Always warn on DB load failures so the user can diagnose sync issues
+      if (error.code === '42501') {
+        console.warn('[PrintSettings] DB load: permission denied — user role lacks SELECT on print_settings table');
+      } else if (error.code === '401') {
+        console.warn('[PrintSettings] DB load: not authenticated — session may have expired');
+      } else if (error.code === '404' || error.message?.includes('relation') || error.message?.includes('does not exist')) {
+        console.warn('[PrintSettings] DB load: print_settings table does not exist — run migrations');
+      } else {
+        console.warn('[PrintSettings] DB load failed:', error.code, error.message);
       }
       return null;
     }
-    if (!data) return null;
+    if (!data) {
+      return null;
+    }
 
+    console.log('[PrintSettings] ✓ Loaded from DB');
     return rowToSettings(data as PrintSettingsRow);
   } catch (err) {
     console.warn('[PrintSettings] DB load error:', err);
@@ -298,16 +311,16 @@ const PrintSettingsContext = createContext<PrintSettingsContextValue | undefined
 /* ─── Provider ──────────────────────────────────────────────── */
 
 export function PrintSettingsProvider({ children }: { children: React.ReactNode }) {
-  const { isReady: authReady } = useAuth();
+  const { isReady: authReady, user } = useAuth();
   const [settings, setSettings] = useState<PrintSettings>(loadFromStorage);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const dbTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialLoadDone = useRef(false);
 
-  // ── On mount: fetch from DB once auth is ready ──────────────
+  // ── On mount: fetch from DB once auth is ready AND user is authenticated ──
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || !user) return;
     let cancelled = false;
 
     (async () => {
@@ -315,10 +328,21 @@ export function PrintSettingsProvider({ children }: { children: React.ReactNode 
       if (cancelled) return;
 
       if (dbSettings) {
-        // DB is source of truth — merge into state
-        setSettings(dbSettings);
-        saveToStorage(dbSettings);
-        _cachedSettings = dbSettings;
+        // Merge: DB is the primary source, but keep any localStorage values
+        // that contain real user data not yet synced to DB. This handles the
+        // case where the auto-sync hasn't pushed local changes yet.
+        const local = loadFromStorage();
+        const merged = { ...dbSettings };
+        // Only override from localStorage if the local value is a non-empty,
+        // non-default string — prevents empty/default data from overwriting
+        // the correct DB values.
+        if (local.phone && local.phone !== DEFAULT_SETTINGS.phone) merged.phone = local.phone;
+        if (local.pan && local.pan !== DEFAULT_SETTINGS.pan) merged.pan = local.pan;
+
+        console.log('[PrintSettings] ✓ DB loaded');
+        setSettings(merged);
+        saveToStorage(merged);
+        _cachedSettings = merged;
         setLastSyncedAt(new Date().toISOString());
       }
 
@@ -327,7 +351,7 @@ export function PrintSettingsProvider({ children }: { children: React.ReactNode 
     })();
 
     return () => { cancelled = true; };
-  }, [authReady]);
+  }, [authReady, user]);
 
   // ── On every change: sync to localStorage immediately + debounced DB ──
   useEffect(() => {
@@ -336,17 +360,24 @@ export function PrintSettingsProvider({ children }: { children: React.ReactNode 
 
     // Don't try DB writes before auth is ready AND initial DB load is done
     // (avoids 401 race where the debounce fires before the session token is attached)
-    if (!authReady || !initialLoadDone.current) return;
+    if (!authReady || !user || !initialLoadDone.current) return;
 
     // Debounce DB write (300ms) — background failures are non-fatal since
-    // localStorage is the live fallback. Log non-permission errors in DEV.
+    // localStorage is the live fallback. Always log errors so the user can
+    // diagnose sync issues via DevTools.
     if (dbTimerRef.current) clearTimeout(dbTimerRef.current);
     dbTimerRef.current = setTimeout(() => {
       saveToDb(settings)
         .then(() => setLastSyncedAt(new Date().toISOString()))
         .catch((err: { code?: string; message?: string }) => {
-          if (import.meta.env.DEV && err?.code !== '42501') {
-            console.info('[PrintSettings] Auto-sync skipped:', err?.message || 'unknown');
+          if (err?.code === '42501') {
+            console.warn('[PrintSettings] Auto-sync: permission denied — check user role (admin/manager required to write)');
+          } else if (err?.code === '401') {
+            console.warn('[PrintSettings] Auto-sync: session expired — re-login required');
+          } else if (err?.message?.includes('relation') || err?.message?.includes('does not exist')) {
+            console.warn('[PrintSettings] Auto-sync: print_settings table missing — run latest migration');
+          } else {
+            console.warn('[PrintSettings] Auto-sync failed:', err?.message || 'unknown error');
           }
         });
     }, 300);

@@ -467,40 +467,90 @@ export function buildKitchenKot(data: EscposKotData): Buffer {
 }
 
 /**
- * Build a test receipt for printer verification.
+ * Test data payload sent from the renderer (print-service.ts) to Electron.
  */
-export function buildTestReceipt(paperSize: EscposPaperSize): Buffer {
+export interface EscposTestData {
+  businessName: string;
+  address: string[];
+  phone: string;
+  pan: string;
+  paperSize: EscposPaperSize;
+  date: string;
+  time: string;
+}
+
+/**
+ * Build a test receipt for printer verification.
+ * Uses live business data when available, otherwise falls back to
+ * a simple connectivity test.
+ */
+export function buildTestReceipt(paperSize: EscposPaperSize, testData?: EscposTestData): Buffer {
   const p = new EscposBuilder();
+  const cols = getCols(paperSize);
+  const now = new Date();
+  const date = testData?.date || now.toLocaleDateString('en-GB');
+  const time = testData?.time || now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
 
   p.init();
   p.feed(1);
+
+  // Header with live business data
   p.alignCenter();
   p.bold(true);
   p.charSize(2, 2);
-  p.writeln('TEST RECEIPT');
+  p.writeln(testData?.businessName || 'Highlands Cafe & Motel Inn');
   p.charSize(1, 1);
   p.bold(false);
-  p.writeln('*** Test Print ***');
+
+  if (testData?.address) {
+    for (const addrLine of testData.address) {
+      p.writeln(addrLine);
+    }
+  }
+  if (testData?.phone) p.writeln(`Phone: ${testData.phone}`);
+  if (testData?.pan) p.writeln(`PAN: ${testData.pan}`);
 
   p.divider('═');
 
-  p.writeln('Invoice #TEST-001');
-  p.writeln('If you can read this,');
-  p.writeln('your printer is working correctly!');
+  // Test header
+  p.alignCenter();
+  p.bold(true);
+  p.writeln('★ TEST RECEIPT ★');
+  p.bold(false);
+  p.writeln('*** Printer Verification ***');
+  p.alignLeft();
+
+  p.twoCol(`Date: ${date}`, `Time: ${time}`, cols);
 
   p.divider('─');
 
-  p.itemRow('Test Item 1', 1, 100.00);
-  p.itemRow('Test Item 2', 2, 200.00);
+  // Sample items
+  p.bold(true);
+  p.writeln('Item                 Qty   Amount');
+  p.bold(false);
+  p.divider('─');
+
+  p.itemRow('Test Item 1', 1, 100.00, cols);
+  p.itemRow('Test Item 2', 2, 200.00, cols);
 
   p.divider('─');
-  p.twoCol('Subtotal', '300.00');
-  p.twoCol('Discount', '-50.00');
+  p.twoCol('Subtotal', '300.00', cols);
+  p.twoCol('Discount', '-50.00', cols);
+  p.feed(1);
   p.bold(true);
   p.charSize(2, 2);
-  p.twoCol('TOTAL', '250.00');
+  p.twoCol('TOTAL', '250.00', cols);
   p.charSize(1, 1);
   p.bold(false);
+
+  p.divider('═');
+
+  // Success message
+  p.alignCenter();
+  p.writeln('✓ Printer configured successfully!');
+  p.writeln('If you can read this clearly,');
+  p.writeln('your thermal printer is working');
+  p.writeln('correctly with the POS system.');
 
   p.feed(3);
   p.cut();
@@ -510,35 +560,49 @@ export function buildTestReceipt(paperSize: EscposPaperSize): Buffer {
 
 /**
  * Build a test KOT for printer verification.
+ * Uses live business data when available.
  */
-export function buildTestKot(paperSize: EscposPaperSize): Buffer {
+export function buildTestKot(paperSize: EscposPaperSize, testData?: EscposTestData): Buffer {
   const p = new EscposBuilder();
+  const cols = getCols(paperSize);
+  const now = new Date();
+  const date = testData?.date || now.toLocaleDateString('en-GB');
+  const time = testData?.time || now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
 
   p.init();
   p.feed(1);
+
+  // Header with live business data
   p.alignCenter();
   p.bold(true);
   p.charSize(2, 2);
-  p.writeln('TEST KITCHEN ORDER');
+  p.writeln(testData?.businessName || 'Highlands Cafe & Motel Inn');
   p.charSize(1, 1);
-  p.writeln('★ TEST ★');
+  p.writeln('★ KITCHEN ORDER ★');
   p.bold(false);
 
   p.divider('═');
 
+  // Order info
   p.bold(true);
-  p.writeln('Order #TEST-001          Table 99');
+  p.twoCol('Order #TEST-001', 'Table 99', cols);
   p.bold(false);
+  p.twoCol(`Date: ${date}`, `Time: ${time}`, cols);
+
+  if (testData?.phone) p.writeln(`Phone: ${testData.phone}`);
+  if (testData?.pan) p.writeln(`PAN: ${testData.pan}`);
 
   p.divider('─');
+
+  // Column header
   p.bold(true);
   p.writeln('Qty   ITEM');
   p.bold(false);
+
   p.divider('─');
 
-  p.bold(true);
+  // Sample items
   p.writeln('2     Chicken Mo:Mo');
-  p.bold(false);
   p.subLine('  • Steamed');
   p.subLine('  • Extra Spicy');
 
@@ -554,6 +618,12 @@ export function buildTestKot(paperSize: EscposPaperSize): Buffer {
   p.bold(true);
   p.writeln('TOTAL QTY : 6');
   p.bold(false);
+
+  p.feed(2);
+
+  // Success message
+  p.alignCenter();
+  p.writeln('✓ Kitchen printer working correctly');
 
   p.feed(3);
   p.cut();

@@ -14,6 +14,8 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
+console.log('[PRELOAD] Script executing...');
+
 /**
  * Type definition for the API exposed to the renderer.
  */
@@ -57,7 +59,10 @@ export interface ElectronAPI {
   onPrintQueueUpdated: (callback: (jobs: any[]) => void) => () => void;
 }
 
-contextBridge.exposeInMainWorld('electronAPI', {
+// ── Expose the electronAPI bridge to the renderer ────────────
+try {
+  console.log('[PRELOAD] Calling contextBridge.exposeInMainWorld...');
+  contextBridge.exposeInMainWorld('electronAPI', {
   // ── Native ESC/POS Printing ────────────────────
   printSubmitInvoice: (data: any) =>
     ipcRenderer.invoke('print:submit-invoice', data),
@@ -65,8 +70,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   printSubmitKot: (data: any, reference: string) =>
     ipcRenderer.invoke('print:submit-kot', data, reference),
 
-  printSubmitTest: (type: 'receipt' | 'kot', paperSize?: string) =>
-    ipcRenderer.invoke('print:submit-test', type, paperSize),
+  printSubmitTest: (type: 'receipt' | 'kot', paperSize?: string, testData?: any) =>
+    ipcRenderer.invoke('print:submit-test', type, paperSize, testData),
 
   printSubmitBillPreview: (reference: string, data: any) =>
     ipcRenderer.invoke('print:submit-bill-preview', reference, data),
@@ -134,8 +139,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   onUpdateProgress: (callback: (progress: any) => void) => {
     const listener = (_event: any, progress: any) => callback(progress);
-    ipcRenderer.on('download-progress', listener);
-    return () => ipcRenderer.removeListener('download-progress', listener);
+    ipcRenderer.on('update:progress', listener);
+    return () => ipcRenderer.removeListener('update:progress', listener);
   },
 
   onUpdateDownloaded: (callback: (info: any) => void) => {
@@ -155,4 +160,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('print:queue-updated', listener);
     return () => ipcRenderer.removeListener('print:queue-updated', listener);
   },
-} satisfies ElectronAPI);
+  } satisfies ElectronAPI);
+  console.log('[PRELOAD] ✓ electronAPI bridge exposed successfully');
+} catch (err) {
+  console.error('[PRELOAD] ✗ Failed to expose electronAPI:', err);
+}
+
+console.log('[PRELOAD] ✓ Preload script complete');

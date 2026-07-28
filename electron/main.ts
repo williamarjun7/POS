@@ -18,11 +18,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 console.log(`[MAIN] Starting ${APP_NAME} v${app.getVersion()}`);
 console.log(`[MAIN] Platform: ${process.platform} Packaged: ${app.isPackaged}`);
 console.log(`[MAIN] App path: ${app.getAppPath()}`);
+console.log(`[MAIN] __dirname: ${__dirname}`);
+console.log(`[MAIN] Preload path: ${path.join(__dirname, 'preload.js')}`);
+console.log(`[MAIN] VITE_DEV_SERVER_URL: ${process.env.VITE_DEV_SERVER_URL || '(not set)'}`);
 
 // ─── Icon path ────────────────────────────────────────────
 // In packaged: resources/app/dist/icon.png
 // In dev: dist/icon.png
 const APP_ICON = path.join(__dirname, '../dist/icon.png');
+console.log(`[MAIN] Icon path: ${APP_ICON}`);
 
 // ─── F11 Fullscreen ───────────────────────────────────────
 // Uses two redundant mechanisms for reliability:
@@ -126,6 +130,10 @@ async function createWindow(): Promise<void> {
   });
 
   console.log('[MAIN] ✓ BrowserWindow created');
+  console.log('[MAIN]   preload:', path.join(__dirname, 'preload.js'));
+  console.log('[MAIN]   contextIsolation: true');
+  console.log('[MAIN]   nodeIntegration: false');
+  console.log('[MAIN]   sandbox: false');
 
   // ── No application menu ──────────────────────────
   mainWindow.setMenu(null);
@@ -165,6 +173,7 @@ async function createWindow(): Promise<void> {
 
   const rendererPath = getRendererPath();
   console.log('[MAIN] Loading renderer:', rendererPath);
+  console.log('[MAIN] Renderer type:', process.env.VITE_DEV_SERVER_URL ? 'URL (dev server)' : 'file:// (production)');
 
   try {
     if (process.env.VITE_DEV_SERVER_URL) {
