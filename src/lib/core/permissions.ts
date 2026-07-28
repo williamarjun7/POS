@@ -193,7 +193,7 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly Permission[]> = {
     'inventory.view',
     'expenses.create', 'expenses.manage',
     'finance.view',
-    'print.execute',
+    'print.manage', 'print.execute',
     'profile.view', 'profile.edit',
   ],
   housekeeping: [
