@@ -8,6 +8,9 @@ import visualizer from 'rollup-plugin-visualizer'
 const isBundleAnalysis = process.env.ANALYZE_BUNDLE === 'true'
 
 export default defineConfig({
+  // Use relative paths for Electron's loadFile() with file:// protocol.
+  // Absolute paths (/assets/...) would resolve to file:///assets/... which doesn't exist.
+  base: './',
   test: {
     environment: 'jsdom',
     globals: true,

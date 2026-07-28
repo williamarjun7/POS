@@ -53,7 +53,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   })
 
   const badgeMap: Record<string, number> = {
-    '/orders': badges.orders,
+    '/orders': 0, // User requested no badge on Orders
     '/operations': badges.operations,
     '/inventory': badges.inventory,
   }
