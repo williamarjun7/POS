@@ -216,7 +216,7 @@ function renderInvoiceHtml(invoice: InvoiceData): string {
 <head><meta charset="utf-8" /><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
 <style>
   @page { size: ${pageSize}; margin: 0; }
-  body { margin:0; padding:4mm 3mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
+  body { margin:0; padding:2mm 3mm 4mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
   img { display:block; }
   .center { text-align:center; }
   .divider { border-top:1px dashed #000; margin:2.5mm 0; }
@@ -233,12 +233,12 @@ function renderInvoiceHtml(invoice: InvoiceData): string {
   .total-line { border-top:1.5px solid #000; margin-top:1.5mm; padding-top:1.5mm; display:flex; justify-content:space-between; font-weight:800; font-size:18px; }
   .qr-grid { display:flex; justify-content:center; gap:1.5mm; flex-wrap:wrap; }
   .qr-grid .qr-cell { text-align:center; }
-  @media print { body { margin:0; padding:4mm 3mm; } }
+  @media print { body { margin:0; padding:2mm 3mm 4mm; } }
 </style></head>
 <body>
-  <div class="center">
-    ${showLogo ? `<img src="${imgLogo}" alt="Logo" style="height:18mm;margin:0 auto 2mm" />` : ''}
-    <div style="font-size:18px;font-weight:700;letter-spacing:0.5px">Highlands Cafe &amp; Motel Inn</div>
+  <div class="center" style="margin-top:-6px">
+    ${showLogo ? `<img src="${imgLogo}" alt="Logo" style="height:22mm;max-width:100%;margin:0 auto;image-rendering:crisp-edges" />` : ''}
+    <div style="font-size:18px;font-weight:700;letter-spacing:0.5px;${showLogo ? 'margin-top:5px' : ''}">Highlands Cafe &amp; Motel Inn</div>
     <div style="font-size:12px;font-weight:500;margin-top:1mm">Premium Stays &bull; Great Coffee</div>
     <div style="font-size:11px;font-weight:500;margin-top:1.5mm;line-height:1.5">Birendranagar-8, Khajura<br />Surkhet, Nepal<br />Phone: ${phone}<br />PAN: ${pan}</div>
   </div>
@@ -305,12 +305,12 @@ function renderTestReceiptHtml(): string {
 <head><meta charset="utf-8" /><title>Test Receipt</title>
 <style>
   @page { size: ${pageSize}; margin: 0; }
-  body { margin:0; padding:4mm 3mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
+  body { margin:0; padding:2mm 3mm 4mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
   .center { text-align:center; }
   .divider { border-top:1px dashed #000; margin:2.5mm 0; }
   .row { display:flex; justify-content:space-between; }
   .test-header { font-size:14px; font-weight:800; letter-spacing:2px; }
-  @media print { body { margin:0; padding:4mm 3mm; } }
+  @media print { body { margin:0; padding:2mm 3mm 4mm; } }
 </style></head>
 <body>
   <div class="center">

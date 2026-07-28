@@ -292,7 +292,7 @@ export function buildInvoiceReceipt(data: EscposInvoiceData): Buffer {
   const cols = getCols(data.paperSize);
 
   p.init();
-  p.feed(2);
+  p.feed(1);
 
   // Header
   p.alignCenter();
@@ -473,7 +473,7 @@ export function buildTestReceipt(paperSize: EscposPaperSize): Buffer {
   const p = new EscposBuilder();
 
   p.init();
-  p.feed(2);
+  p.feed(1);
   p.alignCenter();
   p.bold(true);
   p.charSize(2, 2);

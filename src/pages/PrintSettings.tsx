@@ -359,7 +359,7 @@ export function PrintSettingsPage() {
                     type="text"
                     value={settings.kitchenPrinterIp}
                     onChange={e => update({ kitchenPrinterIp: e.target.value })}
-                    placeholder="192.168.1.100"
+                    placeholder="e.g. 192.168.1.100"
                     className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm font-mono outline-none transition-all focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500"
                   />
                   <p className="mt-1 text-[10px] text-muted-foreground">
@@ -376,8 +376,8 @@ export function PrintSettingsPage() {
                     min={1}
                     max={65535}
                     value={settings.kitchenPrinterPort}
-                    onChange={e => update({ kitchenPrinterPort: parseInt(e.target.value) || 9100 })}
-                    placeholder="9100"
+                    onChange={e => update({ kitchenPrinterPort: parseInt(e.target.value) || 0 })}
+                    placeholder="e.g. 9100"
                     className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm font-mono outline-none transition-all focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500"
                   />
                   <p className="mt-1 text-[10px] text-muted-foreground">

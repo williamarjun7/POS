@@ -108,7 +108,7 @@ const DEFAULT_SETTINGS: PrintSettings = {
   showCustomerOnKot: false,
   showStaffOnKot: false,
   kitchenPrinterIp: '',
-  kitchenPrinterPort: 9100,
+  kitchenPrinterPort: 0,
 };
 
 /* ─── Mapper helpers ────────────────────────────────────────── */

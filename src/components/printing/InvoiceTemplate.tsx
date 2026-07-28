@@ -169,15 +169,15 @@ export function InvoiceTemplate({ invoice }: InvoiceTemplateProps) {
   return (
     <ThermalPrinterLayout>
       {/* ── Header ── */}
-      <div style={{ textAlign: 'center', marginBottom: '3.5mm' }}>
+      <div style={{ textAlign: 'center', marginBottom: '2mm', marginTop: '-6px' }}>
         {settings.showLogo && (
           <img
             src={logoSrc}
             alt="Logo"
-            style={{ height: '18mm', marginBottom: '2mm', display: 'block', marginLeft: 'auto', marginRight: 'auto' }}
+            style={{ height: '22mm', maxWidth: '100%', display: 'block', marginLeft: 'auto', marginRight: 'auto', imageRendering: 'crisp-edges' }}
           />
         )}
-        <div style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '0.5px' }}>
+        <div style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '0.5px', marginTop: settings.showLogo ? '5px' : '0' }}>
           Highlands Cafe &amp; Motel Inn
         </div>
         <div style={{ fontSize: '12px', fontWeight: 500, marginTop: '1mm' }}>
