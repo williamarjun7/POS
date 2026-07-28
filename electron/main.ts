@@ -4,7 +4,7 @@
  * Electron Main Process — entry point.
  */
 
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { registerIpcHandlers } from './ipc/handlers.js';
@@ -24,16 +24,53 @@ console.log(`[MAIN] App path: ${app.getAppPath()}`);
 // In dev: dist/icon.png
 const APP_ICON = path.join(__dirname, '../dist/icon.png');
 
-// ─── F11 Fullscreen via before-input-event ────────────────
-// Handles F11 only when the window is focused (unlike globalShortcut
-// which fires even when the app is in the background).
+// ─── F11 Fullscreen ───────────────────────────────────────
+// Uses two redundant mechanisms for reliability:
+//
+// 1. globalShortcut — fires at the OS input level BEFORE Chromium
+//    processes the key. This is the primary mechanism, more reliable
+//    in packaged builds because it intercepts the keystroke at the
+//    system level. Guarded with win.isFocused() so F11 only toggles
+//    when the app window is active.
+//
+// 2. before-input-event — fires on the focused webContents as a
+//    fallback in case globalShortcut doesn't fire (rare edge case).
+//    We set event.preventDefault() to prevent Chromium's own
+//    fullscreen behavior from conflicting.
+//
+// Both handlers would toggle for the same F11 press, causing a
+// double-toggle (enter → immediately exit → nothing happens).
+// The `f11ToggleGuard` flag prevents this: globalShortcut sets
+// the flag and toggles, before-input-event checks the flag and
+// ONLY fires if the guard is false (meaning globalShortcut didn't
+// handle it).
 function setupFullscreenShortcut(win: BrowserWindow): void {
-  win.webContents.on('before-input-event', (_event, input) => {
-    if (input.key === 'F11') {
+  let f11ToggleGuard = false;
+
+  // ── Primary: globalShortcut (OS input level) ────────────────
+  globalShortcut.register('F11', () => {
+    if (win && !win.isDestroyed() && win.isFocused()) {
+      f11ToggleGuard = true;
       win.setFullScreen(!win.isFullScreen());
     }
   });
+
+  // ── Fallback: before-input-event (renderer-process level) ───
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F11' && input.type === 'keyDown') {
+      event.preventDefault();
+      if (!f11ToggleGuard) {
+        win.setFullScreen(!win.isFullScreen());
+      }
+      f11ToggleGuard = false;
+    }
+  });
 }
+
+// ─── Cleanup global shortcuts on quit ────────────────────
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
 
 // ─── Global error handlers ────────────────────────────────
 

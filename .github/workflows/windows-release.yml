@@ -96,25 +96,40 @@ jobs:
           CSC_LINK: ${{ steps.decode_csc.outputs.certificate_decoded == 'true' && 'certs/authenticode.p12' || '' }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
-      # ── Upload Artifact ──────────────────────────────────────
+      # ── Upload Artifact (for workflow debugging/verification) ─
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: Highlands-POS-Windows-${{ github.ref_name }}
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
           if-no-files-found: error
 
-      # ── Attach to GitHub Release ──────────────────────────────
+      # ── Publish to GitHub Release (required for auto-update) ─
+      # electron-updater reads latest.yml + .exe.blockmap from GitHub
+      # Releases to detect and download updates. Without these metadata
+      # files, existing installations cannot auto-update.
+      #
+      # We use the softprops action because it preserves the existing
+      # release (draft/release) that was created by the tag push,
+      # while electron-builder's built-in publisher may create a new one
+      # or fail if the release already exists.
       - name: Get version from package.json
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Attach installer to GitHub Release
+      - name: Publish installer + auto-update metadata to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          files: release/*.exe
+          files: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
