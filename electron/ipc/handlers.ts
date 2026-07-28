@@ -28,16 +28,16 @@
  */
 
 import { ipcMain, app, BrowserWindow } from 'electron';
-import { printerManager } from '../printers/printer-manager';
-import { checkForUpdates, installUpdate, getUpdateStatus } from '../updater/updater';
+import { printerManager } from '../printers/printer-manager.js';
+import { checkForUpdates, installUpdate, getUpdateStatus } from '../updater/updater.js';
 import {
   getLocalPrinterConfig,
   setReceiptPrinterConfig,
   setKitchenPrinterConfig,
   getPrinterConfigSummary,
-} from '../printers/local-printer-config';
-import { getUsbPrinters } from '../printers/usb-transport';
-import { checkTcpPrinter } from '../printers/tcp-transport';
+} from '../printers/local-printer-config.js';
+import { getUsbPrinters } from '../printers/usb-transport.js';
+import { checkTcpPrinter } from '../printers/tcp-transport.js';
 
 /**
  * Register all IPC handlers.
@@ -139,8 +139,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('app:set-auto-launch', async (_event, enabled: boolean) => {
     try {
-      const autoLauncher = require('auto-launch');
-      const autoLaunch = new autoLauncher({
+      const AutoLauncher = (await import('auto-launch')).default;
+      const autoLaunch = new AutoLauncher({
         name: 'Highlands Cafe & Motel Inn POS',
         path: app.getPath('exe'),
       });
@@ -162,8 +162,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('app:get-auto-launch', async () => {
     try {
-      const autoLauncher = require('auto-launch');
-      const autoLaunch = new autoLauncher({
+      const AutoLauncher = (await import('auto-launch')).default;
+      const autoLaunch = new AutoLauncher({
         name: 'Highlands Cafe & Motel Inn POS',
         path: app.getPath('exe'),
       });
@@ -177,7 +177,7 @@ export function registerIpcHandlers(): void {
 
   // ─── Print queue push notifications ─────────────────
 
-  printerManager.onStatusChange((_status, jobs) => {
+  printerManager.onStatusChange((_status: any, jobs: any[]) => {
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) {
         win.webContents.send('print:queue-updated', jobs);

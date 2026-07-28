@@ -14,13 +14,13 @@
  *   IPC Layer → PrinterManager → PrintQueue (persistent) → ZYWELL Driver → Transport
  */
 
-import { printQueue, type PrintJobType, type PrintJobMeta } from './print-queue';
-import { checkKitchenStatus } from './zywell-q822';
-import { checkUsbPrinter } from './usb-transport';
-import type { EscposPaperSize } from './escpos-builder';
-import { buildInvoiceReceipt, buildKitchenKot, buildTestReceipt, buildTestKot } from './escpos-builder';
-import type { EscposInvoiceData, EscposKotData } from './escpos-builder';
-import { getLocalPrinterConfig } from './local-printer-config';
+import { printQueue, type PrintJobType, type PrintJobMeta } from './print-queue.js';
+import { checkKitchenStatus } from './zywell-q822.js';
+import { checkUsbPrinter } from './usb-transport.js';
+import type { EscposPaperSize } from './escpos-builder.js';
+import { buildInvoiceReceipt, buildKitchenKot, buildTestReceipt, buildTestKot } from './escpos-builder.js';
+import type { EscposInvoiceData, EscposKotData } from './escpos-builder.js';
+import { getLocalPrinterConfig } from './local-printer-config.js';
 
 // Re-export types used by IPC layer
 export type { PrintJobType, PrintJobMeta };
@@ -206,11 +206,11 @@ class PrinterManager {
         if (!config.kitchen.ip) {
           return { success: false, error: 'Kitchen printer IP not configured' };
         }
-        const { printTcp } = await import('./tcp-transport');
+        const { printTcp } = await import('./tcp-transport.js');
         return await printTcp(buffer, { ip: config.kitchen.ip, port: config.kitchen.port });
       } else {
         // Receipt / invoice / bill_preview / test_receipt: USB
-        const { printUsb } = await import('./usb-transport');
+        const { printUsb } = await import('./usb-transport.js');
         return await printUsb(buffer);
       }
     } catch (err) {

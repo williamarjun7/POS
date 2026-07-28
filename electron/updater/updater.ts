@@ -15,7 +15,7 @@
 
 import { autoUpdater, type UpdateInfo } from 'electron-updater';
 import { BrowserWindow } from 'electron';
-import { APP_NAME } from '../config/constants';
+import { APP_NAME } from '../config/constants.js';
 
 // Configure auto-updater
 autoUpdater.autoDownload = true;

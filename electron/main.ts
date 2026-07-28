@@ -13,9 +13,13 @@
 
 import { app, BrowserWindow, Menu } from 'electron';
 import * as path from 'path';
-import { registerIpcHandlers } from './ipc/handlers';
-import { initUpdater } from './updater/updater';
-import { APP_NAME, getRendererPath } from './config/constants';
+import { fileURLToPath } from 'url';
+import { registerIpcHandlers } from './ipc/handlers.js';
+import { initUpdater } from './updater/updater.js';
+import { APP_NAME, getRendererPath } from './config/constants.js';
+
+// ESM equivalent of __dirname
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Prevent multiple instances (single-instance lock)
 const gotTheLock = app.requestSingleInstanceLock();

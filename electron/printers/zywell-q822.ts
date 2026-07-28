@@ -14,10 +14,10 @@
  *        └── TCP Transport  → Kitchen Printer
  */
 
-import { EscposBuilder, buildInvoiceReceipt, buildKitchenKot, buildTestReceipt, buildTestKot } from './escpos-builder';
-import type { EscposInvoiceData, EscposKotData, EscposPaperSize } from './escpos-builder';
-import { printUsb, checkUsbPrinter } from './usb-transport';
-import { printTcp, checkTcpPrinter } from './tcp-transport';
+import { EscposBuilder, buildInvoiceReceipt, buildKitchenKot, buildTestReceipt, buildTestKot } from './escpos-builder.js';
+import type { EscposInvoiceData, EscposKotData, EscposPaperSize } from './escpos-builder.js';
+import { printUsb, checkUsbPrinter } from './usb-transport.js';
+import { printTcp, checkTcpPrinter } from './tcp-transport.js';
 
 export interface PrintResult {
   success: boolean;

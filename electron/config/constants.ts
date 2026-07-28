@@ -1,4 +1,9 @@
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { app } from 'electron';
+
+// ESM equivalent of __dirname
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const APP_NAME = 'Highlands Cafe & Motel Inn POS';
 export const APP_ID = 'com.highlandscafemotelinn.pos';
@@ -15,6 +20,5 @@ export function getRendererPath(): string {
 
 /** User data directory for persistent settings */
 export function getUserDataPath(): string {
-  const { app } = require('electron');
   return app.getPath('userData');
 }
