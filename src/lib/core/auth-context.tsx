@@ -117,6 +117,8 @@ function mapInsForgeUser(insforgeUser: { id: string; email?: string; name?: stri
 let s_pendingRefresh: Promise<void> | null = null
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  console.log('[STARTUP] ✓ Authentication provider mounted');
+
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   // Guard against concurrent refreshUser() calls — the visibility change
@@ -187,18 +189,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     ;(async () => {
+      console.log('[STARTUP]   ↳ Checking session validity...');
       // Check if we have a valid session stored (24h for normal, 30d for remember me)
       const hasValidSession = isSessionValid()
       const storedUserId = getSessionUserId()
+
+      console.log('[STARTUP]   ↳ Session valid:', hasValidSession, '| User ID:', storedUserId ?? 'none');
 
       if (hasValidSession && storedUserId) {
         // Try to restore the session from the backend
         await refreshUser()
       } else {
         // No valid session — user will need to log in
+        console.log('[STARTUP]   ↳ No valid session — showing login');
         setUser(null)
       }
       setIsLoading(false)
+      console.log('[STARTUP] ✓ Authentication initialized | isAuthenticated:', !!user);
     })()
   }, [refreshUser])
 

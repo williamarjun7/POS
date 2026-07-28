@@ -67,6 +67,8 @@ let mainWindow: BrowserWindow | null = null;
 // ─── Create window ────────────────────────────────────────
 
 async function createWindow(): Promise<void> {
+  console.log('[MAIN] ✓ Electron started');
+
   mainWindow = new BrowserWindow({
     width: 1366,
     height: 768,
@@ -85,6 +87,8 @@ async function createWindow(): Promise<void> {
       allowRunningInsecureContent: false,
     },
   });
+
+  console.log('[MAIN] ✓ BrowserWindow created');
 
   // ── No application menu ──────────────────────────
   mainWindow.setMenu(null);
@@ -112,11 +116,12 @@ async function createWindow(): Promise<void> {
     app.quit();
   });
 
-  // Forward renderer console errors to main process log
-  mainWindow.webContents.on('console-message', (_event, level, message) => {
-    if (level >= 2) {
-      console.warn('[RENDERER]', message);
-    }
+  // Forward ALL renderer console output to main process log
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const prefix = level === 0 ? '[RENDERER log]' :
+                   level === 1 ? '[RENDERER warn]' :
+                   '[RENDERER error]';
+    console.log(prefix, message, `(source: ${sourceId}:${line})`);
   });
 
   // ── Load content ─────────────────────────────────
@@ -131,9 +136,9 @@ async function createWindow(): Promise<void> {
     } else {
       await mainWindow.loadFile(rendererPath);
     }
-    console.log('[MAIN] Renderer loaded successfully');
+    console.log('[MAIN] ✓ Renderer loaded');
   } catch (err) {
-    console.error('[MAIN] Failed to load renderer:', err);
+    console.error('[MAIN] ✗ Failed to load renderer:', err);
   }
 }
 

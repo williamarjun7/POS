@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState, useCallback } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
+import { BrowserRouter, HashRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { ThemeProvider } from '@/lib/core/theme-context'
 import { AuthProvider, useAuth } from '@/lib/core/auth-context'
 import { PrintSettingsProvider } from '@/lib/services/print-settings'
@@ -19,6 +19,18 @@ import { ScreenLock } from '@/components/ScreenLock'
 import { hasPin as hasStoredPin } from '@/lib/services/session-store'
 import { startRealtimePolling, subscribeToPostgresChanges } from '@/lib/services/realtime'
 import type { SuccessType } from '@/pages/auth/types'
+import { isElectronUA } from '@/lib/detect-electron'
+
+// ─── Router Selection ──────────────────────────────────────
+// BrowserRouter uses the History API (pushState), which does not work
+// with Electron's file:// protocol on Windows because the URL path
+// (e.g. /C:/.../dist/index.html) never matches any route pattern,
+// causing React Router to render nothing → blank page.
+// HashRouter uses the URL hash (#/path), which works correctly
+// with file:// protocol in Electron.
+const isElectronBuild = isElectronUA()
+console.log('[STARTUP] Router: using', isElectronBuild ? 'HashRouter ✓ (Electron compatible)' : 'BrowserRouter');
+const Router = isElectronBuild ? HashRouter : BrowserRouter
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -124,6 +136,9 @@ function AuthAwareRealtimeSync() {
  * Inner component that lives inside AuthProvider so it can consume auth context.
  * Renders the screen lock overlay for authenticated users when idle,
  * and the session timeout modal when the session is about to expire.
+ *
+ * NOTE: This component is rendered outside <Router>, so it cannot use
+ * useNavigate(). Uses window.location.hash for HashRouter compatibility.
  */
 function AuthAwareSessionTimeout() {
   const { showWarning, timeLeft, dismissWarning, logout } = useSessionTimeout()
@@ -136,7 +151,11 @@ function AuthAwareSessionTimeout() {
     try {
       await logout()
     } catch {
-      window.location.href = '/login'
+      // Use hash navigation for Electron HashRouter compatibility
+      // window.location.hash works with both BrowserRouter and HashRouter
+      // For BrowserRouter: /login → plain URL path
+      // For HashRouter: #/login → hash fragment (works with file://)
+      window.location.hash = '#/login'
     }
   }, [logout])
 
@@ -164,6 +183,8 @@ function AuthAwareSessionTimeout() {
 }
 
 export default function App() {
+  console.log('[STARTUP] ✓ Router initialized (App component mounted)');
+
   const [showSplash, setShowSplash] = useState(true)
 
   const dismissSplash = useCallback(() => {
@@ -184,7 +205,7 @@ export default function App() {
             <AuthAwareRealtimeSync />
             <PrintSettingsProvider>
             <ToastProvider>
-            <BrowserRouter>
+            <Router>
             <ScrollToTop />
             <Routes>
               {/* Auth routes (outside dashboard layout) */}
@@ -320,7 +341,7 @@ export default function App() {
               </Route>
               </Route>
             </Routes>
-          </BrowserRouter>            </ToastProvider>
+          </Router>            </ToastProvider>
             </PrintSettingsProvider>
           </AuthProvider>
     </ThemeProvider>
