@@ -49,14 +49,14 @@ const tag = `v${version}`;
 console.log('📦 Version :', version);
 console.log('🏷️  Tag    :', tag);
 
-// ─── 2. Check git status ──────────────────────────────────────────
+// ─── 2. Check git status & commit version bump ───────────────────
 try {
   const status = execSync('git status --porcelain', { cwd: root, encoding: 'utf-8' }).trim();
   if (status) {
-    console.warn('⚠️  There are uncommitted changes:');
-    console.warn(status);
-    console.warn('   The tag will reference the latest committed state.');
-    console.warn('   Run `git add . && git commit -m "..."` first if needed.');
+    console.log('📝 Committing version bump...');
+    execSync('git add -A', { cwd: root, stdio: 'inherit' });
+    execSync(`git commit -m "chore: bump version to ${version}"`, { cwd: root, stdio: 'inherit' });
+    console.log(`✅ Version bump committed: ${version}`);
   }
 } catch {
   // Not a git repo or git not available
