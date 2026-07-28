@@ -54,7 +54,7 @@ export function SplashScreen({ isVisible }: SplashScreenProps) {
             >
               <div className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl bg-card shadow-lg shadow-primary/5 ring-1 ring-border/50">
                 <img
-                  src="/favicon.png"
+                  src="favicon.png"
                   alt="Logo"
                   className="h-14 w-14 object-contain"
                   draggable={false}
