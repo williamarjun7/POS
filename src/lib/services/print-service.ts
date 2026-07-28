@@ -1,7 +1,12 @@
 /**
  * PrintService
  * ─────────────
- * Encapsulates all printing logic for invoices.
+ * Encapsulates all printing logic for invoices and KOTs.
+ *
+ * Architecture (SINGLE SOURCE OF TRUTH):
+ *   - Invoice HTML → renderInvoiceHtml() from InvoiceTemplate.tsx
+ *   - KOT HTML      → renderKotHtml() from KotTemplate.tsx
+ *   - No duplicate templates exist in this file.
  *
  * Usage:
  *   import { printService } from '@/lib/services/print-service';
@@ -9,17 +14,37 @@
  *   // Print customer invoice
  *   await printService.printInvoice(invoiceData);
  *
- * Extensible for future:
- *   - Thermal printer direct output via WebUSB / Network
- *   - A4/PDF fallback
+ *   // Print Bill Preview (uses the same InvoiceTemplate)
+ *   printService.printBillPreview(invoiceData);
  */
 
-import type { InvoiceData } from '@/components/printing/InvoiceTemplate';
+import { renderInvoiceHtml } from '@/components/printing/InvoiceTemplate';
+import type { InvoiceData, InvoiceRenderOptions } from '@/components/printing/InvoiceTemplate';
 import type { KotData } from '@/components/printing/KotTemplate';
 import { renderKotHtml } from '@/components/printing/KotTemplate';
 import { getPrintSettings } from '@/lib/services/print-settings';
 import { isElectron, getElectronAPI } from '@/lib/detect-electron';
 import QRCode from 'qrcode';
+
+/* ─── Runtime Logging ───────────────────────────────────────── */
+
+const PRINT_LOG = '[PRINT]';
+
+function logPrintRequest(type: string, detail: string): void {
+  console.log(`${PRINT_LOG} REQUEST type=${type} ${detail}`);
+}
+
+function logPrintSuccess(type: string, detail: string): void {
+  console.log(`${PRINT_LOG} SUCCESS type=${type} ${detail}`);
+}
+
+function logPrintWarning(type: string, detail: string): void {
+  console.warn(`${PRINT_LOG} WARNING type=${type} ${detail}`);
+}
+
+function logPrintError(type: string, detail: string, error?: unknown): void {
+  console.error(`${PRINT_LOG} ERROR type=${type} ${detail}`, error ?? '');
+}
 
 /* ─── Image pre-loading ─────────────────────────────────────── */
 
@@ -29,9 +54,6 @@ import QRCode from 'qrcode';
  * when print() fires.
  */
 function urlToDataUri(src: string): Promise<string> {
-  // If Vite inlined the asset as a data URI (small images), use it directly.
-  // Calling fetch() on a data: URI triggers CSP connect-src violations because
-  // `data:` is not in the Content-Security-Policy connect-src directive.
   if (src.startsWith('data:')) return Promise.resolve(src);
 
   return fetch(src)
@@ -44,7 +66,7 @@ function urlToDataUri(src: string): Promise<string> {
         reader.readAsDataURL(blob);
       });
     })
-    .catch(() => src); // fallback to raw URL if fetch fails
+    .catch(() => src);
 }
 
 // Eagerly pre-load logo into base64 data URI
@@ -52,7 +74,6 @@ let logoDataUri = '';
 
 const logoUrl = new URL('@/assets/logo.png', import.meta.url).href;
 
-// Kick off async pre-load; assign synchronously so the cache is warm
 urlToDataUri(logoUrl).then((uri) => { logoDataUri = uri; });
 
 /* ─── Dynamic QR code generation ───────────────────────────── */
@@ -107,293 +128,69 @@ async function generateAllQrs(): Promise<void> {
   ]);
 }
 
+function getActiveQrCodes(): Array<{ dataUri: string; label: string }> {
+  const codes: Array<{ dataUri: string; label: string }> = [];
+  if (qrCaches.googleReview.dataUri) codes.push({ dataUri: qrCaches.googleReview.dataUri, label: 'Google Review' });
+  if (qrCaches.instagram.dataUri) codes.push({ dataUri: qrCaches.instagram.dataUri, label: 'Follow Instagram' });
+  if (qrCaches.tiktok.dataUri) codes.push({ dataUri: qrCaches.tiktok.dataUri, label: 'Follow TikTok' });
+  return codes;
+}
+
 // Pre-generate on module load
 generateAllQrs();
 
-/* ─── Render helpers ────────────────────────────────────────── */
+/* ─── Test Data Builders ────────────────────────────────────── */
 
-import { getPaymentMethodLabel } from '@/lib/payment-methods'
-
-const fmt = (amount: number) =>
-  amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+function buildTestInvoiceData(): InvoiceData {
+  const now = new Date();
+  return {
+    invoiceNumber: 'TEST-001',
+    date: now.toLocaleDateString('en-GB'),
+    time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
+    items: [
+      { name: 'Test Item 1', quantity: 1, unitPrice: 100 },
+      { name: 'Test Item 2', quantity: 2, unitPrice: 100 },
+    ],
+    subtotal: 300,
+    discount: 50,
+    total: 250,
+  };
 }
 
-function itemsToHtml(items: InvoiceData['items']): string {
-  return items
-    .map(
-      (item) => `
-        <div class="item">
-          <div class="item-row">
-            <span class="item-name">${escapeHtml(item.name)}</span>
-            <span class="item-qty">${item.quantity}</span>
-            <span class="item-amount">${fmt(item.unitPrice * item.quantity)}</span>
-          </div>
-          ${(item.modifiers ?? []).map((m) => `<div class="sub-line">&bull; ${escapeHtml(m)}</div>`).join('')}
-          ${(item.addons ?? []).map((a) => `<div class="sub-line">+ ${escapeHtml(a)}</div>`).join('')}
-          ${item.notes ? `<div class="sub-line note">Note: ${escapeHtml(item.notes)}</div>` : ''}
-        </div>`
-    )
-    .join('');
-}
-
-/* ─── QR Footer HTML ───────────────────────────────────────── */
-
-function renderQrFooterHtml(paperSize: string): string {
-  const activeQrs: Array<{ dataUri: string; label: string }> = [];
-
-  if (qrCaches.googleReview.dataUri) {
-    activeQrs.push({ dataUri: qrCaches.googleReview.dataUri, label: 'Google Review' });
-  }
-  if (qrCaches.instagram.dataUri) {
-    activeQrs.push({ dataUri: qrCaches.instagram.dataUri, label: 'Follow Instagram' });
-  }
-  if (qrCaches.tiktok.dataUri) {
-    activeQrs.push({ dataUri: qrCaches.tiktok.dataUri, label: 'Follow TikTok' });
-  }
-
-  if (activeQrs.length === 0) return '';
-
-  const isNarrow = paperSize === '58mm';
-
-  if (isNarrow) {
-    // Vertical stacking for 58mm
-    const qrSize = '36mm';
-    return activeQrs
-      .map(
-        (qr) => `
-        <div style="margin-bottom:2mm">
-          <img src="${qr.dataUri}" alt="${escapeHtml(qr.label)}" style="height:${qrSize};width:${qrSize};margin:0 auto;image-rendering:crisp-edges;background:#fff" />
-          <div style="font-size:10px;font-weight:600;margin-top:0.3mm">${escapeHtml(qr.label)}</div>
-        </div>`,
-      )
-      .join('');
-  }
-
-  // Horizontal layout for 80mm / A4
-  const qrCount = activeQrs.length;
-  const qrSize = qrCount === 3 ? '22mm' : qrCount === 2 ? '30mm' : '40mm';
-  const labelSize = qrCount === 3 ? '9px' : qrCount === 2 ? '10px' : '11px';
-
-  return `
-  <div style="display:flex;justify-content:center;gap:1.5mm;flex-wrap:wrap">
-    ${activeQrs
-      .map(
-        (qr) => `
-      <div style="text-align:center">
-        <img src="${qr.dataUri}" alt="${escapeHtml(qr.label)}" style="height:${qrSize};width:${qrSize};image-rendering:crisp-edges;background:#fff" />
-        <div style="font-size:${labelSize};font-weight:600;margin-top:0.3mm">${escapeHtml(qr.label)}</div>
-      </div>`,
-      )
-      .join('')}
-  </div>`;
-}
-
-/* ─── Invoice HTML ──────────────────────────────────────────── */
-
-function renderInvoiceHtml(invoice: InvoiceData): string {
-  const hasDiscount = (invoice.discount ?? 0) > 0;
-  const hasPaymentBreakdown = invoice.paymentBreakdown && invoice.paymentBreakdown.length > 0;
-  const showLogo = getPrintSettings().showLogo;
-  const imgLogo = logoDataUri || logoUrl;
-  const paperSize = getPrintSettings().paperSize;
-  const pageSize = paperSize === 'A4' ? '210mm 297mm' : `${paperSize} auto`;
-  const bodyWidth = paperSize === 'A4' ? '190mm' : paperSize;
-  const phone = escapeHtml(getPrintSettings().phone);
-  const pan = escapeHtml(getPrintSettings().pan);
-  const activeQrCount = [
-    qrCaches.googleReview.dataUri,
-    qrCaches.instagram.dataUri,
-    qrCaches.tiktok.dataUri,
-  ].filter(Boolean).length;
-
-  const qrFooterSection = renderQrFooterHtml(paperSize);
-
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8" /><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
-<style>
-  @page { size: ${pageSize}; margin: 0; }
-  body { margin:0; padding:2mm 3mm 4mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
-  img { display:block; }
-  .center { text-align:center; }
-  .divider { border-top:1px dashed #000; margin:2.5mm 0; }
-  .row { display:flex; justify-content:space-between; }
-  .item { margin-bottom:1.2mm; }
-  .item-row { display:flex; justify-content:space-between; align-items:baseline; }
-  .item-name { flex:1; font-weight:500; padding-right:2mm; font-size:12px; }
-  .item-qty { width:12mm; text-align:right; font-size:12px; font-weight:500; }
-  .item-amount { width:18mm; text-align:right; font-weight:500; font-size:12px; }
-  .sub-line { padding-left:4mm; font-size:10px; font-weight:500; }
-  .note { font-style:italic; }
-  .totals { margin-top:2mm; }
-  .totals .row { font-size:12px; font-weight:500; margin-bottom:0.5mm; }
-  .total-line { border-top:1.5px solid #000; margin-top:1.5mm; padding-top:1.5mm; display:flex; justify-content:space-between; font-weight:800; font-size:18px; }
-  .qr-grid { display:flex; justify-content:center; gap:1.5mm; flex-wrap:wrap; }
-  .qr-grid .qr-cell { text-align:center; }
-  @media print { body { margin:0; padding:2mm 3mm 4mm; } }
-</style></head>
-<body>
-  <div class="center" style="margin-top:-6px">
-    ${showLogo ? `<img src="${imgLogo}" alt="Logo" style="height:22mm;max-width:100%;margin:0 auto;image-rendering:crisp-edges" />` : ''}
-    <div style="font-size:18px;font-weight:700;letter-spacing:0.5px;${showLogo ? 'margin-top:5px' : ''}">Highlands Cafe &amp; Motel Inn</div>
-    <div style="font-size:12px;font-weight:500;margin-top:1mm">Premium Stays &bull; Great Coffee</div>
-    <div style="font-size:11px;font-weight:500;margin-top:1.5mm;line-height:1.5">Birendranagar-8, Khajura<br />Surkhet, Nepal<br />Phone: ${phone}<br />PAN: ${pan}</div>
-  </div>
-  <div class="divider"></div>
-  <div style="margin-bottom:2.5mm">
-    <div style="font-weight:600;font-size:13px">Invoice #${escapeHtml(invoice.invoiceNumber)}</div>
-    <div class="row" style="font-size:12px;font-weight:500;margin-top:0.5mm"><span>Date : ${escapeHtml(invoice.date)}</span><span>Time : ${escapeHtml(invoice.time)}</span></div>
-  </div>
-  <div class="divider"></div>
-  <div class="row" style="font-weight:600;font-size:12px;border-bottom:1px dashed #000;padding-bottom:1.5mm;margin-bottom:1.5mm">
-    <span style="flex:1">Item</span><span style="width:12mm;text-align:right">Qty</span><span style="width:18mm;text-align:right">Amount</span>
-  </div>
-  ${itemsToHtml(invoice.items)}
-  <div class="divider"></div>
-  ${hasPaymentBreakdown ? `
-  <div style="margin-bottom:1.2mm">
-    <div style="font-weight:600;font-size:12px;margin-bottom:0.8mm">Payment</div>
-    ${(invoice.paymentBreakdown ?? []).map(p => {
-      const label = getPaymentMethodLabel(p.method);
-      const hasPmtDiscount = (p.discount ?? 0) > 0;
-      return `<div class="row" style="font-size:12px;font-weight:500;margin-bottom:0.5mm">
-        <span>${escapeHtml(label)}</span>
-        <span>${hasPmtDiscount ? `<span style="color:#c00;font-size:11px;font-weight:600">-${fmt(p.discount)} </span>` : ''}${fmt(p.amount)}</span>
-      </div>`;
-    }).join('')}
-  </div>
-  <div class="divider"></div>` : ''}
-  <div class="totals">
-    <div class="row"><span>Subtotal</span><span>${fmt(invoice.subtotal)}</span></div>
-    ${hasDiscount ? `<div class="row"><span>Discount</span><span style="color:#c00">-${fmt(invoice.discount ?? 0)}</span></div>` : ''}
-    <div class="total-line"><span>TOTAL</span><span>${fmt(invoice.total)}</span></div>
-  </div>
-  <div class="divider"></div>
-  <div class="center" style="margin-top:2.5mm">
-    <!-- Thank you message -->
-    <div style="font-size:12px;font-weight:700;letter-spacing:0.5px;line-height:1.5;margin-bottom:0.5mm">
-      Thank You for Visiting!<br />We Hope to See You Again
-    </div>
-    <div class="divider" style="margin:2mm 0"></div>
-    ${activeQrCount > 0 ? `
-    <div style="font-size:11px;font-weight:600;margin-bottom:1.5mm">Connect With Us</div>
-    ${qrFooterSection}
-    <div style="font-size:9px;font-weight:500;margin-top:1.5mm;line-height:1.4;color:#555">
-      Leave us a review and follow us for the latest updates!
-    </div>` : `
-    <div style="font-size:11px;font-weight:500;margin-bottom:2mm">Thank you for your visit!</div>`}
-    <div style="font-size:11px;font-weight:500;margin-top:1.5mm;line-height:1.5">highlandscafemotelinn.com</div>
-  </div>
-</body>
-</html>`;
-}
-
-/* ─── Test Print HTML ────────────────────────────────────────── */
-
-function renderTestReceiptHtml(): string {
-  const paperSize = getPrintSettings().paperSize;
-  const pageSize = paperSize === 'A4' ? '210mm 297mm' : `${paperSize} auto`;
-  const bodyWidth = paperSize === 'A4' ? '190mm' : paperSize;
-  // Generate fresh QRs for test print
-  const qrSection = renderQrFooterHtml(paperSize);
-
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8" /><title>Test Receipt</title>
-<style>
-  @page { size: ${pageSize}; margin: 0; }
-  body { margin:0; padding:2mm 3mm 4mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
-  .center { text-align:center; }
-  .divider { border-top:1px dashed #000; margin:2.5mm 0; }
-  .row { display:flex; justify-content:space-between; }
-  .test-header { font-size:14px; font-weight:800; letter-spacing:2px; }
-  @media print { body { margin:0; padding:2mm 3mm 4mm; } }
-</style></head>
-<body>
-  <div class="center">
-    <div style="font-size:16px;font-weight:700;letter-spacing:0.5px">HIGHLANDS CAFE &amp; MOTEL INN</div>
-    <div class="test-header" style="margin-top:1mm">TEST RECEIPT</div>
-    <div style="font-size:10px;font-weight:500;margin-top:0.5mm;color:#c00">*** This is a test print ***</div>
-  </div>
-  <div class="divider"></div>
-  <div style="margin-bottom:2.5mm">
-    <div style="font-weight:600;font-size:13px">Invoice #TEST-001</div>
-    <div class="row" style="font-size:12px;font-weight:500;margin-top:0.5mm"><span>Date : ${new Date().toLocaleDateString('en-GB')}</span><span>Time : ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true })}</span></div>
-  </div>
-  <div class="divider"></div>
-  <div class="row" style="font-weight:600;font-size:12px;border-bottom:1px dashed #000;padding-bottom:1.5mm;margin-bottom:1.5mm">
-    <span style="flex:1">Item</span><span style="width:12mm;text-align:right">Qty</span><span style="width:18mm;text-align:right">Amount</span>
-  </div>
-  <div class="item" style="margin-bottom:1.2mm">
-    <div class="row"><span style="flex:1;font-weight:500;padding-right:2mm;font-size:12px">Test Item 1</span><span style="width:12mm;text-align:right;font-size:12px;font-weight:500">1</span><span style="width:18mm;text-align:right;font-weight:500;font-size:12px">100.00</span></div>
-  </div>
-  <div class="item" style="margin-bottom:1.2mm">
-    <div class="row"><span style="flex:1;font-weight:500;padding-right:2mm;font-size:12px">Test Item 2</span><span style="width:12mm;text-align:right;font-size:12px;font-weight:500">2</span><span style="width:18mm;text-align:right;font-weight:500;font-size:12px">200.00</span></div>
-  </div>
-  <div class="divider"></div>
-  <div class="totals" style="margin-top:2mm">
-    <div class="row" style="font-size:12px;font-weight:500;margin-bottom:0.5mm"><span>Subtotal</span><span>300.00</span></div>
-    <div class="row" style="font-size:12px;font-weight:500;margin-bottom:0.5mm"><span>Discount</span><span style="color:#c00">-50.00</span></div>
-    <div style="border-top:1.5px solid #000;margin-top:1.5mm;padding-top:1.5mm;display:flex;justify-content:space-between;font-weight:800;font-size:18px"><span>TOTAL</span><span>250.00</span></div>
-  </div>
-  <div class="divider"></div>
-  <div class="center" style="margin-top:2.5mm">
-    <div style="font-size:12px;font-weight:700;letter-spacing:0.5px;line-height:1.5;margin-bottom:0.5mm">
-      Thank You for Visiting!<br />We Hope to See You Again
-    </div>
-    ${qrSection ? `<div class="divider" style="margin:2mm 0"></div><div style="font-size:11px;font-weight:600;margin-bottom:1.5mm">Connect With Us</div>${qrSection}<div style="font-size:9px;font-weight:500;margin-top:1.5mm;line-height:1.4;color:#555">Leave us a review and follow us for the latest updates!</div>` : ''}
-    <div style="font-size:11px;font-weight:500;margin-top:1.5mm;line-height:1.5">highlandscafemotelinn.com</div>
-  </div>
-</body>
-</html>`;
-}
-
-function renderTestKotHtml(): string {
-  const settings = getPrintSettings();
-
-  const testKotData: KotData = {
+function buildTestKotData(): KotData {
+  const now = new Date();
+  return {
     orderNumber: 'TEST-001',
     tableOrRoom: 'Table 99',
-    date: new Date().toLocaleDateString('en-GB'),
-    time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
+    date: now.toLocaleDateString('en-GB'),
+    time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
     items: [
-      {
-        name: 'Chicken Mo:Mo',
-        quantity: 2,
-        modifiers: ['Steam', 'Extra Spicy'],
-      },
-      {
-        name: 'Veg Pizza',
-        quantity: 1,
-        notes: 'No onion please',
-      },
-      {
-        name: 'French Fries',
-        quantity: 3,
-        addons: ['Extra Cheese'],
-      },
+      { name: 'Chicken Mo:Mo', quantity: 2, modifiers: ['Steam', 'Extra Spicy'] },
+      { name: 'Veg Pizza', quantity: 1, notes: 'No onion please' },
+      { name: 'French Fries', quantity: 3, addons: ['Extra Cheese'] },
     ],
   };
+}
 
-  return renderKotHtml(testKotData, settings.paperSize, settings.showCustomerOnKot, settings.showStaffOnKot);
+/* ─── Build render options from settings ────────────────────── */
+
+function buildInvoiceRenderOptions(overrides?: Partial<InvoiceRenderOptions>): InvoiceRenderOptions {
+  const s = getPrintSettings();
+  return {
+    paperSize: s.paperSize,
+    showLogo: s.showLogo,
+    phone: s.phone,
+    pan: s.pan,
+    logoDataUri: logoDataUri || undefined,
+    qrCodes: getActiveQrCodes().length > 0 ? getActiveQrCodes() : undefined,
+    isPreview: false,
+    isTest: false,
+    ...overrides,
+  };
 }
 
 /* ─── Retry wrapper ──────────────────────────────────────────── */
 
-/**
- * Execute a print function with up to `maxRetries` attempts.
- * Each retry waits `baseDelayMs` before retrying.
- * Failures are swallowed after the final attempt — printing must
- * never interrupt business operations.
- */
 async function printWithRetry(
   fn: () => Promise<void> | void,
   maxRetries = 3,
@@ -402,110 +199,105 @@ async function printWithRetry(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       await fn();
-      return; // Success — exit immediately
+      return;
     } catch (err) {
       if (attempt < maxRetries) {
-        const delay = baseDelayMs * attempt; // Linear backoff: 600, 1200, 1800
+        const delay = baseDelayMs * attempt;
         await new Promise(r => setTimeout(r, delay));
       } else {
-        // Final attempt failed — log for diagnostics
-        console.warn('[PRINT] All retries exhausted:', err instanceof Error ? err.message : String(err));
+        logPrintError('retry', 'All retries exhausted', err);
       }
     }
   }
 }
 
-/**
- * Fire-and-forget print helper.
- * Wraps printWithRetry in a void promise so the caller never awaits.
- * Used for background KOT printing where the cashier must not wait.
- */
-function fireAndForget(
-  fn: () => Promise<void> | void,
-): void {
-  // All errors are already swallowed inside printWithRetry.
+function fireAndForget(fn: () => Promise<void> | void): void {
   printWithRetry(fn);
 }
 
 /* ─── Document Routing ─────────────────────────────────────── */
 
-/**
- * Document types supported by the print routing system.
- */
 export type PrintDocumentType = 'invoice' | 'kot' | 'bill_preview' | 'test_receipt' | 'test_kot'
 
 /**
  * Route a document to the appropriate printer target.
- * Currently routes:
- *   - 'kot' / 'test_kot' → kitchen printer (IP-based network printer)
- *   - 'invoice' / 'bill_preview' / 'test_receipt' → USB receipt printer
  *
- * In a browser environment, both targets ultimately call window.print().
- * The routing creates a logical separation so future native integrations
- * (e.g. Electron IPC, WebUSB, native TCP socket) can plug in here.
+ * Routing rules:
+ *   - 'kot' / 'test_kot'                → kitchen printer (TCP/IP network)
+ *   - 'invoice' / 'bill_preview' / 'test_receipt' → receipt printer (USB)
  *
  * @param html - The fully rendered HTML document to print
  * @param type - The type of document being printed
- * @param data - Optional structured data for native ESC/POS printing (InvoiceData, KotData, etc.)
+ * @param data - Optional structured data for native ESC/POS printing
  */
 export async function routePrintDocument(
   html: string,
   type: PrintDocumentType,
   data?: InvoiceData | KotData,
 ): Promise<void> {
-  if (import.meta.env.DEV) {
-    const targetPrinter = type === 'kot' || type === 'test_kot'
-      ? 'kitchen'
-      : 'receipt'
-    console.log(`[PRINT] Routing ${type} → ${targetPrinter} printer`)
-  }
+  const targetPrinter = type === 'kot' || type === 'test_kot' ? 'kitchen' : 'receipt';
+  logPrintRequest(type, `Routing → ${targetPrinter} printer`);
+
+  const escposPaperSize = (paper: string): '58mm' | '80mm' =>
+    paper === 'A4' ? '80mm' : paper as '58mm' | '80mm';
 
   // ── Electron native printing ──────────────────────────────
-  // When running as a desktop app, bypass the browser print dialog
-  // and send directly to the printer manager via IPC.
   if (isElectron()) {
     try {
       const api = getElectronAPI();
       const s = getPrintSettings();
-      const escposPaper = s.paperSize === 'A4' ? '80mm' : s.paperSize as '58mm' | '80mm';
+      const escposPaper = escposPaperSize(s.paperSize);
 
       switch (type) {
-        case 'test_receipt':
-          console.log('[PRINT] Sending test receipt to native ESC/POS printer...');
-          {
-            const now = new Date();
-            await api.printSubmitTest('receipt', undefined, {
-              businessName: 'Highlands Cafe & Motel Inn',
-              address: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
-              phone: s.phone,
-              pan: s.pan,
-              paperSize: escposPaper,
-              date: now.toLocaleDateString('en-GB'),
-              time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
-            });
-          }
+        case 'test_receipt': {
+          logPrintRequest('test_receipt',
+            `Test Receipt → Invoice Printer (USB) ` +
+            `template=InvoiceTemplate builder=buildTestReceipt() ` +
+            `paperSize=${escposPaper} (same printer as invoice)`);
+          const now = new Date();
+          await api.printSubmitTest('receipt', undefined, {
+            businessName: 'Highlands Cafe & Motel Inn',
+            address: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
+            phone: s.phone,
+            pan: s.pan,
+            paperSize: escposPaper,
+            date: now.toLocaleDateString('en-GB'),
+            time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
+          });
+          logPrintSuccess('test_receipt',
+            `Test Receipt → buildTestReceipt() → ` +
+            `Printer: Receipt Printer (USB) → Transport: USB → Result: Queued successfully`);
           return;
+        }
 
-        case 'test_kot':
-          console.log('[PRINT] Sending test KOT to native ESC/POS printer...');
-          {
-            const now = new Date();
-            await api.printSubmitTest('kot', undefined, {
-              businessName: 'Highlands Cafe & Motel Inn',
-              address: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
-              phone: s.phone,
-              pan: s.pan,
-              paperSize: escposPaper,
-              date: now.toLocaleDateString('en-GB'),
-              time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
-            });
-          }
+        case 'test_kot': {
+          logPrintRequest('test_kot',
+            `Test KOT → Kitchen Printer (TCP) ` +
+            `template=KotTemplate builder=buildTestKot() ` +
+            `paperSize=${escposPaper} (separate printer from invoice)`);
+          const now = new Date();
+          await api.printSubmitTest('kot', undefined, {
+            businessName: 'Highlands Cafe & Motel Inn',
+            address: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
+            phone: s.phone,
+            pan: s.pan,
+            paperSize: escposPaper,
+            date: now.toLocaleDateString('en-GB'),
+            time: now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
+          });
+          logPrintSuccess('test_kot',
+            `Test KOT → buildTestKot() → ` +
+            `Printer: Kitchen Printer (TCP) → Transport: TCP → Result: Queued successfully`);
           return;
+        }
 
         case 'invoice': {
           const inv = data as InvoiceData;
-          if (!inv) break; // No data — fall back to iframe
-          console.log('[PRINT] Sending invoice to native ESC/POS printer...');
+          if (!inv) break;
+          logPrintRequest('invoice',
+            `Invoice #${inv.invoiceNumber} → Invoice Printer (USB) ` +
+            `template=InvoiceTemplate builder=buildInvoiceReceipt() ` +
+            `showLogo=${s.showLogo} paperSize=${escposPaper}`);
           await api.printSubmitInvoice({
             businessName: 'Highlands Cafe & Motel Inn',
             businessAddress: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
@@ -525,13 +317,20 @@ export async function routePrintDocument(
             showLogo: s.showLogo,
             paperSize: escposPaper,
           });
+          logPrintSuccess('invoice',
+            `Invoice #${inv.invoiceNumber} → buildInvoiceReceipt() → ` +
+            `Printer: Receipt Printer (USB) → Transport: USB → Result: Queued successfully`);
           return;
         }
 
         case 'bill_preview': {
           const inv = data as InvoiceData;
           if (!inv) break;
-          console.log('[PRINT] Sending bill preview to native ESC/POS printer...');
+          logPrintRequest('bill_preview',
+            `Preview #${inv.invoiceNumber} → Invoice Printer (USB) ` +
+            `template=InvoiceTemplate builder=buildInvoiceReceipt() ` +
+            `isPreview=true showLogo=${s.showLogo} paperSize=${escposPaper} ` +
+            `(same routing & settings as invoice)`);
           await api.printSubmitBillPreview(inv.invoiceNumber, {
             businessName: 'Highlands Cafe & Motel Inn',
             businessAddress: ['Birendranagar-8, Khajura', 'Surkhet, Nepal'],
@@ -546,16 +345,23 @@ export async function routePrintDocument(
             subtotal: inv.subtotal,
             discount: inv.discount,
             total: inv.total,
-            showLogo: false,
+            showLogo: s.showLogo, // Same setting as invoice
             paperSize: escposPaper,
+            isPreview: true, // Only intentional difference: preview label
           });
+          logPrintSuccess('bill_preview',
+            `Preview #${inv.invoiceNumber} → buildInvoiceReceipt(isPreview=true) → ` +
+            `Printer: Receipt Printer (USB) → Transport: USB → Result: Queued successfully`);
           return;
         }
 
         case 'kot': {
           const kot = data as KotData;
-          if (!kot) break; // No data — fall back to iframe
-          console.log('[PRINT] Sending KOT to native ESC/POS printer...');
+          if (!kot) break;
+          logPrintRequest('kot',
+            `KOT ${kot.orderNumber} → Kitchen Printer (TCP) ` +
+            `template=KotTemplate builder=buildKitchenKot() ` +
+            `paperSize=${escposPaper}`);
           await api.printSubmitKot({
             businessName: 'Highlands Cafe & Motel Inn',
             orderNumber: kot.orderNumber,
@@ -569,24 +375,27 @@ export async function routePrintDocument(
             showCustomer: s.showCustomerOnKot ?? false,
             showStaff: s.showStaffOnKot ?? false,
           }, kot.orderNumber);
+          logPrintSuccess('kot',
+            `KOT ${kot.orderNumber} → buildKitchenKot() → ` +
+            `Printer: Kitchen Printer (TCP) → Transport: TCP → Result: Queued successfully`);
           return;
         }
 
         default:
-          console.warn('[PRINT] Unknown document type:', type);
+          logPrintWarning(type, 'Unknown document type');
           break;
       }
     } catch (err) {
-      console.warn('[PRINT] Electron print failed, falling back to iframe:', err);
-      // Fall through to iframe fallback
+      logPrintWarning(type, 'Electron print failed, falling back to iframe', err);
     }
   }
 
   // ── Browser / iframe fallback ─────────────────────────────
-  printViaIframe(html)
+  logPrintRequest(type, `Falling back to iframe (browser print dialog)`);
+  printViaIframe(html);
 }
 
-/* ─── Print function (iframe-only for reliable same-origin assets) ──── */
+/* ─── Print function (iframe-only) ──────────────────────────── */
 
 function printViaIframe(html: string): void {
   const iframe = document.createElement('iframe');
@@ -599,7 +408,6 @@ function printViaIframe(html: string): void {
 
   const doc = iframe.contentWindow?.document;
   if (!doc) {
-    // Last resort: try window.print fallback
     const pw = window.open('', '_blank', 'width=400,height=600');
     if (pw) {
       pw.document.open();
@@ -615,13 +423,11 @@ function printViaIframe(html: string): void {
   doc.write(html);
   doc.close();
 
-  // Wait for images to decode before printing
   setTimeout(() => {
     iframe.contentWindow?.focus();
     iframe.contentWindow?.print();
   }, 400);
 
-  // Clean up after print dialog closes
   setTimeout(() => {
     if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
   }, 2000);
@@ -632,31 +438,31 @@ function printViaIframe(html: string): void {
 export const printService = {
   /**
    * Print an invoice receipt.
-   * Generates fresh QR codes if settings have changed,
-   * then renders and prints the receipt via an iframe.
+   * Uses the SINGLE shared renderInvoiceHtml() from InvoiceTemplate.tsx.
    */
   async printInvoice(invoice: InvoiceData): Promise<void> {
-    // Ensure all QRs are up-to-date before rendering
+    logPrintRequest('invoice', `Invoice #${invoice.invoiceNumber} — generating HTML via renderInvoiceHtml()`);
     await generateAllQrs();
-    const html = renderInvoiceHtml(invoice);
+    const options = buildInvoiceRenderOptions();
+    const html = renderInvoiceHtml(invoice, options);
+    logPrintRequest('invoice', `HTML generated (${html.length} chars), submitting to routePrintDocument()`);
     await printWithRetry(() => { routePrintDocument(html, 'invoice', invoice); });
   },
 
   /**
    * Print a Kitchen Order Ticket (KOT).
    * Fire-and-forget — never blocks the caller.
-   * Renders and prints the KOT via an iframe.
-   * Uses the SINGLE shared renderKotHtml as the source of truth.
-   * Supports multiple copies as configured in print settings.
+   * Uses the SINGLE shared renderKotHtml() from KotTemplate.tsx.
    */
   printKot(kot: KotData): void {
     const settings = getPrintSettings();
     const copies = Math.max(1, settings.kotPrintCopies);
+    logPrintRequest('kot', `KOT ${kot.orderNumber} — ${copies} copy(ies) via renderKotHtml()`);
 
     fireAndForget(async () => {
       for (let i = 0; i < copies; i++) {
         const html = renderKotHtml(kot, settings.paperSize, settings.showCustomerOnKot, settings.showStaffOnKot);
-        // Small delay between copies to allow the print dialog to process
+        logPrintRequest('kot', `Copy ${i + 1}/${copies} — HTML (${html.length} chars)`);
         if (i > 0) await new Promise(r => setTimeout(r, 800));
         routePrintDocument(html, 'kot', kot);
       }
@@ -665,81 +471,47 @@ export const printService = {
 
   /**
    * Print a test receipt to verify printer configuration.
+   * Uses the SINGLE shared renderInvoiceHtml() with isTest=true.
    */
   async printTestReceipt(): Promise<void> {
+    logPrintRequest('test_receipt', 'Building test invoice data and rendering via renderInvoiceHtml(isTest=true)');
     await generateAllQrs();
-    const html = renderTestReceiptHtml();
+    const testData = buildTestInvoiceData();
+    const options = buildInvoiceRenderOptions({ isPreview: false, isTest: true });
+    const html = renderInvoiceHtml(testData, options);
+    logPrintRequest('test_receipt', `HTML generated (${html.length} chars) — submitting to routePrintDocument()`);
     await printWithRetry(() => { routePrintDocument(html, 'test_receipt'); });
   },
 
   /**
    * Print a test KOT to verify kitchen printer configuration.
+   * Uses the SINGLE shared renderKotHtml().
    */
   async printTestKot(): Promise<void> {
     const settings = getPrintSettings();
-    const html = renderTestKotHtml();
+    const testData = buildTestKotData();
+    logPrintRequest('test_kot', 'Building test KOT data and rendering via renderKotHtml()');
+    const html = renderKotHtml(testData, settings.paperSize, false, false);
+    logPrintRequest('test_kot', `HTML generated (${html.length} chars) — submitting to routePrintDocument()`);
     await printWithRetry(() => { routePrintDocument(html, 'test_kot'); });
   },
 
   /**
    * Print a Bill Preview / Proforma Bill.
    * Fire-and-forget — never blocks the caller.
-   * Clearly marked as "BILL PREVIEW" to avoid confusion with the final paid invoice.
-   * Does NOT create any database records, payment entries, or customer records.
+   * Uses the SINGLE shared renderInvoiceHtml() with isPreview=true.
+   * Clearly marked as "BILL PREVIEW" on both screen and ESC/POS receipt.
    * Does NOT include QR codes, thank-you messages, or marketing text.
    */
   printBillPreview(invoice: InvoiceData): void {
-    const paperSize = getPrintSettings().paperSize;
-    const pageSize = paperSize === 'A4' ? '210mm 297mm' : `${paperSize} auto`;
-    const bodyWidth = paperSize === 'A4' ? '190mm' : paperSize;
-
-    const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8" /><title>Bill Preview</title>
-<style>
-  @page { size: ${pageSize}; margin: 0; }
-  body { margin:0; padding:4mm 3mm; width:${bodyWidth}; max-width:${bodyWidth}; font-family:system-ui,'Segoe UI',Arial,sans-serif; font-size:12px; line-height:1.4; font-variant-numeric:tabular-nums; color:#000; background:#fff; }
-  .center { text-align:center; }
-  .divider { border-top:1px dashed #000; margin:2.5mm 0; }
-  .row { display:flex; justify-content:space-between; }
-  .item { margin-bottom:1.2mm; }
-  .item-row { display:flex; justify-content:space-between; align-items:baseline; }
-  .item-name { flex:1; font-weight:500; padding-right:2mm; font-size:12px; }
-  .item-qty { width:12mm; text-align:right; font-size:12px; font-weight:500; }
-  .item-amount { width:18mm; text-align:right; font-weight:500; font-size:12px; }
-  .note { font-style:italic; font-size:10px; padding-left:4mm; }
-  .proforma-badge { font-size:11px; font-weight:700; color:#c00; letter-spacing:1px; border:1.5px solid #c00; display:inline-block; padding:1mm 3mm; margin:1mm 0; }
-  @media print { body { margin:0; padding:4mm 3mm; } }
-</style></head>
-<body>
-  <div class="center">
-    <div style="font-size:16px;font-weight:700;letter-spacing:0.5px">HIGHLANDS CAFE &amp; MOTEL INN</div>
-    <div style="font-size:11px;font-weight:500;margin-top:0.5mm">Birendranagar-8, Khajura &bull; Surkhet, Nepal</div>
-    <div class="proforma-badge">BILL PREVIEW</div>
-  </div>
-  <div class="divider"></div>
-  <div style="margin-bottom:2.5mm">
-    <div class="row" style="font-weight:600;font-size:13px"><span>${escapeHtml(invoice.invoiceNumber)}</span><span>${escapeHtml(invoice.tableOrRoom || '')}</span></div>
-    <div class="row" style="font-size:11px;font-weight:500;margin-top:0.5mm;color:#555"><span>${escapeHtml(invoice.date)}</span><span>${escapeHtml(invoice.time)}</span></div>
-    ${invoice.cashierName ? `<div style="font-size:11px;font-weight:500;margin-top:0.3mm;color:#555">Cashier: ${escapeHtml(invoice.cashierName)}</div>` : ''}
-  </div>
-  <div class="divider"></div>
-  <div class="row" style="font-weight:600;font-size:12px;border-bottom:1px dashed #000;padding-bottom:1.5mm;margin-bottom:1.5mm">
-    <span style="flex:1">Item</span><span style="width:12mm;text-align:right">Qty</span><span style="width:18mm;text-align:right">Amount</span>
-  </div>
-  ${itemsToHtml(invoice.items)}
-  <div class="divider"></div>
-  <div style="margin-top:2mm">
-    <div class="row" style="font-size:12px;font-weight:500;margin-bottom:0.5mm"><span>Subtotal</span><span>${fmt(invoice.subtotal)}</span></div>
-    <div style="border-top:1.5px solid #000;margin-top:1.5mm;padding-top:1.5mm;display:flex;justify-content:space-between;font-weight:800;font-size:16px"><span>GRAND TOTAL</span><span>${fmt(invoice.total)}</span></div>
-  </div>
-  <div class="divider"></div>
-  <div class="center" style="font-size:10px;font-weight:500;color:#c00">
-    *** This is a BILL PREVIEW — Not a Final Invoice ***
-  </div>
-</body>
-</html>`;
-
+    logPrintRequest('bill_preview', `Preview #${invoice.invoiceNumber} — rendering via renderInvoiceHtml(isPreview=true)`);
+    const options = buildInvoiceRenderOptions({
+      isPreview: true,
+      isTest: false,
+      qrCodes: [], // No QR codes on preview
+    });
+    const html = renderInvoiceHtml(invoice, options);
+    logPrintRequest('bill_preview', `HTML generated (${html.length} chars) — submitting to routePrintDocument()`);
     fireAndForget(() => { routePrintDocument(html, 'bill_preview', invoice); });
   },
 };

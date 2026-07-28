@@ -1,4 +1,4 @@
 export { ThermalPrinterLayout } from './ThermalPrinterLayout';
-export { InvoiceTemplate, type InvoiceData, type InvoiceLineItem } from './InvoiceTemplate';
+export { InvoiceTemplate, renderInvoiceHtml, type InvoiceData, type InvoiceLineItem, type InvoiceRenderOptions } from './InvoiceTemplate';
 export { KotTemplate, renderKotHtml, type KotData, type KotLineItem } from './KotTemplate';
 

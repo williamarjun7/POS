@@ -44,6 +44,8 @@ export interface EscposInvoiceData {
   paymentBreakdown?: Array<{ method: string; amount: number; discount?: number }>;
   showLogo: boolean;
   paperSize: EscposPaperSize;
+  /** When true, prints "BILL PREVIEW" marking instead of thank-you message */
+  isPreview?: boolean;
 }
 
 export interface EscposKotData {
@@ -376,18 +378,30 @@ export function buildInvoiceReceipt(data: EscposInvoiceData): Buffer {
     }
   }
 
-  // Thank you
-  p.feed(2);
-  p.alignCenter();
-  p.writeln('Thank You for Visiting!');
-  p.writeln('We Hope to See You Again');
-  p.feed(1);
-  p.writeln('highlandscafemotelinn.com');
+  // ── Preview or Thank You ────────────────────────
+  if (data.isPreview) {
+    p.feed(1);
+    p.divider('═');
+    p.alignCenter();
+    p.bold(true);
+    p.writeln('*** BILL PREVIEW ***');
+    p.bold(false);
+    p.writeln('Not a Final Invoice');
+  } else {
+    p.feed(2);
+    p.alignCenter();
+    p.writeln('Thank You for Visiting!');
+    p.writeln('We Hope to See You Again');
+    p.feed(1);
+    p.writeln('highlandscafemotelinn.com');
+  }
 
   p.feed(3);
   p.cut();
 
-  return p.build();
+  const result = p.build();
+  console.log(`[ESCPOS] buildInvoiceReceipt: invoice=${data.invoiceNumber} isPreview=${!!data.isPreview} paperSize=${data.paperSize} bufferSize=${result.length} bytes`);
+  return result;
 }
 
 /**
@@ -463,7 +477,9 @@ export function buildKitchenKot(data: EscposKotData): Buffer {
   p.feed(3);
   p.cut();
 
-  return p.build();
+  const result = p.build();
+  console.log(`[ESCPOS] buildKitchenKot: order=${data.orderNumber} paperSize=${data.paperSize} bufferSize=${result.length} bytes`);
+  return result;
 }
 
 /**
@@ -555,7 +571,9 @@ export function buildTestReceipt(paperSize: EscposPaperSize, testData?: EscposTe
   p.feed(3);
   p.cut();
 
-  return p.build();
+  const result = p.build();
+  console.log(`[ESCPOS] buildTestReceipt: paperSize=${paperSize} bufferSize=${result.length} bytes`);
+  return result;
 }
 
 /**
@@ -628,5 +646,7 @@ export function buildTestKot(paperSize: EscposPaperSize, testData?: EscposTestDa
   p.feed(3);
   p.cut();
 
-  return p.build();
+  const result = p.build();
+  console.log(`[ESCPOS] buildTestKot: paperSize=${paperSize} bufferSize=${result.length} bytes`);
+  return result;
 }

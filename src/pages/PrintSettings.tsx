@@ -126,12 +126,13 @@ export function PrintSettingsPage() {
     try {
       if (type === 'receipt') {
         await printService.printTestReceipt();
+        showSuccess(`Test receipt queued — check the USB printer for output`);
       } else {
         await printService.printTestKot();
+        showSuccess(`Test KOT queued — check the kitchen printer for output`);
       }
-      showSuccess(`Test ${type === 'receipt' ? 'receipt' : 'KOT'} sent to printer`);
-    } catch {
-      showError(`Failed to print test ${type === 'receipt' ? 'receipt' : 'KOT'}`);
+    } catch (err) {
+      showError(`Test ${type === 'receipt' ? 'receipt' : 'KOT'} failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setTestPrinting(null);
     }

@@ -77,7 +77,9 @@ class PrinterManager {
    */
   submitInvoice(data: EscposInvoiceData): string {
     const buffer = this.buildInvoiceBuffer(data);
-    return this.enqueue('invoice', buffer, data.invoiceNumber);
+    const jobId = this.enqueue('invoice', buffer, data.invoiceNumber);
+    console.log(`[PRINTER] submitInvoice: invoice=${data.invoiceNumber} bufferSize=${(buffer.length * 3) / 4} bytes jobId=${jobId}`);
+    return jobId;
   }
 
   /**
@@ -89,7 +91,9 @@ class PrinterManager {
     reference: string,
   ): string {
     const buffer = this.buildKotBuffer(data);
-    return this.enqueue('kot', buffer, reference);
+    const jobId = this.enqueue('kot', buffer, reference);
+    console.log(`[PRINTER] submitKot: order=${data.orderNumber} bufferSize=${(buffer.length * 3) / 4} bytes jobId=${jobId}`);
+    return jobId;
   }
 
   /**
@@ -98,7 +102,9 @@ class PrinterManager {
    */
   submitBillPreview(reference: string, data: EscposInvoiceData): string {
     const buffer = this.buildInvoiceBuffer(data);
-    return this.enqueue('bill_preview', buffer, reference);
+    const jobId = this.enqueue('bill_preview', buffer, reference);
+    console.log(`[PRINTER] submitBillPreview: ref=${reference} isPreview=${!!data.isPreview} jobId=${jobId}`);
+    return jobId;
   }
 
   /**
@@ -106,7 +112,9 @@ class PrinterManager {
    */
   submitTestReceipt(paperSize: EscposPaperSize = '80mm', testData?: any): string {
     const buffer = this.buildTestReceiptBuffer(paperSize, testData);
-    return this.enqueue('test_receipt', buffer, 'TEST-RECEIPT');
+    const jobId = this.enqueue('test_receipt', buffer, 'TEST-RECEIPT');
+    console.log(`[PRINTER] submitTestReceipt: paperSize=${paperSize} jobId=${jobId}`);
+    return jobId;
   }
 
   /**
@@ -114,7 +122,9 @@ class PrinterManager {
    */
   submitTestKot(paperSize: EscposPaperSize = '80mm', testData?: any): string {
     const buffer = this.buildTestKotBuffer(paperSize, testData);
-    return this.enqueue('test_kot', buffer, 'TEST-KOT');
+    const jobId = this.enqueue('test_kot', buffer, 'TEST-KOT');
+    console.log(`[PRINTER] submitTestKot: paperSize=${paperSize} jobId=${jobId}`);
+    return jobId;
   }
 
   // ─── Queue Management ───────────────────────────
@@ -208,28 +218,36 @@ class PrinterManager {
   private async printJob(job: PrintJobMeta): Promise<{ success: boolean; error?: string }> {
     const buffer = Buffer.from(job.escposBase64, 'base64');
     const config = getLocalPrinterConfig();
+    const targetPrinter = (job.type === 'kot' || job.type === 'test_kot') ? 'kitchen' : 'receipt';
+    const transport = (job.type === 'kot' || job.type === 'test_kot') ? 'TCP' : 'USB';
+
+    console.log(`[PRINTER] printJob: type=${job.type} ref=${job.reference} target=${targetPrinter} transport=${transport} bufferSize=${buffer.length} bytes`);
 
     try {
       if (job.type === 'kot' || job.type === 'test_kot') {
         // Kitchen printer: TCP/IP (mandatory — no USB fallback for KOT)
         if (!config.kitchen.ip) {
-          console.warn('[PRINTER] KOT print failed: kitchen printer IP not configured in electron-store');
-          console.warn('[PRINTER]   → Go to Print Settings, enter IP, and the config syncs automatically');
+          console.warn(`[PRINTER] KOT print failed: kitchen printer IP not configured in electron-store`);
+          console.warn(`[PRINTER]   → Go to Print Settings, enter IP, and the config syncs automatically`);
           return { success: false, error: 'Kitchen printer IP not configured' };
         }
-        console.log(`[PRINTER] Printing KOT via TCP: ${config.kitchen.ip}:${config.kitchen.port}`);
+        console.log(`[PRINTER] Printing ${job.type} via TCP: ${config.kitchen.ip}:${config.kitchen.port}`);
         const { printTcp } = await import('./tcp-transport.js');
-        return await printTcp(buffer, { ip: config.kitchen.ip, port: config.kitchen.port });
+        const result = await printTcp(buffer, { ip: config.kitchen.ip, port: config.kitchen.port });
+        console.log(`[PRINTER] ${job.type} result: ${result.success ? '✓ success' : '✗ failed: ' + (result.error || 'unknown')}`);
+        return result;
       } else {
         // Receipt / invoice / bill_preview / test_receipt
         // USB only — no TCP fallback for receipt-type jobs
-        console.log('[PRINTER] Attempting USB print for', job.type, '...');
+        console.log(`[PRINTER] Attempting USB print for ${job.type}...`);
         const { printUsb } = await import('./usb-transport.js');
-        return await printUsb(buffer);
+        const result = await printUsb(buffer);
+        console.log(`[PRINTER] ${job.type} result: ${result.success ? '✓ success' : '✗ failed: ' + (result.error || 'unknown')}`);
+        return result;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Print execution failed';
-      console.error('[PRINTER] Print job exception:', msg);
+      console.error(`[PRINTER] Print job exception for ${job.type}:`, msg);
       return {
         success: false,
         error: msg,
