@@ -5,7 +5,7 @@ import {
   Coffee, Egg, UtensilsCrossed, Wine, Search, X, Plus, Minus,
   User as UserIcon, Table2, ChevronLeft, ChevronRight, ShoppingCart,
   Grid3X3, ArrowLeft, Receipt, Trash2, Keyboard, Zap, Lock, ChevronDown, BedDouble,
-  Ban,
+  Ban, Package,
 } from 'lucide-react';
 import { PageTransition } from '@/components/ui/PageTransition';
 import { PosPaymentDialog, type PaymentResult } from '@/components/payments';
@@ -47,10 +47,14 @@ import type { MenuItem } from '@/types';
 // ─── Types ───────────────────────────────────────────────────
 
 interface CartLine {
+  line_id: string;
   menu_item_id: string;
   name: string;
   quantity: number;
   unit_price: number;
+  base_price: number;
+  serving_type: 'dine_in' | 'takeaway';
+  packaging_fee: number;
   notes: string;
   status: 'pending' | 'voided';
 }
@@ -58,6 +62,9 @@ interface CartLine {
 // ─── Helpers ─────────────────────────────────────────────────
 
 const npr = (amount: number) => formatCurrency(amount, 2);
+
+/** Global packaging fee applied to ALL items when switched to Takeaway */
+const PACKAGING_FEE = 10;
 
 const categoryIcons: Record<string, React.ElementType> = {
   coffee: Coffee, breakfast: Egg, lunch: UtensilsCrossed, bar: Wine,
@@ -174,7 +181,8 @@ export function POS() {
   const [showBillPreview, setShowBillPreview] = useState(false);
   const [lastAdded, setLastAdded] = useState<string | null>(null);
   const [contextMenuItem, setContextMenuItem] = useState<string | null>(null);
-  const [voidConfirm, setVoidConfirm] = useState<{ type: 'batch'; batchId: string; itemId: string; itemName: string } | { type: 'cart'; menuItemId: string; itemName: string } | null>(null);
+  const [voidConfirm, setVoidConfirm] = useState<{ type: 'batch'; batchId: string; itemId: string; itemName: string } | { type: 'cart'; lineId: string; itemName: string } | null>(null);
+  const [packQuantity, setPackQuantity] = useState<{ lineId: string; name: string; maxQty: number; packQty: number } | null>(null);
   const [orderBatches, setOrderBatches] = useState<Record<string, OrderBatch[]>>({});
 
   const [posMode, setPosMode] = useState<'tables' | 'rooms'>('tables');
@@ -298,10 +306,13 @@ export function POS() {
 
   // ─── Cart computations ─────────────────────────────
   const cartItemIds = useMemo(() => new Set(newCartItems.map(c => c.menu_item_id)), [newCartItems]);
+
+  // Count by (menu_item_id, serving_type) for item-level badge counts
   const cartCountByItem = useMemo(() => 
     newCartItems.reduce((acc, c) => { if (c.status !== 'voided') acc[c.menu_item_id] = (acc[c.menu_item_id] ?? 0) + c.quantity; return acc; }, {} as Record<string, number>),
     [newCartItems]
   );
+  // Per-serving-type count — used for correctness, cartCountByItem is for badge display
   const cartCountByCategory = useMemo(() =>
     categoriesList.reduce((acc, cat) => {
       const catItems = menuItemsList.filter(i => i.category_id === cat.id);
@@ -312,6 +323,7 @@ export function POS() {
   );
   const totalNewCartItems = useMemo(() => newCartItems.reduce((s, l) => l.status === 'voided' ? s : s + l.quantity, 0), [newCartItems]);
   const newSubtotal = useMemo(() => newCartItems.reduce((s, l) => l.status === 'voided' ? s : s + l.unit_price * l.quantity, 0), [newCartItems]);
+  const packagingTotal = useMemo(() => newCartItems.reduce((s, l) => l.status === 'voided' ? s : s + (l.serving_type === 'takeaway' ? l.packaging_fee * l.quantity : 0), 0), [newCartItems]);
 
   const selectedEntity = posMode === 'tables' ? tables : rooms;
   const selectedTableInfo = selectedEntity.find((t: any) => t.id === selectedTableId);
@@ -396,52 +408,110 @@ export function POS() {
   }
 
   // ─── Void item from cart (not yet submitted to DB) ───
-  function voidCartItem(menuItemId: string) {
+  function voidCartItem(lineId: string) {
+    const item = newCartItems.find(l => l.line_id === lineId)
+    const itemId = item?.menu_item_id ?? lineId
     setNewCartItems(prev => prev.map(l =>
-      l.menu_item_id === menuItemId ? { ...l, status: 'voided' as const } : l
+      l.line_id === lineId ? { ...l, status: 'voided' as const } : l
     ));
     logActivitySafe({
       activityType: 'order_created',
-      entityId: menuItemId,
+      entityId: itemId,
       entityLabel: `Cart item voided`,
       status: 'completed',
-      details: `Voided cart item ${menuItemId.slice(0, 8)}`,
+      details: `Voided cart item ${itemId.slice(0, 8)}`,
     });
     showSuccess('Item voided');
   }
 
   // ─── Cart functions ────────────────────────────────
-  function addToCart(item: MenuItem) {
+  /**
+   * Packaging fee is global (Rs. 10) for every item when switched to Takeaway.
+   * No per-item configuration needed.
+   */
+  function getItemPackaging(): { has_packaging: boolean; packaging_fee: number } {
+    return { has_packaging: true, packaging_fee: PACKAGING_FEE }
+  }
+
+  function addToCart(item: MenuItem, servingType: 'dine_in' | 'takeaway' = 'dine_in') {
     setCartPanelOpen(true);
     setLastAdded(item.id);
     setTimeout(() => setLastAdded(null), 600);
+    const { packaging_fee } = getItemPackaging()
+    const unit_price = Number(item.price) + (servingType === 'takeaway' ? packaging_fee : 0)
     setNewCartItems(prev => {
-      const existing = prev.find(l => l.menu_item_id === item.id);
-      if (existing) return prev.map(l => l.menu_item_id === item.id ? { ...l, quantity: l.quantity + 1 } : l);
-      return [...prev, { menu_item_id: item.id, name: item.name, quantity: 1, unit_price: item.price, notes: '', status: 'pending' as const }];
+      // Merge if same product AND same serving type
+      const existing = prev.find(l => l.menu_item_id === item.id && l.serving_type === servingType && l.status !== 'voided');
+      if (existing) return prev.map(l => l.line_id === existing.line_id ? { ...l, quantity: l.quantity + 1 } : l);
+      return [...prev, { 
+        line_id: crypto.randomUUID(), menu_item_id: item.id, name: item.name, 
+        quantity: 1, unit_price, base_price: Number(item.price),
+        serving_type: servingType, packaging_fee,
+        notes: '', status: 'pending' as const 
+      }];
     });
   }
 
-  function removeItem(menuItemId: string) {
-    setNewCartItems(prev => prev.filter(l => l.menu_item_id !== menuItemId))
+  function removeItem(lineId: string) {
+    setNewCartItems(prev => prev.filter(l => l.line_id !== lineId))
   }
 
   function clearCart() {
     setNewCartItems([]);
   }
 
-  function updateQty(menuItemId: string, delta: number) {
+  function updateQty(lineId: string, delta: number) {
     setNewCartItems(prev =>
       prev.map(l => {
-        if (l.menu_item_id !== menuItemId) return l
+        if (l.line_id !== lineId) return l
         return { ...l, quantity: Math.max(0, l.quantity + delta) }
       })
         .filter(l => l.quantity > 0)
     );
   }
 
-  function updateNotes(menuItemId: string, notes: string) {
-    setNewCartItems(prev => prev.map(l => l.menu_item_id === menuItemId ? { ...l, notes } : l));
+  function updateNotes(lineId: string, notes: string) {
+    setNewCartItems(prev => prev.map(l => l.line_id === lineId ? { ...l, notes } : l));
+  }
+
+  /** Toggle a cart line between dine_in and takeaway */
+  function toggleServingType(lineId: string) {
+    setNewCartItems(prev => prev.map(l => {
+      if (l.line_id !== lineId) return l
+      const newType = l.serving_type === 'dine_in' ? 'takeaway' : 'dine_in'
+      const { packaging_fee } = getItemPackaging()
+      return {
+        ...l,
+        serving_type: newType,
+        packaging_fee: newType === 'takeaway' ? packaging_fee : 0,
+        unit_price: l.base_price + (newType === 'takeaway' ? packaging_fee : 0),
+      }
+    }))
+  }
+
+  /** Split a dine_in line: move `packQty` units to a new takeaway line */
+  function handlePackQuantity(lineId: string, packQty: number) {
+    setNewCartItems(prev => {
+      const line = prev.find(l => l.line_id === lineId)
+      if (!line || packQty <= 0 || packQty >= line.quantity) return prev
+      const { packaging_fee } = getItemPackaging()
+      const updated = prev.map(l => l.line_id === lineId
+        ? { ...l, quantity: l.quantity - packQty }
+        : l
+      )
+      return [...updated, {
+        line_id: crypto.randomUUID(),
+        menu_item_id: line.menu_item_id,
+        name: line.name,
+        quantity: packQty,
+        unit_price: line.base_price + packaging_fee,
+        base_price: line.base_price,
+        serving_type: 'takeaway' as const,
+        packaging_fee,
+        notes: '',
+        status: 'pending' as const,
+      }]
+    })
   }
 
   // ─── Real-time customer name sync (debounced DB update) ──
@@ -847,6 +917,8 @@ export function POS() {
         name: item.name,
         quantity: item.quantity,
         unitPrice: item.unit_price,
+        servingType: item.serving_type,
+        packagingFee: item.packaging_fee,
       }))),
       ...(getBillableBatches(tableBatches).flatMap(b =>
         b.items
@@ -855,6 +927,8 @@ export function POS() {
             name: bi.name,
             quantity: bi.quantity,
             unitPrice: bi.unit_price,
+            servingType: bi.serving_type ?? 'dine_in',
+            packagingFee: bi.packaging_fee ?? 0,
           }))
       )),
     ];
@@ -1219,6 +1293,7 @@ export function POS() {
     const batchId = crypto.randomUUID();
     const batchItems: OrderBatchItem[] = activeCartItems.map((item) => ({
       id: crypto.randomUUID(), menu_item_id: item.menu_item_id, name: item.name, quantity: item.quantity, unit_price: item.unit_price, notes: item.notes, status: 'pending' as CartItemStatus, batch_id: batchId,
+      serving_type: item.serving_type, packaging_fee: item.packaging_fee,
     }));
     const newSubtotalForThisBatch = activeCartItems.reduce((s, l) => s + l.unit_price * l.quantity, 0);
     const batch: OrderBatch = { id: batchId, table_id: selectedTableId, customer_name: customerName || undefined, items: batchItems, status: 'pending', created_at: new Date().toISOString(), is_locked: true, subtotal: newSubtotalForThisBatch, paid_amount: 0 };
@@ -1251,6 +1326,8 @@ export function POS() {
           unit_price: item.unit_price,
           notes: item.notes,
           status: 'pending',
+          serving_type: item.serving_type ?? 'dine_in',
+          packaging_fee: item.packaging_fee ?? 0,
         })));
       }
 
@@ -1304,6 +1381,7 @@ export function POS() {
             name: item.name,
             quantity: item.quantity,
             notes: item.notes || undefined,
+            servingType: item.serving_type,
           })),
         });
       }
@@ -1903,7 +1981,11 @@ export function POS() {
                       {q ? <HighlightText text={item.name} query={q} /> : item.name}
                     </h3>
                     <AnimatePresence>{inCart && (<motion.div className="flex items-center gap-1 mt-2" onClick={e => e.stopPropagation()} initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
-                      <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(item.id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border bg-card hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
+                      <motion.button whileTap={{ scale: 0.9 }} onClick={() => {
+                        // Find the most recent cart line for this item to decrease its quantity
+                        const line = [...newCartItems].reverse().find(l => l.menu_item_id === item.id && l.status !== 'voided')
+                        if (line) updateQty(line.line_id, -1)
+                      }} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border bg-card hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
                       <span className="w-10 text-center text-sm font-bold tabular-nums">{qty}</span>
                       <motion.button whileTap={{ scale: 0.9 }} onClick={() => addToCart(item as any)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"><Plus className="h-4 w-4" /></motion.button>
                     </motion.div>)}</AnimatePresence>
@@ -2004,36 +2086,75 @@ export function POS() {
                 )}
               <div className="mb-2">                     <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2">Current Order</p>
                     {newCartItems.length > 0 ? (<motion.div layout className="space-y-2">{newCartItems.map(line => (
-                      <motion.div key={line.menu_item_id} className="flex items-start gap-3 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 hover:bg-muted/30 transition-colors" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20, height: 0, marginBottom: 0, padding: 0 }}>
-                        <motion.div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 dark:text-emerald-400 shrink-0" key={line.quantity} initial={{ scale: 1.3 }} animate={{ scale: 1 }}>{line.quantity}</motion.div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium truncate">{line.name}</span>
-                            <div className="flex items-center gap-2">
+                      <motion.div key={line.line_id} className="flex gap-3 rounded-xl border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 shadow-sm hover:shadow-md hover:bg-muted/20 transition-all" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20, height: 0, marginBottom: 0, padding: 0 }}>
+                        <motion.div key={line.quantity} initial={{ scale: 1.3 }} animate={{ scale: 1 }} className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">{line.quantity}</motion.div>
+                        <div className="flex-1 min-w-0 space-y-1.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-sm font-semibold truncate block">{line.name}</span>
                               {line.status === 'voided' && (
-                                <span className="inline-flex items-center gap-0.5 rounded-md bg-red-100 dark:bg-red-950/30 px-1.5 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase">VOID</span>
+                                <span className="inline-flex items-center gap-1 rounded-md bg-red-100 dark:bg-red-950/30 px-1.5 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase mt-0.5">🚫 VOIDED</span>
                               )}
-                              <span className="text-sm font-medium tabular-nums">{npr(line.unit_price * line.quantity)}</span>
                             </div>
+                            <span className="text-sm font-bold tabular-nums shrink-0">{npr(line.unit_price * line.quantity)}</span>
                           </div>
+                          {line.status === 'voided' ? null : (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* Serving Type Badge */}
+                              <motion.button
+                                whileTap={{ scale: 0.9 }}
+                                onClick={() => toggleServingType(line.line_id)}
+                                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                                  line.serving_type === 'takeaway'
+                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                }`}
+                                title="Click to toggle serving type"
+                              >
+                                {line.serving_type === 'takeaway' ? '📦 Takeaway' : '🍽 Dine In'}
+                                <ChevronDown className="h-2.5 w-2.5 ml-0.5 opacity-50" />
+                              </motion.button>
+                              {/* Pack button for dine_in items with packaging */}
+                              {/* Pack button — split part of quantity into takeaway */}
+                              {line.serving_type === 'dine_in' && (
+                                <motion.button
+                                  whileTap={{ scale: 0.9 }}
+                                  onClick={() => setPackQuantity({ lineId: line.line_id, name: line.name, maxQty: line.quantity, packQty: Math.min(1, line.quantity) })}
+                                  className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950/20 dark:text-amber-400 dark:hover:bg-amber-900/30 transition-colors"
+                                  title="Pack some items for takeaway"
+                                >
+                                  <Package className="h-3 w-3" /> Pack
+                                </motion.button>
+                              )}
+                              {/* Packaging fee hint for takeaway */}
+                              {line.serving_type === 'takeaway' && line.packaging_fee > 0 && (
+                                <span className="text-[10px] text-muted-foreground/50">+{npr(line.packaging_fee)}/pc packaging</span>
+                              )}
+                            </div>
+                          )}
                           {line.status === 'voided' ? (
-                            <div className="flex items-center gap-1.5 mt-1.5">
+                            <div className="flex items-center gap-1.5">
                               <span className="text-[11px] text-red-500/70 dark:text-red-400/70 italic">🚫 Voided</span>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-1.5 mt-1.5">
-                              <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></motion.button>
-                              <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
-                              <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></motion.button>
-                              <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />
-                              <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2 pt-0.5">
+                              {/* Quantity controls — grouped as a single visual unit */}
+                              <div className="flex items-center rounded-lg border border-border bg-background">
+                                <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.line_id, -1)} className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-l-lg transition-colors"><Minus className="h-3 w-3" /></motion.button>
+                                <span className="min-w-[1.5rem] text-center text-xs font-bold tabular-nums">{line.quantity}</span>
+                                <motion.button whileTap={{ scale: 0.9 }} onClick={() => updateQty(line.line_id, 1)} className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-r-lg transition-colors"><Plus className="h-3 w-3" /></motion.button>
+                              </div>
+                              {/* Notes */}
+                              <input placeholder="Notes..." value={line.notes} onChange={e => updateNotes(line.line_id, e.target.value)} className="h-7 flex-1 min-w-[70px] max-w-[110px] rounded-lg border border-border bg-background px-2 text-[10px] outline-none placeholder:text-muted-foreground/30 focus:border-primary focus:ring-1 focus:ring-primary transition-colors" />
+                              {/* Actions */}
+                              <div className="flex items-center gap-0.5 ml-auto">
                                 <button
-                                  onClick={() => setVoidConfirm({ type: 'cart', menuItemId: line.menu_item_id, itemName: `${line.name} ×${line.quantity}` })}
-                                  className="shrink-0 text-[11px] font-semibold text-red-500/60 hover:text-red-600 dark:hover:text-red-400 px-2 py-1 rounded-full hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                                  onClick={() => setVoidConfirm({ type: 'cart', lineId: line.line_id, itemName: `${line.name} ×${line.quantity}` })}
+                                  className="h-7 px-2 rounded-lg text-[10px] font-semibold text-red-500/50 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
                                 >
                                   Void
                                 </button>
-                                <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></motion.button>
+                                <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.line_id)} className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-3.5 w-3.5" /></motion.button>
                               </div>
                             </div>
                           )}
@@ -2199,36 +2320,74 @@ export function POS() {
               )}
               {newCartItems.length > 0 ? (
                 <motion.div layout className="space-y-2"><p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2">Current Order</p>
-                  {newCartItems.map(line => (<motion.div key={line.menu_item_id} className="flex items-start gap-3 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 hover:bg-muted/30 transition-colors" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 shrink-0">{line.quantity}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium truncate">{line.name}</span>
-                        <div className="flex items-center gap-2">
+                  {newCartItems.map(line => (<motion.div key={line.line_id} className="flex gap-3 rounded-xl border border-emerald-200 dark:border-emerald-800/50 bg-card p-3 shadow-sm hover:shadow-md hover:bg-muted/20 transition-all" layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-100 to-emerald-50 dark:from-emerald-950/40 dark:to-emerald-900/20 flex items-center justify-center text-sm font-bold text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">{line.quantity}</div>
+                    <div className="flex-1 min-w-0 space-y-1.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <span className="text-sm font-semibold truncate block">{line.name}</span>
                           {line.status === 'voided' && (
-                            <span className="inline-flex items-center gap-0.5 rounded-md bg-red-100 dark:bg-red-950/30 px-1.5 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase">VOID</span>
+                            <span className="inline-flex items-center gap-1 rounded-md bg-red-100 dark:bg-red-950/30 px-1.5 py-0.5 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase mt-0.5">🚫 VOIDED</span>
                           )}
-                          <span className="text-sm font-medium tabular-nums">{npr(line.unit_price * line.quantity)}</span>
                         </div>
+                        <span className="text-sm font-bold tabular-nums shrink-0">{npr(line.unit_price * line.quantity)}</span>
                       </div>
+                      {line.status === 'voided' ? null : (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {/* Serving Type Badge */}
+                          <button
+                            onClick={() => toggleServingType(line.line_id)}
+                            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                              line.serving_type === 'takeaway'
+                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                            }`}
+                            title="Click to toggle serving type"
+                          >
+                            {line.serving_type === 'takeaway' ? '📦 Takeaway' : '🍽 Dine In'}
+                            <ChevronDown className="h-2.5 w-2.5 ml-0.5 opacity-50" />
+                          </button>
+                          {/* Pack button for dine_in items with packaging */}
+                          {/* Pack button — split part of quantity into takeaway */}
+                          {line.serving_type === 'dine_in' && (
+                            <button
+                              onClick={() => setPackQuantity({ lineId: line.line_id, name: line.name, maxQty: line.quantity, packQty: Math.min(1, line.quantity) })}
+                              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-950/20 dark:text-amber-400 dark:hover:bg-amber-900/30 transition-colors"
+                              title="Pack some items for takeaway"
+                            >
+                              <Package className="h-3 w-3" /> Pack
+                            </button>
+                          )}
+                          {/* Packaging fee hint for takeaway */}
+                          {line.serving_type === 'takeaway' && line.packaging_fee > 0 && (
+                            <span className="text-[10px] text-muted-foreground/50">+{npr(line.packaging_fee)}/pc packaging</span>
+                          )}
+                        </div>
+                      )}
                       {line.status === 'voided' ? (
-                        <div className="flex items-center gap-1.5 mt-1.5">
+                        <div className="flex items-center gap-1.5">
                           <span className="text-[11px] text-red-500/70 dark:text-red-400/70 italic">🚫 Voided</span>
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1.5 mt-1.5">
-                          <button onClick={() => updateQty(line.menu_item_id, -1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Minus className="h-4 w-4" /></button>
-                          <span className="text-sm font-bold w-10 text-center tabular-nums">{line.quantity}</span>
-                          <button onClick={() => updateQty(line.menu_item_id, 1)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"><Plus className="h-4 w-4" /></button>
-                          <input placeholder="Notes" value={line.notes} onChange={e => updateNotes(line.menu_item_id, e.target.value)} className="ml-auto min-h-[44px] w-full max-w-28 rounded-md border border-border bg-transparent px-2 text-[11px] outline-none focus:ring-1 focus:ring-ring" />                           <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => setVoidConfirm({ type: 'cart', menuItemId: line.menu_item_id, itemName: `${line.name} ×${line.quantity}` })}
-                                className="shrink-0 text-[11px] font-semibold text-red-500/60 hover:text-red-600 dark:hover:text-red-400 px-2 py-1 rounded-full hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
-                              >
-                                Void
-                              </button>
-                              <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.menu_item_id)} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-4 w-4" /></motion.button>
-                            </div>
+                        <div className="flex items-center gap-2 pt-0.5">
+                          {/* Quantity controls — grouped as a single visual unit */}
+                          <div className="flex items-center rounded-lg border border-border bg-background">
+                            <button onClick={() => updateQty(line.line_id, -1)} className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-l-lg transition-colors"><Minus className="h-3 w-3" /></button>
+                            <span className="min-w-[1.5rem] text-center text-xs font-bold tabular-nums">{line.quantity}</span>
+                            <button onClick={() => updateQty(line.line_id, 1)} className="flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-r-lg transition-colors"><Plus className="h-3 w-3" /></button>
+                          </div>
+                          {/* Notes */}
+                          <input placeholder="Notes..." value={line.notes} onChange={e => updateNotes(line.line_id, e.target.value)} className="h-7 flex-1 min-w-[70px] max-w-[110px] rounded-lg border border-border bg-background px-2 text-[10px] outline-none placeholder:text-muted-foreground/30 focus:border-primary focus:ring-1 focus:ring-primary transition-colors" />
+                          {/* Actions */}
+                          <div className="flex items-center gap-0.5 ml-auto">
+                            <button
+                              onClick={() => setVoidConfirm({ type: 'cart', lineId: line.line_id, itemName: `${line.name} ×${line.quantity}` })}
+                              className="h-7 px-2 rounded-lg text-[10px] font-semibold text-red-500/50 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                            >
+                              Void
+                            </button>
+                            <motion.button whileTap={{ scale: 0.9 }} onClick={() => removeItem(line.line_id)} className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 transition-colors"><Trash2 className="h-3.5 w-3.5" /></motion.button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -2245,6 +2404,18 @@ export function POS() {
                   <div className="flex items-center justify-between text-xs text-muted-foreground/70">
                     <span>Previous batches</span>
                     <span className="tabular-nums">{npr(originalPreviousTotal)}</span>
+                  </div>
+                )}
+                {newSubtotal > 0 && (
+                  <div className="flex items-center justify-between text-xs text-muted-foreground/70">
+                    <span>Subtotal</span>
+                    <span className="tabular-nums">{npr(newSubtotal)}</span>
+                  </div>
+                )}
+                {packagingTotal > 0 && (
+                  <div className="flex items-center justify-between text-xs text-amber-600 dark:text-amber-400">
+                    <span className="flex items-center gap-1"><Package className="h-3 w-3" /> Packaging</span>
+                    <span className="tabular-nums">{npr(packagingTotal)}</span>
                   </div>
                 )}
                 <div className="flex items-center justify-between">
@@ -2312,6 +2483,87 @@ export function POS() {
     
       {/* ─── Void confirmation dialog ─── */}
       <AnimatePresence>
+        {packQuantity && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            onClick={() => setPackQuantity(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/50"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              className="relative bg-background border rounded-xl shadow-2xl p-6 max-w-sm w-full"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 p-2.5 rounded-full bg-amber-100 dark:bg-amber-950/30">
+                  <Package className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold">Pack Quantity</h3>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    How many &ldquo;{packQuantity.name}&rdquo; should be packed for takeaway?
+                  </p>
+                  <div className="mt-4 flex items-center gap-3">
+                    <button
+                      onClick={() => setPackQuantity(prev => prev ? { ...prev, packQty: Math.max(1, prev.packQty - 1) } : null)}
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"
+                    >
+                      <Minus className="h-4 w-4" />
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={packQuantity.maxQty}
+                      value={packQuantity.packQty}
+                      onChange={e => {
+                        const val = parseInt(e.target.value, 10)
+                        if (!isNaN(val) && val >= 1 && val <= packQuantity.maxQty) {
+                          setPackQuantity(prev => prev ? { ...prev, packQty: val } : null)
+                        }
+                      }}
+                      className="w-20 text-center text-lg font-bold tabular-nums border border-border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <span className="text-sm text-muted-foreground">/ {packQuantity.maxQty}</span>
+                    <button
+                      onClick={() => setPackQuantity(prev => prev ? { ...prev, packQty: Math.min(prev.maxQty - 1, prev.packQty + 1) } : null)}
+                      className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-border hover:bg-muted transition-colors"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={() => setPackQuantity(null)}
+                  className="px-5 py-2.5 text-sm font-medium text-muted-foreground bg-muted rounded-lg hover:bg-muted/80 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    handlePackQuantity(packQuantity.lineId, packQuantity.packQty)
+                    setPackQuantity(null)
+                  }}
+                  className="px-5 py-2.5 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors shadow-sm"
+                >
+                  Pack {packQuantity.packQty}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
         {voidConfirm && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -2356,7 +2608,7 @@ export function POS() {
                     if (voidConfirm.type === 'batch') {
                       voidBatchItem(voidConfirm.batchId, voidConfirm.itemId);
                     } else {
-                      voidCartItem(voidConfirm.menuItemId);
+                      voidCartItem(voidConfirm.lineId);
                     }
                     setVoidConfirm(null);
                   }}

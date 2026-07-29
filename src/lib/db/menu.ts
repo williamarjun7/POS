@@ -71,6 +71,8 @@ function rowToMenuItem(
     image: row.image_url ?? undefined,
     prepTime: undefined, // prep_time removed from new schema
     tags: [],
+    has_packaging: row.has_packaging,
+    packaging_fee: Number(row.packaging_fee),
   }
 }
 
@@ -196,6 +198,8 @@ export async function getMenuItem(id: string): Promise<MenuItem> {
     image: row.image_url ?? undefined,
     prepTime: undefined,
     tags: [],
+    has_packaging: row.has_packaging,
+    packaging_fee: Number(row.packaging_fee),
   }
 }
 

@@ -1,3 +1,4 @@
+import { type ReactNode } from "react"
 import { cn } from "@/lib/utils"
 
 type Variant = "default" | "success" | "warning" | "destructive" | "info" | "secondary"
@@ -5,6 +6,10 @@ type Variant = "default" | "success" | "warning" | "destructive" | "info" | "sec
 interface StatusBadgeProps {
   label: string
   variant?: Variant
+  /** Optional Lucide icon to render before the label */
+  icon?: ReactNode
+  /** Compact size variant */
+  size?: "sm" | "md"
 }
 
 const containerStyles: Record<Variant, string> = {
@@ -25,15 +30,20 @@ const dotStyles: Record<Variant, string> = {
   secondary: "bg-accent-foreground",
 }
 
-export function StatusBadge({ label, variant = "default" }: StatusBadgeProps) {
+export function StatusBadge({ label, variant = "default", icon, size = "md" }: StatusBadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
-        containerStyles[variant]
+        "inline-flex items-center gap-1.5 rounded-full font-medium",
+        containerStyles[variant],
+        size === "sm" ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-0.5 text-xs"
       )}
     >
-      <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotStyles[variant])} />
+      {icon ? (
+        <span className="shrink-0">{icon}</span>
+      ) : (
+        <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotStyles[variant])} />
+      )}
       {label}
     </span>
   )

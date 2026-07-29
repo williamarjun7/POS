@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Loader2, ChevronLeft, ChevronRight } from "lucide-react"
+import { Loader2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search, Inbox } from "lucide-react"
 import { Icon } from "@/components/icon-mapper"
 import { cn } from "@/lib/utils"
 
@@ -18,24 +18,62 @@ interface DataTableProps<T> {
   searchKey?: string
   pageSize?: number
   onRowClick?: (row: T) => void
-  /** Animation delay stagger in ms between rows */
   rowAnimationDelay?: number
-  // Server-side pagination props (if provided, overrides client-side pagination)
+  /** Compact/dense mode with smaller padding */
+  dense?: boolean
+  // Server-side pagination props
   loading?: boolean
   totalPages?: number
   currentPage?: number
   onPageChange?: (page: number) => void
+  /** ID of the currently selected row for visual highlight */
+  selectedId?: string
+  /** Key to use for matching selectedId against rows (default: 'id') */
+  selectedKey?: string
 }
 
 function rowVariants(delay: number) {
   return {
-    hidden: { opacity: 0, y: 8 },
+    hidden: { opacity: 0, y: 6 },
     visible: (i: number) => ({
       opacity: 1,
       y: 0,
       transition: { delay: i * delay, duration: 0.2, ease: "easeOut" as const },
     }),
   }
+}
+
+/** Generate a compact page range with ellipsis */
+function getPageNumbers(current: number, total: number): (number | 'ellipsis')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i)
+
+  const pages: (number | 'ellipsis')[] = []
+  if (current <= 3) {
+    pages.push(0, 1, 2, 3, 'ellipsis', total - 1)
+  } else if (current >= total - 4) {
+    pages.push(0, 'ellipsis', total - 4, total - 3, total - 2, total - 1)
+  } else {
+    pages.push(0, 'ellipsis', current - 1, current, current + 1, 'ellipsis', total - 1)
+  }
+  return pages
+}
+
+/** Loading skeleton row */
+function SkeletonRow({ columns, dense }: { columns: Column<unknown>[]; dense?: boolean }) {
+  return (
+    <tr className="border-b border-border/50 last:border-0">
+      {columns.map((col, i) => (
+        <td key={col.key} className={cn(dense ? "px-3 py-2.5" : "px-4 py-3", col.className)}>
+          <div
+            className={cn(
+              "h-4 rounded-md bg-muted/60 animate-pulse",
+              i === 0 ? "w-32" : i === columns.length - 1 ? "w-8" : "w-20"
+            )}
+          />
+        </td>
+      ))}
+    </tr>
+  )
 }
 
 export function DataTable<T>({
@@ -46,15 +84,17 @@ export function DataTable<T>({
   pageSize = 10,
   onRowClick,
   rowAnimationDelay = 0.03,
+  dense = false,
   loading = false,
   totalPages: serverTotalPages,
   currentPage: serverCurrentPage,
   onPageChange,
+  selectedId,
+  selectedKey = 'id',
 }: DataTableProps<T>) {
   const [clientPage, setClientPage] = useState(0)
   const [search, setSearch] = useState("")
 
-  // Determine if we're using server-side or client-side pagination
   const isServerSide = serverTotalPages !== undefined
 
   const filtered = useMemo(() => {
@@ -70,14 +110,14 @@ export function DataTable<T>({
 
   const paged = isServerSide ? data : filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
 
+  const cellPadding = dense ? "px-3 py-2.5" : "px-4 py-3"
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
+      {/* ── Search bar (client-side only) ── */}
       {searchable && searchKey && (
-        <div className="relative max-w-sm">
-          <Icon
-            name="Search"
-            className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-          />
+        <div className="relative max-w-xs">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             placeholder="Search..."
@@ -86,20 +126,22 @@ export function DataTable<T>({
               setSearch(e.target.value)
               setPage(0)
             }}
-            className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary/20 hover:border-foreground/30"
+            className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-4 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary"
           />
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-border">
+      {/* ── Table ── */}
+      <div className="overflow-x-auto rounded-xl border border-border shadow-sm">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border bg-muted/50">
+            <tr className="border-b border-border bg-muted/40">
               {columns.map((col) => (
                 <th
                   key={col.key}
                   className={cn(
-                    "px-4 py-3 text-left font-medium text-muted-foreground",
+                    cellPadding,
+                    "text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground",
                     col.className
                   )}
                 >
@@ -109,25 +151,45 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
-            <AnimatePresence>
-              {paged.length === 0 ? (
-                <motion.tr
-                  key="empty"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+            {loading ? (
+              // ── Loading state: skeleton rows (no animation wrapper to avoid AnimatePresence conflicts) ──
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr
+                  key={`skeleton-${i}`}
+                  className="border-b border-border/50 last:border-0"
+                  style={{ animationDelay: `${i * 30}ms` }}
                 >
-                  <td
-                    colSpan={columns.length}
-                    className="px-4 py-8 text-center text-muted-foreground"
-                  >
-                    No results found.
-                  </td>
-                </motion.tr>
-              ) : (
-                paged.map((row, i) => (
+                  {columns.map((col, ci) => (
+                    <td key={col.key} className={cn(dense ? "px-3 py-2.5" : "px-4 py-3", col.className)}>
+                      <div
+                        className={cn(
+                          "h-4 rounded-md bg-muted/60 animate-pulse",
+                          ci === 0 ? "w-32" : ci === columns.length - 1 ? "w-8" : "w-20"
+                        )}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : paged.length === 0 ? (
+              // ── Empty state ──
+              <tr>
+                <td colSpan={columns.length} className="px-4 py-12">
+                  <div className="flex flex-col items-center justify-center text-center animate-fade-in">
+                    <Inbox className="h-10 w-10 text-muted-foreground/30 mb-3" />
+                    <p className="text-sm font-medium text-muted-foreground">No results found</p>
+                    <p className="text-xs text-muted-foreground/60 mt-0.5">
+                      Try adjusting your search or filters
+                    </p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              // ── Data rows ──
+              <AnimatePresence initial={false}>
+                {paged.map((row, i) => (
                   <motion.tr
-                    key={`${currentPage}-${i}`}
+                    key={`row-${currentPage}-${i}`}
                     custom={i}
                     variants={rowVariants(rowAnimationDelay)}
                     initial="hidden"
@@ -135,76 +197,100 @@ export function DataTable<T>({
                     exit={{ opacity: 0, y: -4 }}
                     onClick={() => onRowClick?.(row)}
                     className={cn(
-                      "border-b border-border last:border-0 transition-colors duration-150",
-                      onRowClick && "cursor-pointer hover:bg-muted/50"
+                      "group border-b border-border/60 last:border-0 transition-colors duration-150",
+                      i % 2 === 0 ? "bg-background" : "bg-muted/10",
+                      onRowClick && "cursor-pointer hover:bg-muted/40",
+                      selectedId && String((row as any)[selectedKey]) === String(selectedId) &&
+                        "bg-primary/5 border-l-2 border-l-primary hover:bg-primary/8"
                     )}
                   >
                     {columns.map((col) => (
-                      <td key={col.key} className={cn("px-4 py-3", col.className)}>
+                      <td key={col.key} className={cn(cellPadding, "text-sm", col.className)}>
                         {col.render
                           ? col.render(row)
                           : ((row as Record<string, unknown>)[col.key] as React.ReactNode)}
                       </td>
                     ))}
                   </motion.tr>
-                ))
-              )}
-            </AnimatePresence>
+                ))}
+              </AnimatePresence>
+            )}
           </tbody>
         </table>
       </div>
 
-      {loading && (
-        <div className="flex items-center justify-center py-4">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        </div>
-      )}
-
+      {/* ── Pagination ── */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span className="text-xs">
-            Page {currentPage + 1} of {totalPages}
+        <div className="flex items-center justify-between gap-4 text-sm">
+          <span className="text-xs text-muted-foreground shrink-0">
+            {isServerSide
+              ? `Page ${currentPage + 1} of ${totalPages}`
+              : `${filtered.length} result${filtered.length !== 1 ? 's' : ''} · Page ${currentPage + 1} of ${totalPages}`}
           </span>
+
           <div className="flex items-center gap-1">
+            {/* First page */}
+            <button
+              onClick={() => setPage(0)}
+              disabled={currentPage === 0}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-muted hover:text-foreground disabled:opacity-25 disabled:pointer-events-none"
+              title="First page"
+            >
+              <ChevronsLeft className="h-3.5 w-3.5" />
+            </button>
+
+            {/* Previous */}
             <button
               onClick={() => setPage(Math.max(0, currentPage - 1))}
               disabled={currentPage === 0}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-all hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-muted hover:text-foreground disabled:opacity-25 disabled:pointer-events-none"
+              title="Previous page"
             >
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="h-3.5 w-3.5" />
             </button>
-            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-              let pageNum: number
-              if (totalPages <= 5) {
-                pageNum = i
-              } else if (currentPage < 3) {
-                pageNum = i
-              } else if (currentPage > totalPages - 3) {
-                pageNum = totalPages - 5 + i
-              } else {
-                pageNum = currentPage - 2 + i
-              }
-              return (
-                <button
-                  key={pageNum}
-                  onClick={() => setPage(pageNum)}
-                  className={cn(
-                    "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-medium transition-all duration-150",
-                    currentPage === pageNum
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  {pageNum + 1}
-                </button>
-              )
-            })}
+
+            {/* Page numbers */}
+            <div className="flex items-center gap-0.5 mx-1">
+              {getPageNumbers(currentPage, totalPages).map((page, idx) =>
+                page === 'ellipsis' ? (
+                  <span key={`e-${idx}`} className="flex h-8 w-6 items-center justify-center text-xs text-muted-foreground/40 select-none">
+                    ...
+                  </span>
+                ) : (
+                  <button
+                    key={page}
+                    onClick={() => setPage(page)}
+                    className={cn(
+                      "flex h-8 min-w-[2rem] items-center justify-center rounded-lg px-1.5 text-xs font-medium transition-all duration-150",
+                      currentPage === page
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {page + 1}
+                  </button>
+                )
+              )}
+            </div>
+
+            {/* Next */}
             <button
               onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
               disabled={currentPage >= totalPages - 1}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-all hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-muted hover:text-foreground disabled:opacity-25 disabled:pointer-events-none"
+              title="Next page"
             >
-              <ChevronRight className="h-4 w-4" />
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+
+            {/* Last page */}
+            <button
+              onClick={() => setPage(totalPages - 1)}
+              disabled={currentPage >= totalPages - 1}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-muted hover:text-foreground disabled:opacity-25 disabled:pointer-events-none"
+              title="Last page"
+            >
+              <ChevronsRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>

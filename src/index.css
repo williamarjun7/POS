@@ -273,6 +273,10 @@
 .animate-bottom-sheet-in { animation: bottom-sheet-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .animate-icon-bounce { animation: icon-bounce 0.4s ease; }
 .animate-pulse-soft { animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
 .page-enter { animation: fade-in-up 0.3s ease-out; }
 .page-exit { animation: fade-in 0.15s ease-out reverse; }
 

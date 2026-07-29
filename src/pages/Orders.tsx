@@ -129,17 +129,29 @@ function OrderDetailModal({
         <div>
           <h4 className="text-sm font-semibold text-foreground mb-3">Order Items</h4>
           <div className="rounded-xl border border-border divide-y divide-border">
-            {(order.items || []).map((item: string | OrderItem, i: number) => (
-              <div key={i} className="flex items-center justify-between px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-xs font-medium text-primary">
-                    {i + 1}
-                  </span>
-                  <span className="text-sm font-medium text-foreground">{typeof item === 'string' ? item : item.name}</span>
+            {(order.items || []).map((item: string | OrderItem, i: number) => {
+              const itemName = typeof item === 'string' ? item : item.name
+              const itemServingType = typeof item !== 'string' && 'serving_type' in item ? item.serving_type : undefined
+              return (
+                <div key={i} className="flex items-center justify-between px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-xs font-medium text-primary">
+                      {i + 1}
+                    </span>
+                    <span className="text-sm font-medium text-foreground">{itemName}</span>                        {itemServingType && (
+                      <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                        itemServingType === 'takeaway'
+                          ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                          : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                      }`}>
+                        {itemServingType === 'takeaway' ? '📦 Takeaway' : '🍽 Dine In'}
+                      </span>
+                    )}
+                  </div>
+                  <Receipt className="h-4 w-4 text-muted-foreground" />
                 </div>
-                <Receipt className="h-4 w-4 text-muted-foreground" />
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
 

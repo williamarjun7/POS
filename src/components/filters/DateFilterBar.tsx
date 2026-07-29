@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 export type DateFilterPreset = 'today' | 'yesterday' | 'this_week' | 'this_month' | 'this_year' | 'custom' | 'custom_range';
 
@@ -158,90 +159,130 @@ export default function DateFilterBar({ filter, dateRange, onChange, openCustomK
   }, [filter]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap items-center gap-3 py-1.5">
+      {/* Preset buttons */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {PRESETS.map((p) => (
           <button
             key={p.value}
             onClick={() => handlePreset(p.value)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+            className={cn(
+              "rounded-lg px-3.5 py-2 text-xs font-semibold transition-all cursor-pointer select-none",
               filter.preset === p.value
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
-            }`}
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            )}
           >
             {p.label}
           </button>
         ))}
+
+        {/* Custom button */}
         <div className="relative" ref={popoverRef}>
           <button
             onClick={() => setShowCustom(!showCustom)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all cursor-pointer inline-flex items-center gap-1 ${
+            className={cn(
+              "rounded-lg px-3.5 py-2 text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 select-none",
               filter.preset === 'custom' || filter.preset === 'custom_range'
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
-            }`}
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            )}
           >
             <Calendar className="h-3.5 w-3.5" />
             Custom
-            <ChevronDown className="h-3 w-3" />
+            <ChevronDown className={cn(
+              "h-3 w-3 transition-transform duration-200",
+              showCustom && "rotate-180"
+            )} />
           </button>
 
+          {/* Custom date popover */}
           {showCustom && (
-            <div className="absolute right-0 top-full mt-1 z-50 w-72 rounded-xl border bg-popover p-4 shadow-lg">
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
+            <div className="absolute right-0 top-full mt-1.5 z-50 w-72 rounded-xl border bg-popover p-4 shadow-lg animate-in fade-in zoom-in-95 duration-150">
+              <div className="space-y-3.5">
+                {/* Toggle: Single Day / Range */}
+                <div className="flex items-center gap-2 bg-muted/50 rounded-lg p-1">
                   <button
                     onClick={() => setIsRange(false)}
-                    className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
-                      !isRange ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                    }`}
+                    className={cn(
+                      "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all cursor-pointer",
+                      !isRange
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
                   >
                     Single Day
                   </button>
                   <button
                     onClick={() => setIsRange(true)}
-                    className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
-                      isRange ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                    }`}
+                    className={cn(
+                      "flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all cursor-pointer",
+                      isRange
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
                   >
                     Date Range
                   </button>
                 </div>
 
+                {/* Date inputs */}
                 {isRange ? (
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     <div>
-                      <label className="text-xs font-medium text-muted-foreground block mb-1">Start Date</label>
-                      <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)}
-                        className="w-full rounded-lg border bg-background px-3 py-2 text-sm" />
+                      <label className="text-xs font-medium text-muted-foreground block mb-1.5">Start Date</label>
+                      <input
+                        type="date"
+                        value={customStart}
+                        onChange={(e) => setCustomStart(e.target.value)}
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary"
+                      />
                     </div>
                     <div>
-                      <label className="text-xs font-medium text-muted-foreground block mb-1">End Date</label>
-                      <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
-                        className="w-full rounded-lg border bg-background px-3 py-2 text-sm" />
+                      <label className="text-xs font-medium text-muted-foreground block mb-1.5">End Date</label>
+                      <input
+                        type="date"
+                        value={customEnd}
+                        onChange={(e) => setCustomEnd(e.target.value)}
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary"
+                      />
                     </div>
                   </div>
                 ) : (
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Date</label>
-                    <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
-                      className="w-full rounded-lg border bg-background px-3 py-2 text-sm" />
+                    <label className="text-xs font-medium text-muted-foreground block mb-1.5">Date</label>
+                    <input
+                      type="date"
+                      value={customDate}
+                      onChange={(e) => setCustomDate(e.target.value)}
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary"
+                    />
                   </div>
                 )}
 
-                <div className="flex gap-2">
-                  <button onClick={handleCustomSubmit}
+                {/* Action buttons */}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={handleCustomSubmit}
                     disabled={isRange ? !customStart || !customEnd : !customDate}
-                    className="flex-1 rounded-lg bg-primary text-primary-foreground px-3 py-2 text-xs font-medium hover:bg-primary/90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+                    className="flex-1 rounded-lg bg-primary text-primary-foreground px-3 py-2 text-xs font-semibold hover:bg-primary/90 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
                     Apply
                   </button>
                   {dateRange.isToday && filter.preset !== 'today' && (
-                    <button onClick={handleTodayNow}
-                      className="rounded-lg border px-3 py-2 text-xs font-medium hover:bg-accent transition-all cursor-pointer">
+                    <button
+                      onClick={handleTodayNow}
+                      className="rounded-lg border border-border px-3 py-2 text-xs font-medium hover:bg-muted transition-all cursor-pointer"
+                    >
                       Now
                     </button>
                   )}
+                  <button
+                    onClick={() => setShowCustom(false)}
+                    className="rounded-lg border border-border px-3 py-2 text-xs font-medium hover:bg-muted transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
             </div>
@@ -249,9 +290,11 @@ export default function DateFilterBar({ filter, dateRange, onChange, openCustomK
         </div>
       </div>
 
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground ml-auto">
-        <Calendar className="h-3.5 w-3.5" />
-        <span className="font-medium">{dateRange.label}</span>
+      {/* Date range label */}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground ml-auto shrink-0">
+        <div className="h-4 w-px bg-border" />
+        <Calendar className="h-3.5 w-3.5 text-muted-foreground/60" />
+        <span className="font-medium text-foreground/80">{dateRange.label}</span>
       </div>
     </div>
   );

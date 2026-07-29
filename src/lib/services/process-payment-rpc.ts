@@ -77,6 +77,10 @@ export interface ProcessPaymentParams {
     name: string
     quantity: number
     unitPrice: number
+    /** Serving type: 'dine_in' or 'takeaway' (default 'dine_in') */
+    servingType?: string
+    /** Per-unit packaging fee (0 for dine-in) */
+    packagingFee?: number
   }>
 }
 
@@ -171,8 +175,10 @@ export async function callProcessPayment(
             name: i.name,
             quantity: i.quantity,
             unit_price: i.unitPrice,
+            serving_type: i.servingType ?? 'dine_in',
+            packaging_fee: i.packagingFee ?? 0,
           }))
-        : [],
+        : []
     })
 
     const elapsedMs = Math.round(performance.now() - startTime)

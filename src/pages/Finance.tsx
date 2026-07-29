@@ -1,9 +1,12 @@
 import { useState, useMemo, useEffect, useCallback } from "react"
 import { motion } from "framer-motion"
-import { Plus,
+import {
+  Plus,
   MoreHorizontal,
   Receipt,
   Trash2,
+  Eye,
+  Printer,
 } from "lucide-react"
 import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
@@ -46,6 +49,9 @@ import { useExpenses, EXPENSE_CATEGORIES, EXPENSE_UNITS } from "@/lib/services/e
 import { useCashReconciliations } from "@/lib/services/cash-reconciliation-service"
 import { PaymentMethodBadge } from "@/components/PaymentMethodBadge"
 import { PaymentBreakdown } from "@/components/payments/PaymentBreakdown"
+import { BillPreview } from "@/components/customers/BillPreview"
+import type { CustomerVisit } from "@/components/customers/VisitHistory"
+import { getPaymentMethodLabel } from "@/lib/payment-methods"
 import {
   useFinancialSummaryForRange,
   useCashFlow,
@@ -149,7 +155,12 @@ export function Finance() {
   const [invoicePaymentBreakdowns, setInvoicePaymentBreakdowns] = useState<Record<string, Array<{ method: string; amount: number; discount?: number }>>>({})
   // Fetch total paid (non-credit) per invoice for Paid & Outstanding columns
   const [invoicePaidAmounts, setInvoicePaidAmounts] = useState<Record<string, number>>({})
+  // Store full invoice items for BillPreview
+  const [invoiceItemsRaw, setInvoiceItemsRaw] = useState<Record<string, Array<{ name: string; quantity: number; unit_price: number; total_price: number }>>>({})
   
+  // Bill preview modal state
+  const [billPreviewVisit, setBillPreviewVisit] = useState<CustomerVisit | null>(null)
+
   // ── Fetch per-page data (items, payments) with auto-refresh every 15s ──
   const loadPageData = useCallback(async () => {
     const invoiceIds = invoicesPage.map(inv => inv.id)
@@ -162,7 +173,7 @@ export function Finance() {
     const [itemsResult, paymentsResult] = await Promise.all([
       insforge.database
         .from('invoice_items')
-        .select('invoice_id')
+        .select('invoice_id, name, quantity, unit_price, total_price')
         .in('invoice_id', invoiceIds),
       insforge.database
         .from('payments')
@@ -181,6 +192,19 @@ export function Finance() {
     // for invoices that have zero invoice_items in the database. Now shows 0
     // when no items exist, which correctly surfaces the missing-items problem.
     setInvoiceItemCounts(counts)
+
+    // Store full item data for BillPreview
+    const itemsRaw: Record<string, Array<{ name: string; quantity: number; unit_price: number; total_price: number }>> = {}
+    for (const row of (itemsResult.data ?? []) as Array<{ invoice_id: string; name: string; quantity: number; unit_price: number; total_price: number }>) {
+      if (!itemsRaw[row.invoice_id]) itemsRaw[row.invoice_id] = []
+      itemsRaw[row.invoice_id].push({
+        name: row.name,
+        quantity: row.quantity,
+        unit_price: row.unit_price,
+        total_price: row.total_price,
+      })
+    }
+    setInvoiceItemsRaw(itemsRaw)
 
     // Payment methods, breakdowns & totals per invoice
     const methods: Record<string, Set<string>> = {}
@@ -342,8 +366,64 @@ export function Finance() {
     { id: "payments", label: "Payments", count: paymentHistory.length },
   ]
 
+  // ── Helper: build CustomerVisit from invoice + items + payments for BillPreview ──
+  const buildFinanceVisit = useCallback((inv: Invoice): CustomerVisit => {
+    const invoiceRow = invoicesPage.find(r => r.id === inv.id)
+    const items = invoiceItemsRaw[inv.id] ?? []
+    const payments = invoicePaymentBreakdowns[inv.id] ?? []
+    const paidAmount = invoicePaidAmounts[inv.id] ?? 0
+    const outstanding = Math.max(0, inv.total - paidAmount)
+
+    const paymentMethods = payments.map(p => ({
+      method: p.method as import('@/types').PaymentMethod,
+      amount: p.amount,
+      collected: p.method === 'credit' ? 0 : p.amount,
+      outstanding: p.method === 'credit' ? outstanding : 0,
+    }))
+
+    const visitItems = items.map(item => ({
+      name: item.name,
+      quantity: item.quantity,
+      unitPrice: item.unit_price,
+      totalPrice: item.total_price,
+    }))
+
+    const paymentSummary = paymentMethods
+      .filter(p => p.method !== 'credit')
+      .map(p => getPaymentMethodLabel(p.method))
+      .join(' + ') || (outstanding > 0 ? 'Credit' : '—')
+
+    return {
+      id: inv.id,
+      invoiceId: inv.id,
+      invoiceNumber: inv.invoiceNumber,
+      date: inv.createdAt,
+      time: inv.createdAt,
+      tableOrRoom: undefined,
+      orderType: invoiceRow?.table_id ? 'dine_in' : invoiceRow?.booking_id ? 'room_service' : 'unknown',
+      itemsCount: visitItems.length,
+      items: visitItems,
+      subtotal: Number(invoiceRow?.subtotal ?? inv.total),
+      discount: Number(invoiceRow?.discount ?? 0),
+      total: inv.total,
+      paidAmount,
+      outstandingAmount: outstanding,
+      paymentMethods,
+      status: invoiceRow?.status ?? inv.status,
+      cashier: undefined,
+      paymentSummary,
+    }
+  }, [invoicesPage, invoiceItemsRaw, invoicePaymentBreakdowns, invoicePaidAmounts])
+
   const invoiceColumns: Column<Invoice>[] = [
-    { key: "invoiceNumber", header: "Invoice #", render: (r) => <span className="font-medium text-primary">{r.invoiceNumber}</span> },
+    { key: "invoiceNumber", header: "Invoice #", render: (r) => (
+      <button
+        onClick={() => setBillPreviewVisit(buildFinanceVisit(r))}
+        className="font-medium text-primary hover:underline cursor-pointer text-left"
+      >
+        {r.invoiceNumber}
+      </button>
+    ) },
     { key: "customer", header: "Customer" },
     { key: "items", header: "Items", render: (r) => <span>{invoiceItemCounts[r.id] ?? 0} items</span> },
     { key: "discount", header: "Discount", render: (r) => r.discount > 0 ? <span className="text-destructive">-{formatCurrency(r.discount)}</span> : <span className="text-muted-foreground">-</span> },
@@ -385,7 +465,24 @@ export function Finance() {
       const d = new Date(r.createdAt)
       return <span className="text-sm text-muted-foreground whitespace-nowrap">{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
     } },
-    { key: "actions", header: "", render: () => <button className="rounded-lg p-1.5 hover:bg-muted"><MoreHorizontal className="h-4 w-4 text-muted-foreground" /></button> },
+    { key: "actions", header: "", render: (r) => (
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setBillPreviewVisit(buildFinanceVisit(r))}
+          className="rounded-lg p-1.5 hover:bg-primary/10 transition-colors"
+          title="View Bill"
+        >
+          <Eye className="h-4 w-4 text-primary" />
+        </button>
+        <button
+          onClick={() => setBillPreviewVisit(buildFinanceVisit(r))}
+          className="rounded-lg p-1.5 hover:bg-muted transition-colors"
+          title="Print Bill"
+        >
+          <Printer className="h-4 w-4 text-muted-foreground" />
+        </button>
+      </div>
+    ) },
   ]
 
   const expenseColumns: Column<Expense>[] = [
@@ -631,8 +728,16 @@ export function Finance() {
 
 
             <motion.div variants={pageTransitionFast}>
-              <SectionCard title="Recent Transactions" icon="Receipt" iconColor="text-info" index={3}>
-                <DataTable columns={invoiceColumns.slice(0, 10)} data={invoices.slice(0, 10)} searchable searchKey="customer" />
+              <SectionCard title="Daily Invoices" icon="Receipt" iconColor="text-info" index={3}>
+                <DataTable<Invoice>
+                  columns={invoiceColumns}
+                  data={filteredInvoices}
+                  searchable searchKey="customer"
+                  loading={invLoading}
+                  totalPages={invoicesPages}
+                  currentPage={invoicesPageNum}
+                  onPageChange={setInvoicesPage}
+                />
               </SectionCard>
             </motion.div>
           </motion.div>
@@ -920,6 +1025,14 @@ export function Finance() {
             </FormActions>
           </div>
         </BaseModal>
+
+        {/* ── Bill Preview Modal ── */}
+        {billPreviewVisit && (
+          <BillPreview
+            visit={billPreviewVisit}
+            onClose={() => setBillPreviewVisit(null)}
+          />
+        )}
 
         <ConfirmDialog
           open={!!deleteExpenseId}

@@ -23,6 +23,8 @@ export interface EscposLineItem {
   modifiers?: string[];
   addons?: string[];
   notes?: string;
+  servingType?: 'dine_in' | 'takeaway';
+  packagingFee?: number;
 }
 
 export interface EscposInvoiceData {
@@ -62,6 +64,7 @@ export interface EscposKotData {
     modifiers?: string[];
     addons?: string[];
     notes?: string;
+    servingType?: 'dine_in' | 'takeaway';
   }>;
   paperSize: EscposPaperSize;
   showCustomer: boolean;
@@ -333,9 +336,14 @@ export function buildInvoiceReceipt(data: EscposInvoiceData): Buffer {
 
   // Items
   for (const item of data.items) {
+    const isTakeaway = item.servingType === 'takeaway' && (item.packagingFee ?? 0) > 0
+    const displayName = isTakeaway ? `${item.name} (Takeaway)` : item.name
     const lineTotal = item.unitPrice * item.quantity;
-    p.itemRow(item.name, item.quantity, lineTotal, cols);
+    p.itemRow(displayName, item.quantity, lineTotal, cols);
 
+    if (isTakeaway) {
+      p.subLine(`  Packaging: ${(item.packagingFee ?? 0).toFixed(2)} × ${item.quantity}`);
+    }
     for (const mod of item.modifiers ?? []) {
       p.subLine(`• ${mod}`);
     }
@@ -452,10 +460,14 @@ export function buildKitchenKot(data: EscposKotData): Buffer {
   let totalQty = 0;
   for (const item of data.items) {
     totalQty += item.quantity;
+    const label = item.servingType === 'takeaway' ? `📦 ${item.name}` : item.name
     p.bold(true);
-    p.writeln(`${item.quantity}     ${item.name}`);
+    p.writeln(`${item.quantity}     ${label}`);
     p.bold(false);
 
+    if (item.servingType === 'takeaway') {
+      p.subLine(`  PACK THIS`);
+    }
     for (const mod of item.modifiers ?? []) {
       p.subLine(`  • ${mod}`);
     }

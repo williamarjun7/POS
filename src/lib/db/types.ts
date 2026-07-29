@@ -61,6 +61,8 @@ export interface MenuItemRow {
   display_order: number
   is_available: boolean
   is_active: boolean
+  has_packaging: boolean
+  packaging_fee: number
   created_at: string
   updated_at: string
 }
@@ -163,6 +165,8 @@ export interface OrderBatchItemRow {
   unit_price: number
   notes: string
   status: 'pending' | 'paid' | 'credit' | 'cancelled' | 'voided'
+  serving_type: string
+  packaging_fee: number
   voided_at: string | null
   voided_by: string | null
   created_at: string
@@ -182,6 +186,7 @@ export interface InvoiceRow {
   tax: number
   discount: number
   total: number
+  packaging_total: number
   status: 'paid' | 'pending' | 'overdue' | 'partial' | 'credit_invoice' | 'cancelled'
   payment_method: string | null
   due_date: string | null
@@ -200,6 +205,8 @@ export interface InvoiceItemRow {
   quantity: number
   unit_price: number
   total_price: number
+  serving_type: string
+  packaging_fee: number
   created_at: string
 }
 

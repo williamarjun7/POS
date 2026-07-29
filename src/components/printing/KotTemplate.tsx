@@ -31,6 +31,8 @@ export interface KotLineItem {
   addons?: string[];
   /** Special instructions */
   notes?: string;
+  /** @default 'dine_in' */
+  servingType?: 'dine_in' | 'takeaway';
 }
 
 export interface KotData {
@@ -96,6 +98,7 @@ export function renderKotHtml(
             <span class="ki-qty">${item.quantity}</span>
             <span class="ki-name">${escapeHtml(item.name)}</span>
           </div>
+          ${item.servingType === 'takeaway' ? `<div class="ki-sub ki-takeaway">📦 Takeaway</div>` : ''}
           ${(item.modifiers ?? []).map((m) => `<div class="ki-sub">&bull; ${escapeHtml(m)}</div>`).join('')}
           ${(item.addons ?? []).map((a) => `<div class="ki-sub">+ ${escapeHtml(a)}</div>`).join('')}
           ${item.notes ? `<div class="ki-sub ki-note">Note: ${escapeHtml(item.notes)}</div>` : ''}
@@ -146,6 +149,7 @@ export function renderKotHtml(
   .ki-name { flex:1; font-weight:600; font-size:${fontScale === '0.9' ? '11px' : '13px'}; }
   .ki-sub { padding-left:10mm; font-size:${fontScale === '0.9' ? '10px' : '11px'}; font-weight:500; color:#444; }
   .ki-note { font-style:italic; color:#c00; }
+  .ki-takeaway { color:#e67e22; font-weight:700; font-size:${fontScale === '0.9' ? '10px' : '11px'}; letter-spacing:0.5px; }
 
   /* ── Totals ── */
   .tot { margin-top:1.5mm; font-weight:700; font-size:${fontScale === '0.9' ? '11px' : '13px'}; }

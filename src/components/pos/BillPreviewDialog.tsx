@@ -24,10 +24,14 @@ import { getBillableBatches, isItemBillable } from "@/lib/services/order-calcula
 // ─── Types ───────────────────────────────────────────────────
 
 interface CartLine {
+  line_id: string
   menu_item_id: string
   name: string
   quantity: number
   unit_price: number
+  base_price: number
+  serving_type: "dine_in" | "takeaway"
+  packaging_fee: number
   notes: string
   status: "pending" | "voided"
 }
@@ -73,6 +77,8 @@ export function BillPreviewDialog({
       name: string
       quantity: number
       unitPrice: number
+      packagingFee: number
+      servingType: "dine_in" | "takeaway"
       notes?: string
       source: "cart" | "batch"
     }> = []
@@ -80,10 +86,12 @@ export function BillPreviewDialog({
     // Cart items (not yet submitted)
     for (const ci of activeCartItems) {
       items.push({
-        id: `cart-${ci.menu_item_id}`,
+        id: `cart-${ci.menu_item_id}-${ci.line_id}`,
         name: ci.name,
         quantity: ci.quantity,
         unitPrice: ci.unit_price,
+        packagingFee: ci.packaging_fee,
+        servingType: ci.serving_type,
         notes: ci.notes || undefined,
         source: "cart",
       })
@@ -99,6 +107,8 @@ export function BillPreviewDialog({
             name: bi.name,
             quantity: bi.quantity,
             unitPrice: bi.unit_price,
+            packagingFee: bi.packaging_fee ?? 0,
+            servingType: bi.serving_type ?? 'dine_in',
             notes: bi.notes || undefined,
             source: "batch",
           })
@@ -108,6 +118,12 @@ export function BillPreviewDialog({
 
     return items
   }, [activeCartItems, batches])
+
+  // ── Compute packaging total for display ──
+  const packagingTotal = useMemo(
+    () => displayItems.reduce((s, i) => s + (i.packagingFee ?? 0) * i.quantity, 0),
+    [displayItems],
+  )
 
   // ── Totals (reuse the same calculation as POS) ──
   const subtotal = useMemo(
@@ -244,6 +260,11 @@ export function BillPreviewDialog({
                       <div className="flex items-center gap-2 text-sm">
                         <span className="flex-1 font-medium text-foreground truncate">
                           {item.name}
+                          {item.servingType === "takeaway" && (
+                            <span className="ml-1.5 text-[10px] text-amber-600 dark:text-amber-400 font-semibold">
+                              📦 TAKEAWAY
+                            </span>
+                          )}
                           {item.source === "cart" && (
                             <span className="ml-1.5 text-[10px] text-emerald-500 font-semibold">
                               NEW
@@ -260,6 +281,13 @@ export function BillPreviewDialog({
                           {fmt(item.unitPrice * item.quantity)}
                         </span>
                       </div>
+                      {item.packagingFee > 0 && item.servingType === "takeaway" && (
+                        <div className="flex items-center gap-2 pl-2 text-[11px] text-muted-foreground/70">
+                          <span>Packaging:</span>
+                          <span className="tabular-nums">{fmt(item.packagingFee)} × {item.quantity}</span>
+                          <span className="tabular-nums font-medium">= {fmt(item.packagingFee * item.quantity)}</span>
+                        </div>
+                      )}
                       {item.notes && (
                         <p className="pl-2 text-[11px] text-muted-foreground italic mt-0.5">
                           Note: {item.notes}
@@ -273,9 +301,15 @@ export function BillPreviewDialog({
               {/* ── Totals ── */}
               <div className="border-t border-border pt-3 space-y-1">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Subtotal</span>
-                  <span className="font-medium tabular-nums">{fmt(subtotal)}</span>
+                  <span className="text-muted-foreground">Subtotal (items)</span>
+                  <span className="font-medium tabular-nums">{fmt(subtotal - packagingTotal)}</span>
                 </div>
+                {packagingTotal > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Packaging</span>
+                    <span className="font-medium tabular-nums text-amber-600 dark:text-amber-400">{fmt(packagingTotal)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-lg font-bold text-foreground border-t-2 border-border pt-2">
                   <span>Grand Total</span>
                   <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">

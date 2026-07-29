@@ -71,6 +71,8 @@ function rowToFrontendBatch(
       notes: i.notes,
       status: i.status as CartItemStatus,
       batch_id: i.batch_id,
+      serving_type: (i.serving_type ?? 'dine_in') as 'dine_in' | 'takeaway',
+      packaging_fee: Number(i.packaging_fee ?? 0),
     })),
     status: row.status as FrontendOrderBatch['status'],
     created_at: row.created_at,

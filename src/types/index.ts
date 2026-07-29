@@ -176,6 +176,8 @@ export interface MenuItem {
   image?: string
   prepTime?: number
   tags: string[]
+  has_packaging?: boolean
+  packaging_fee?: number
 }
 
 export interface MenuCategory {
@@ -452,6 +454,8 @@ export interface OrderItem {
   status: 'pending' | 'paid' | 'cancelled' | 'voided';
 }
 
+export type ServingType = 'dine_in' | 'takeaway'
+
 // ─── Order Batch System ─────────────────────────────────────
 export type CartItemStatus = 'pending' | 'paid' | 'credit' | 'cancelled' | 'voided'
 
@@ -464,6 +468,10 @@ export interface OrderBatchItem {
   notes: string;
   status: CartItemStatus;
   batch_id: string;
+  /** @default 'dine_in' */
+  serving_type?: ServingType;
+  /** Per-unit packaging fee. 0 for dine-in. @default 0 */
+  packaging_fee?: number;
 }
 
 export interface OrderBatch {

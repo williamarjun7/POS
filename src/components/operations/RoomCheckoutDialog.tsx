@@ -172,7 +172,7 @@ export function RoomCheckoutDialog({
 
   // ── Build invoice items for PosPaymentDialog ────────
   const invoiceItemsList = useMemo(() => {
-    const items: Array<{ name: string; quantity: number; unitPrice: number }> = []
+    const items: Array<{ name: string; quantity: number; unitPrice: number; servingType?: string; packagingFee?: number }> = []
     if (roomChargeTotal > 0) {
       items.push({
         name: `Room ${roomNum} — ${nights} night${nights !== 1 ? "s" : ""}`,
@@ -186,6 +186,8 @@ export function RoomCheckoutDialog({
           name: item.name,
           quantity: item.quantity,
           unitPrice: item.unit_price,
+          servingType: item.serving_type ?? 'dine_in',
+          packagingFee: item.packaging_fee ?? 0,
         })
       }
     }

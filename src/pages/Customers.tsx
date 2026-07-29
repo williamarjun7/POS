@@ -1,12 +1,13 @@
-import { useState, useMemo, useCallback, useEffect } from "react"
-import { motion } from "framer-motion"
+import { useState, useMemo, useCallback, useEffect, useRef } from "react"
+import { motion, AnimatePresence } from "framer-motion"
 import { useQueryClient } from '@tanstack/react-query'
 import { PageTransition } from "@/components/ui/PageTransition"
 import { PageHeader } from "@/components/PageHeader"
+import { SplitPane } from "@/components/ui/SplitPane"
 import { DataTable, type Column } from "@/components/DataTable"
 import { BaseModal } from "@/components/ui/modal"
-import { FormInput, FormSelect, FormActions } from "@/components/ui/form-field"
-import { StatCard } from "@/components/ui/stat-card"
+import { FormInput, FormActions } from "@/components/ui/form-field"
+import { StatCard } from "@/components/ui/card"
 import { StatusBadge } from "@/components/StatusBadge"
 import { EmptyState } from "@/components/EmptyState"
 
@@ -25,11 +26,45 @@ import { computeAllCustomerStats } from "@/lib/services/customer-aggregation"
 import DateFilterBar, { type DateFilterState, getDateRange } from "@/components/filters/DateFilterBar"
 import { PosPaymentDialog, type PaymentResult } from "@/components/payments"
 import {
-  Plus, Edit, Trash2, Phone, Mail, Search, Filter, X,
-  CreditCard, TrendingUp, CheckCircle2, Users
+  Plus, Edit, Trash2, Phone, Mail, Search, Filter, X, ArrowUpDown,
+  CreditCard, TrendingUp, CheckCircle2, Users, AlertCircle, Eye, ShoppingBag, ChevronRight
 } from "lucide-react"
-import { pageTransitionFast, staggerContainer } from "@/lib/animations/presets"
 import { CustomerProfile } from "@/components/customers/CustomerProfile"
+import { CustomerSearchCombobox } from "@/components/customers/CustomerSearchCombobox"
+import { RecentCustomersSection } from "@/components/customers/RecentCustomersSection"
+import { FavoritesSection } from "@/components/customers/FavoritesSection"
+import { useRecentCustomers } from "@/components/customers/hooks/useRecentCustomers"
+import { useFavorites } from "@/components/customers/hooks/useFavorites"
+import { useKeyboardShortcuts } from "@/components/customers/hooks/useKeyboardShortcuts"
+
+/* ─── Reusable sub-components ───────────────────────────────── */
+
+function StatusChip({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer select-none",
+        active
+          ? "border-primary bg-primary/10 text-primary shadow-sm"
+          : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  )
+}
 
 /* ─── Payment types ────────────────────────────── */
 
@@ -42,9 +77,6 @@ interface PosPaymentItem {
 }
 
 
-
-const stagger = staggerContainer
-const fadeUp = pageTransitionFast
 
 function getInitials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
@@ -263,6 +295,12 @@ export function Customers() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<Customer | null>(null)
   const [viewingCustomer, setViewingCustomer] = useState<Customer | null>(null)
+  const [highlightedRowIndex, setHighlightedRowIndex] = useState(-1)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Recent + Favorite customers
+  const { recentIds, addRecent, clearRecent } = useRecentCustomers()
+  const { favoriteIds } = useFavorites(customers, customerInvoiceStats, { limit: 5 })
 
   // ═══ Global PosPaymentDialog state ═══
   const [showPosPayment, setShowPosPayment] = useState(false)
@@ -287,18 +325,23 @@ export function Customers() {
   // a customer is "active" when they have at least one invoice in the range.
   // This is the SAME data source as the Active filter — they will always agree.
   // The count is computed inside fetchCustomerStats alongside the other KPIs.
-  const activeCustomers = activeCustomerCount
-
   // Filtered list for display
   // Derive customer's display status based on computed stats
+  // Icon lookup for status badges
+  const statusIcons = useMemo(() => ({
+    AlertCircle: <AlertCircle className="h-3 w-3" aria-hidden="true" />,
+    CheckCircle2: <CheckCircle2 className="h-3 w-3" aria-hidden="true" />,
+    Users: <Users className="h-3 w-3" aria-hidden="true" />,
+  }), [])
+
   function getCustomerStatus(c: {
     totalOrders: number
     outstandingCredit: number
     lastVisit: string
-  }): { label: string; variant: 'success' | 'warning' | 'default' | 'secondary' } {
-    if (c.outstandingCredit > 0) return { label: 'Outstanding', variant: 'warning' }
-    if (c.totalOrders > 0) return { label: 'Paid', variant: 'success' }
-    return { label: 'No Orders', variant: 'default' }
+  }): { label: string; variant: 'success' | 'warning' | 'default' | 'secondary'; icon: string } {
+    if (c.outstandingCredit > 0) return { label: 'Outstanding', variant: 'warning', icon: 'AlertCircle' }
+    if (c.totalOrders > 0) return { label: 'Paid', variant: 'success', icon: 'CheckCircle2' }
+    return { label: 'No Orders', variant: 'default', icon: 'Users' }
   }
 
   interface CustomerRow {
@@ -311,7 +354,7 @@ export function Customers() {
     totalOrders: number
     outstandingCredit: number
     notes?: string
-    _status: { label: string; variant: 'success' | 'warning' | 'default' | 'secondary' }
+    _status: { label: string; variant: 'success' | 'warning' | 'default' | 'secondary'; icon: string }
   }
 
   const filteredCustomers = useMemo((): CustomerRow[] => {
@@ -354,6 +397,28 @@ export function Customers() {
     }
     return result
   }, [paginatedCustomers, search, spendMin, spendMax, sortOutstanding, statusFilter])
+
+  // ═══ Keyboard shortcuts for cashier productivity ═══
+  useKeyboardShortcuts({
+    itemCount: filteredCustomers.length,
+    highlightedIndex: highlightedRowIndex,
+    onHighlight: setHighlightedRowIndex,
+    onOpen: (index) => {
+      const customer = filteredCustomers[index]
+      if (customer) {
+        setViewingCustomer(customer)
+        addRecent(customer.id)
+      }
+    },
+    onClose: () => setViewingCustomer(null),
+    onFocusSearch: () => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    },
+    isModalOpen: showForm || showPosPayment || showCustomerSelect || !!deleteConfirm,
+    isProfileOpen: !!viewingCustomer,
+    isSearchFocused: document.activeElement === searchInputRef.current,
+  })
 
   // Reset pagination when any filter changes — users should never remain
   // on a later page after changing the filtering criteria.
@@ -686,7 +751,7 @@ export function Customers() {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <p className="font-medium text-foreground truncate">{row.name}</p>
-              <StatusBadge label={row._status.label} variant={row._status.variant} />
+              <StatusBadge label={row._status.label} variant={row._status.variant} icon={statusIcons[row._status.icon as keyof typeof statusIcons]} />
             </div>
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Phone className="h-3 w-3" /> {row.phone}
@@ -746,274 +811,284 @@ export function Customers() {
       },
     },
     {
-      key: "id",
+      key: "actions",
       header: "",
       className: "w-20",
       render: (row: CustomerRow) => (
-        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-end gap-1">
+          {/* Always-visible Edit/Delete */}
           <button
-            onClick={() => { setEditingCustomer(row); setShowForm(true) }}
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title="Edit"
+            onClick={(e) => { e.stopPropagation(); setEditingCustomer(row); setShowForm(true) }}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 transition-all duration-150 hover:bg-muted hover:text-foreground"
+            title={`Edit ${row.name}`}
+            aria-label={`Edit ${row.name}`}
           >
-            <Edit className="h-4 w-4" />
+            <Edit className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={() => setDeleteConfirm(row)}
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-            title="Delete"
+            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(row) }}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 transition-all duration-150 hover:bg-destructive/10 hover:text-destructive"
+            title={`Delete ${row.name}`}
+            aria-label={`Delete ${row.name}`}
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
+          {/* Chevron — always visible to indicate clickability */}
+          <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
         </div>
       ),
     },
   ]
 
-  return (
-    <PageTransition>
-      <PageHeader
-        title="Customer Management"
-        icon="Users"
-        description="Manage your customers, invoices, and credit accounts"
-        actions={
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowCustomerSelect(true)}
-            >
-              <CreditCard className="h-4 w-4" /> Receive Payment
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => { setEditingCustomer(null); setShowForm(true) }}
-            >
-              <Plus className="h-4 w-4" /> Add Customer
-            </Button>
-          </div>
-        }
-      />
+  // ── Open customer profile (or close if already selected) ──
+  const handleSelectCustomer = useCallback((customer: CustomerRow) => {
+    // Toggle: clicking the same customer closes the profile
+    if (viewingCustomer?.id === customer.id) {
+      setViewingCustomer(null)
+      return
+    }
+    setViewingCustomer(customer)
+    addRecent(customer.id)
+    try {
+      localStorage.setItem('customers-last-selected', customer.id)
+    } catch { /* ignore */ }
+    // Scroll to profile on mobile
+    if (window.innerWidth < 1024) {
+      setTimeout(() => {
+        const profileEl = document.getElementById('customer-profile-panel')
+        profileEl?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 100)
+    }
+  }, [viewingCustomer, addRecent])
 
-      {/* Date Filter Bar */}
-      <motion.div variants={fadeUp}>
+  /* ─── Shared customer list content for both layouts ─── */
+  const renderCustomerList = useCallback(() => (
+    <div className="flex h-full flex-col gap-4 overflow-y-auto no-scrollbar">
+      {/* Stats + Date Filter */}
+      <div className="space-y-3">
         <DateFilterBar filter={dateFilter} dateRange={dateRange} onChange={setDateFilter} />
-      </motion.div>
-
-      <motion.div
-        variants={stagger}
-        initial="hidden"
-        animate="visible"
-        className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
-      >
-        <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label="Total Customers" value={formatNumber(totalCustomers)} icon="Users" color="text-primary" index={0} />
-        </motion.div>
-        <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label={`Active (${dateRange.label})`} value={formatNumber(activeCustomers)} icon="TrendingUp" color="text-success" index={1} />
-        </motion.div>
-        <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label={`Credit (${dateRange.label})`} value={formatNumber(creditCustomerCount)} icon="CreditCard" color="text-warning" index={2} />
-        </motion.div>
-        <motion.div variants={fadeUp} whileHover={{ y: -3, scale: 1.02 }} className="backdrop-blur-sm">
-          <StatCard label={`Outstanding (${dateRange.label})`} value={formatCurrency(realOutstandingBalance)} icon="AlertCircle" color="text-destructive" index={3} />
-        </motion.div>
-      </motion.div>
-
-      {/* ── Status Filter Chips ── */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        {([
-          { key: 'all' as const, label: 'All Customers', icon: 'Users' },
-          { key: 'credit' as const, label: 'Credit', icon: 'CreditCard' },
-          { key: 'paid' as const, label: 'Paid', icon: 'CheckCircle2' },
-          { key: 'active' as const, label: 'Active', icon: 'TrendingUp' },
-          { key: 'inactive' as const, label: 'Inactive', icon: 'X' },
-        ] as const).map(({ key, label, icon: _icon }) => (
-          <button
-            key={key}
-            onClick={() => setStatusFilter(key)}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all',
-              statusFilter === key
-                ? 'border-primary bg-primary/10 text-primary shadow-sm'
-                : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
-            )}
-          >
-            {key === 'credit' && <CreditCard className="h-3.5 w-3.5" />}
-            {key === 'paid' && <CheckCircle2 className="h-3.5 w-3.5" />}
-            {key === 'active' && <TrendingUp className="h-3.5 w-3.5" />}
-            {key === 'inactive' && <X className="h-3.5 w-3.5" />}
-            {key === 'all' && <Users className="h-3.5 w-3.5" />}
-            {label}
-          </button>
-        ))}
+        <div className="grid grid-cols-3 gap-2">
+          <StatCard
+            label="Total"
+            value={formatNumber(totalCustomers)}
+            icon="Users"
+            color="text-primary"
+            iconBg="bg-primary/10"
+            index={0}
+          />
+          <StatCard
+            label="Credit"
+            value={formatNumber(creditCustomerCount)}
+            icon="CreditCard"
+            color="text-amber-600"
+            iconBg="bg-amber-50"
+            sublabel={dateRange.label}
+            index={1}
+          />
+          <StatCard
+            label="Outstanding"
+            value={formatCurrency(realOutstandingBalance)}
+            icon="AlertCircle"
+            color="text-destructive"
+            iconBg="bg-destructive/10"
+            sublabel={dateRange.label}
+            index={2}
+          />
+        </div>
       </div>
 
-      <div className="mb-4 rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
+      {/* Top Customers */}
+      {favoriteIds.length > 0 && (
+        <FavoritesSection
+          favoriteIds={favoriteIds}
+          customers={customers}
+          statsMap={customerInvoiceStats}
+          onOpen={(customerId) => {
+            const cust = customers.find(c => c.id === customerId)
+            if (cust) { setViewingCustomer(cust); addRecent(customerId) }
+          }}
+        />
+      )}
+
+      {/* Recent Customers */}
+      <RecentCustomersSection
+        recentIds={recentIds}
+        customers={customers}
+        statsMap={customerInvoiceStats}
+        onOpen={(customerId) => {
+          const cust = customers.find(c => c.id === customerId)
+          if (cust) { setViewingCustomer(cust); addRecent(customerId) }
+        }}
+        onClear={clearRecent}
+      />
+
+      {/* Search, Filters, Status Chips */}
+      <div className="rounded-xl border border-border bg-card/70 shadow-sm">
+        <div className="p-3 pb-2">
+          <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
+              ref={searchInputRef}
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name, phone, or email..."
-              className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-4 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary"
+              placeholder="Search name, phone, email... (Ctrl+F)"
+              className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-4 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary"
             />
           </div>
-          <div className="flex items-center gap-2">
-            {/* Sort by Outstanding */}
-            <div className="flex rounded-lg border p-0.5 bg-muted/50">
-              <button
-                onClick={() => setSortOutstanding(sortOutstanding === 'desc' ? 'none' : 'desc')}
-                className={cn(
-                  "inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-all whitespace-nowrap",
-                  sortOutstanding === 'desc'
-                    ? 'bg-amber-500 text-white shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                title="Highest outstanding first"
-              >
-                Highest
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-1 flex-wrap">
+              <StatusChip active={statusFilter === 'all'} icon={<Users className="h-3 w-3" />} label="All" onClick={() => setStatusFilter('all')} />
+              <StatusChip active={statusFilter === 'credit'} icon={<CreditCard className="h-3 w-3" />} label="Credit" onClick={() => setStatusFilter('credit')} />
+              <StatusChip active={statusFilter === 'paid'} icon={<CheckCircle2 className="h-3 w-3" />} label="Paid" onClick={() => setStatusFilter('paid')} />
+              <StatusChip active={statusFilter === 'active'} icon={<TrendingUp className="h-3 w-3" />} label="Active" onClick={() => setStatusFilter('active')} />
+              <StatusChip active={statusFilter === 'inactive'} icon={<X className="h-3 w-3" />} label="Inactive" onClick={() => setStatusFilter('inactive')} />
+            </div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setSortOutstanding(sortOutstanding === 'desc' ? 'none' : 'desc')}
+                className={cn("rounded-md px-2 py-1 text-[10px] font-semibold transition-all", sortOutstanding === 'desc' ? 'bg-amber-500 text-white' : 'text-muted-foreground hover:text-foreground')}
+                aria-pressed={sortOutstanding === 'desc'} role="radio" aria-label="Highest outstanding first">
+                <ArrowUpDown className="h-3 w-3 mr-0.5 inline" />Highest
               </button>
-              <button
-                onClick={() => setSortOutstanding(sortOutstanding === 'asc' ? 'none' : 'asc')}
-                className={cn(
-                  "inline-flex items-center justify-center rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-all whitespace-nowrap",
-                  sortOutstanding === 'asc'
-                    ? 'bg-amber-500 text-white shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                title="Lowest outstanding first"
-              >
-                Lowest
+              <button onClick={() => setShowFilters(!showFilters)}
+                className={cn("rounded-md px-2 py-1 text-[10px] font-semibold transition-all", showFilters ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground')}>
+                <Filter className="h-3 w-3 mr-0.5 inline" />Filters
               </button>
             </div>
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className={cn(
-                "flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium transition-colors",
-                showFilters
-                  ? "border-primary bg-primary/5 text-primary"
-                  : "border-border text-muted-foreground hover:bg-muted"
-              )}
-            >
-              <Filter className="h-4 w-4" /> Filters
-              {hasFilters && (
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
-                  {[search, spendMin, spendMax].filter(Boolean).length}
-                </span>
-              )}
-            </button>
-            {hasFilters && (
-              <button
-                onClick={clearFilters}
-                className="flex h-10 items-center gap-1.5 rounded-xl border border-border px-3 text-sm text-muted-foreground hover:bg-muted transition-colors"
-              >
-                <X className="h-3 w-3" /> Clear
-              </button>
-            )}
           </div>
         </div>
 
-        {showFilters && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="mt-4 grid grid-cols-1 gap-4 border-t border-border pt-4 sm:grid-cols-2"
-          >
-            <FormInput
-              label="Min Spend"
-              type="number"
-              value={spendMin}
-              onChange={(e) => setSpendMin(e.target.value)}
-              placeholder="e.g. 10000"
-            />
-            <FormInput
-              label="Max Spend"
-              type="number"
-              value={spendMax}
-              onChange={(e) => setSpendMax(e.target.value)}
-              placeholder="e.g. 100000"
-            />
-          </motion.div>
-        )}
+        <AnimatePresence>
+          {showFilters && (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
+              <div className="border-t border-border px-3 py-3">
+                <div className="flex gap-2">
+                  <input type="number" value={spendMin} onChange={(e) => setSpendMin(e.target.value)}
+                    placeholder="Min" className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-xs outline-none focus:border-primary" />
+                  <input type="number" value={spendMax} onChange={(e) => setSpendMax(e.target.value)}
+                    placeholder="Max" className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-xs outline-none focus:border-primary" />
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Two-column layout: table on left, profile on right */}
-      <div className={cn(
-        "flex gap-4",
-        viewingCustomer ? "flex-col lg:flex-row" : "flex-col"
-      )}>
-        {/* Customer table - takes full width when no profile, splits when profile is open */}
-        <div className={cn(
-          "min-w-0",
-          viewingCustomer ? "w-full lg:w-1/2 xl:w-3/5" : "w-full"
-        )}>
-          <motion.div
-            variants={fadeUp}
-            initial="hidden"
-            animate="visible"
-            className="rounded-xl border border-border bg-card/70 backdrop-blur-sm p-5 shadow-sm overflow-x-auto"
-          >
-            {filteredCustomers.length === 0 && !customerLoading ? (
+      {/* Customer table */}
+      <div className="flex-1 min-h-0">
+        {filteredCustomers.length === 0 && !customerLoading ? (
+          <div className="rounded-xl border border-border bg-card/50 p-8">
             <EmptyState
               icon={statusFilter === 'credit' ? 'CreditCard' : statusFilter === 'paid' ? 'CheckCircle2' : statusFilter === 'active' ? 'TrendingUp' : statusFilter === 'inactive' ? 'X' : 'Users'}
               title={emptyTitle(statusFilter)}
               description={emptyDescription(statusFilter)}
             />
-          ) : (
-            <DataTable
-              columns={columns}
-              data={filteredCustomers}
-              searchable={false}
-              loading={customerLoading}
-              totalPages={customerPages}
-              currentPage={customerPageNum}
-              onPageChange={setCustomerPage}
-              onRowClick={(row) => setViewingCustomer(row)}
-            />
-          )}
-          </motion.div>
-        </div>
-
-        {/* Profile Panel - Fullscreen overlay on mobile, sidebar on desktop */}
-        <div className={cn(
-          viewingCustomer
-            ? "fixed inset-0 z-50 flex flex-col lg:relative lg:inset-auto lg:z-auto lg:w-1/2 xl:w-2/5 lg:block"
-            : "hidden"
-        )}>
-          {/* Backdrop for mobile */}
-          {viewingCustomer && (
-            <div
-              className="fixed inset-0 bg-black/30 lg:hidden"
-              onClick={() => setViewingCustomer(null)}
-            />
-          )}
-          <div className="relative flex-1 overflow-y-auto lg:max-h-[calc(100dvh-16rem)] lg:rounded-xl lg:border lg:border-border lg:shadow-sm">
-            <CustomerProfile
-              customer={viewingCustomer}
-              open={!!viewingCustomer}
-              onClose={() => setViewingCustomer(null)}
-              onEdit={() => {
-                setEditingCustomer(viewingCustomer)
-                setShowForm(true)
-              }}
-              onNewSale={() => {
-                window.location.href = `/pos?customer=${viewingCustomer?.id}`
-              }}
-              onRecordPayment={(customerId) => {
-                // CustomerProfile already has access to the customer name
-                const cust = customers.find(c => c.id === customerId)
-                if (cust) handleOpenPosPayment(customerId, cust.name)
-              }}
-              isMobile={false}
-              refreshKey={profileRefreshCounter}
-            />
           </div>
+        ) : (
+          <DataTable
+            columns={columns}
+            data={filteredCustomers}
+            searchable={false}
+            loading={customerLoading}
+            totalPages={customerPages}
+            currentPage={customerPageNum}
+            onPageChange={setCustomerPage}
+            onRowClick={handleSelectCustomer}
+            highlightedIndex={highlightedRowIndex}
+            selectedId={viewingCustomer?.id}
+            dense
+          />
+        )}
+      </div>
+    </div>
+  ), [
+    dateFilter, dateRange, totalCustomers, creditCustomerCount, realOutstandingBalance,
+    favoriteIds, customers, customerInvoiceStats, recentIds, addRecent,
+    search, searchInputRef, statusFilter, sortOutstanding, showFilters, spendMin, spendMax,
+    filteredCustomers, customerLoading, customerPages, customerPageNum, setCustomerPage,
+    handleSelectCustomer, highlightedRowIndex, viewingCustomer, columns, emptyTitle,
+    emptyDescription, setViewingCustomer, clearRecent, setShowFilters, setSortOutstanding,
+    setStatusFilter, setSearch, setSpendMin, setSpendMax,
+  ])
+
+  return (
+    <PageTransition>
+      {/* Compact header bar with action buttons */}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-lg font-bold text-foreground">Customers</h1>
+          <p className="text-sm text-muted-foreground">Manage your customers, invoices and credit accounts</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setShowCustomerSelect(true)}>
+            <CreditCard className="h-4 w-4" /> Receive Payment
+          </Button>
+          <Button size="sm" onClick={() => { setEditingCustomer(null); setShowForm(true) }}>
+            <Plus className="h-4 w-4" /> Add Customer
+          </Button>
         </div>
       </div>
+
+      {/* ─── Conditional layout with smooth transition ─── */}
+      <AnimatePresence>
+        {viewingCustomer ? (
+          <motion.div
+            key="split-pane"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <SplitPane
+              storageKey="customers-split-ratio"
+              defaultLeftPercent={38}
+              minLeftWidth={360}
+              minRightWidth={480}
+              className="h-[calc(100dvh-12rem)]"
+              left={renderCustomerList()}
+              right={
+                <div id="customer-profile-panel" className="h-full overflow-y-auto no-scrollbar rounded-xl border border-border bg-card/70 shadow-sm">
+                  <motion.div
+                    initial={{ opacity: 0, x: 24 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                  >
+                    <CustomerProfile
+                      customer={viewingCustomer}
+                      open={!!viewingCustomer}
+                      onClose={() => setViewingCustomer(null)}
+                      onEdit={() => {
+                        setEditingCustomer(viewingCustomer)
+                        setShowForm(true)
+                      }}
+                      onNewSale={() => {
+                        window.location.href = `/pos?customer=${viewingCustomer?.id}`
+                      }}
+                      onRecordPayment={(customerId) => {
+                        const cust = customers.find(c => c.id === customerId)
+                        if (cust) handleOpenPosPayment(customerId, cust.name)
+                      }}
+                      isMobile={false}
+                      refreshKey={profileRefreshCounter}
+                    />
+                  </motion.div>
+                </div>
+              }
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="full-table"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="h-[calc(100dvh-12rem)] overflow-y-auto no-scrollbar pr-0 lg:pr-2"
+          >
+            {renderCustomerList()}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <CustomerFormModal
         open={showForm}
@@ -1022,31 +1097,21 @@ export function Customers() {
         onClose={() => { setShowForm(false); setEditingCustomer(null) }}
       />
 
-      {/* ── Customer selector dialog (toolbar "Receive Payment") ── */}
-      <BaseModal
+      {/* ── Searchable Customer selector (toolbar "Receive Payment") ── */}
+      <CustomerSearchCombobox
         open={showCustomerSelect}
         onClose={() => setShowCustomerSelect(false)}
-        title="Select Customer"
-        size="sm"
-      >
-        <div className="space-y-3">
-          <FormSelect
-            label="Customer"
-            value=""
-            onChange={(e) => {
-              const cust = customers.find(c => c.id === e.target.value)
-              if (cust) {
-                setShowCustomerSelect(false)
-                handleOpenPosPayment(cust.id, cust.name)
-              }
-            }}
-            options={[
-              { value: "", label: "Choose a customer..." },
-              ...customers.map((c) => ({ value: c.id, label: c.name })),
-            ]}
-          />
-        </div>
-      </BaseModal>
+        customers={customers}
+        customerOutstanding={new Map(
+          Array.from(customerInvoiceStats.entries()).map(([id, stats]) => [id, stats.outstandingCredit])
+        )}
+        customerStats={new Map(
+          Array.from(customerInvoiceStats.entries()).map(([id, stats]) => [id, { totalOrders: stats.totalOrders }])
+        )}
+        onSelect={(customerId, customerName) => {
+          handleOpenPosPayment(customerId, customerName)
+        }}
+      />
 
       {/* ── Global PosPaymentDialog ── */}
       {showPosPayment && posPaymentCustomer && (

@@ -38,6 +38,10 @@ export interface InvoiceLineItem {
   modifiers?: string[];
   addons?: string[];
   notes?: string;
+  /** @default 'dine_in' */
+  servingType?: 'dine_in' | 'takeaway';
+  /** Per-unit packaging fee for takeaway items */
+  packagingFee?: number;
 }
 
 export interface InvoiceData {
@@ -90,17 +94,23 @@ function escapeHtml(str: string): string {
 function itemsToHtml(items: InvoiceLineItem[]): string {
   return items
     .map(
-      (item) => `
+      (item) => {
+        const isTakeaway = item.servingType === 'takeaway' && (item.packagingFee ?? 0) > 0
+        const packagingTotal = isTakeaway ? (item.packagingFee ?? 0) * item.quantity : 0
+        const itemTotal = item.unitPrice * item.quantity
+        return `
         <div class="item">
           <div class="item-row">
-            <span class="item-name">${escapeHtml(item.name)}</span>
+            <span class="item-name">${escapeHtml(item.name)}${isTakeaway ? ` <span class="takeaway-badge">📦 TAKEAWAY</span>` : ''}</span>
             <span class="item-qty">${item.quantity}</span>
-            <span class="item-amount">${fmt(item.unitPrice * item.quantity)}</span>
+            <span class="item-amount">${fmt(itemTotal)}</span>
           </div>
+          ${isTakeaway ? `<div class="sub-line packaging-line">Packaging ${fmt(item.packagingFee ?? 0)} × ${item.quantity} <span class="packaging-amount">${fmt(packagingTotal)}</span></div>` : ''}
           ${(item.modifiers ?? []).map((m) => `<div class="sub-line">&bull; ${escapeHtml(m)}</div>`).join('')}
           ${(item.addons ?? []).map((a) => `<div class="sub-line">+ ${escapeHtml(a)}</div>`).join('')}
           ${item.notes ? `<div class="sub-line note">Note: ${escapeHtml(item.notes)}</div>` : ''}
         </div>`
+      }
     )
     .join('');
 }
@@ -206,6 +216,9 @@ export function renderInvoiceHtml(
   .item-amount { width:18mm; text-align:right; font-weight:500; font-size:12px; }
   .sub-line { padding-left:4mm; font-size:10px; font-weight:500; }
   .note { font-style:italic; }
+  .takeaway-badge { font-size:9px; font-weight:700; color:#e67e22; letter-spacing:0.3px; }
+  .packaging-line { font-size:10px; color:#888; }
+  .packaging-amount { float:right; font-weight:600; }
   .totals { margin-top:2mm; }
   .totals .row { font-size:12px; font-weight:500; margin-bottom:0.5mm; }
   .total-line { border-top:1.5px solid #000; margin-top:1.5mm; padding-top:1.5mm; display:flex; justify-content:space-between; font-weight:800; font-size:18px; }
@@ -219,7 +232,7 @@ export function renderInvoiceHtml(
     <div class="badge-test">*** TEST RECEIPT ***</div>
   </div>` : ''}
   <div class="center" style="margin-top:-6px">
-    ${options.showLogo ? `<img src="${imgLogo}" alt="Logo" style="height:22mm;max-width:100%;margin:0 auto;image-rendering:crisp-edges" />` : ''}
+    ${options.showLogo ? `<img src="${imgLogo}" alt="Logo" style="height:28mm;max-width:100%;margin:0 auto;image-rendering:crisp-edges" />` : ''}
     <div style="font-size:18px;font-weight:700;letter-spacing:0.5px;${options.showLogo ? 'margin-top:5px' : ''}">Highlands Cafe &amp; Motel Inn</div>
     <div style="font-size:12px;font-weight:500;margin-top:1mm">Premium Stays &bull; Great Coffee</div>
     <div style="font-size:11px;font-weight:500;margin-top:1.5mm;line-height:1.5">Birendranagar-8, Khajura<br />Surkhet, Nepal<br />Phone: ${phone}<br />PAN: ${pan}</div>

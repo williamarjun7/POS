@@ -124,6 +124,10 @@ export interface PendingPaymentPayload {
     name: string
     quantity: number
     unitPrice: number
+    /** Serving type: 'dine_in' or 'takeaway' (default 'dine_in') */
+    servingType?: string
+    /** Per-unit packaging fee (0 for dine-in) */
+    packagingFee?: number
   }>
 }
 
