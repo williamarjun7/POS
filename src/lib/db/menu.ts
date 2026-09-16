@@ -23,6 +23,16 @@ import type { MenuCategory, MenuItem } from '@/types'
 
 const MENU_IMAGE_BUCKET = 'menu-images'
 
+// ─── Menu item list fetching ────────────────────────────────
+//
+// Rows requested per network round-trip. A typical menu fits in a single
+// request; a very large menu is walked in bounded batches instead of one
+// oversized query.
+const MENU_ITEMS_BATCH_SIZE = 500
+
+// Runaway-loop guard for getAllMenuItems (200 × 500 = 100k rows).
+const MAX_MENU_ITEM_BATCHES = 200
+
 // ─── Icon mapping (slug → lucide icon name) ────────────────
 //
 // Each slug maps to a semantically appropriate icon. Add new lucide
@@ -154,7 +164,7 @@ export async function getMenuItems(
 
   // Pagination
   const page = params?.page ?? 1
-  const pageSize = params?.pageSize ?? 999
+  const pageSize = params?.pageSize ?? MENU_ITEMS_BATCH_SIZE
   const from = (page - 1) * pageSize
   const to = from + pageSize - 1
   query = query.range(from, to)
@@ -173,6 +183,45 @@ export async function getMenuItems(
     page,
     pageSize,
     totalPages: count ? Math.ceil(count / pageSize) : 1,
+  }
+}
+
+/**
+ * Fetch every menu item matching `params`, paging through internally.
+ *
+ * The menu screens render, search, filter and count items client-side, so
+ * they need the complete list. Trusting a single `.range()` page silently
+ * truncates both the menu and every count derived from it as soon as the
+ * table grows past that page size, so this walks the pages until the exact
+ * backend stops returning full pages.
+ *
+ * Pagination itself is untouched: `getMenuItems` still serves a single page
+ * for callers that explicitly ask for one.
+ */
+export async function getAllMenuItems(
+  params?: Omit<MenuItemQueryParams, 'page' | 'pageSize'>,
+): Promise<PaginatedResponse<MenuItem>> {
+  const items: MenuItem[] = []
+  let total = 0
+
+  for (let page = 1; page <= MAX_MENU_ITEM_BATCHES; page++) {
+    const batch = await getMenuItems({ ...params, page, pageSize: MENU_ITEMS_BATCH_SIZE })
+
+    items.push(...batch.data)
+    total = Math.max(total, batch.total)
+
+    // A partial page means there is nothing left behind it. This stops the
+    // walk by what the server actually returned, so a backend that omits the
+    // exact count cannot make the loop stop early and truncate the menu.
+    if (batch.data.length < MENU_ITEMS_BATCH_SIZE) break
+  }
+
+  return {
+    data: items,
+    total: Math.max(total, items.length),
+    page: 1,
+    pageSize: items.length,
+    totalPages: 1,
   }
 }
 

@@ -473,8 +473,13 @@ export function Menu() {
 
   // ── Data ──
   const { data: cats = [] } = useMenuCategories()
-  const { data: itemsData } = useMenuItems({ pageSize: 99 })
+  // No pageSize override: this screen filters, searches and counts client-side,
+  // so it needs every item, and the sidebar total comes from the DB count.
+  const { data: itemsData } = useMenuItems()
   const items = useMemo(() => itemsData?.data ?? [], [itemsData])
+  // Exact row count reported by the database query, independent of how many
+  // rows the client currently holds.
+  const totalItems = itemsData?.total ?? items.length
 
   // ── Mutations ──
   const createItem = useCreateMenuItem()
@@ -488,6 +493,17 @@ export function Menu() {
   const catNameToId = useMemo(() => {
     const m = new Map<string, string>(); cats.forEach(c => m.set(c.name, c.id)); return m
   }, [cats])
+
+  // Items per category, normalised the same way the category filter is, so the
+  // sidebar counts always match the filtered list.
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of items) {
+      const id = catNameToId.get(item.category) ?? item.category
+      counts.set(id, (counts.get(id) ?? 0) + 1)
+    }
+    return counts
+  }, [items, catNameToId])
 
   // ── Handlers ──
   const toggleAvailability = async (id: string) => {
@@ -618,8 +634,8 @@ export function Menu() {
 
           {/* All Items */}
           <CategoryNavItem
-            cat={{ id: "", name: "All Items", itemCount: items.length, icon: "LayoutGrid" }}
-            active={activeCategory === null} count={items.length}
+            cat={{ id: "", name: "All Items", itemCount: totalItems, icon: "LayoutGrid" }}
+            active={activeCategory === null} count={totalItems}
             onSelect={() => { setActiveCategory(null); setSidebarOpen(false) }}
           />
 
@@ -628,7 +644,7 @@ export function Menu() {
             {cats.map((cat) => (
               <CategoryNavItem
                 key={cat.id} cat={cat} active={activeCategory === cat.id}
-                count={items.filter((i) => i.category === cat.name).length}
+                count={categoryCounts.get(cat.id) ?? 0}
                 onSelect={() => { setActiveCategory(cat.id); setSidebarOpen(false) }}
                 onDelete={() => setDeleteConfirm({ type: "category", id: cat.id, name: cat.name })}
               />

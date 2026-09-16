@@ -29,9 +29,14 @@ function warnCache(e: unknown, op: string) {
 }
 
 export const menuCache = {
-  async getItems(): Promise<any[] | null> {
+  /**
+   * `variant` identifies the filter combination the list was fetched with.
+   * Entries are stored per variant so a filtered list is never served as the
+   * full menu (which would make every count derived from it too low).
+   */
+  async getItems(variant = 'default'): Promise<any[] | null> {
     try {
-      const entry = await db.menuItems.get('items')
+      const entry = await db.menuItems.get(`items:${variant}`)
       if (!entry || Date.now() - entry.timestamp > CACHE_TTL) return null
       return entry.data
     } catch (e) {
@@ -40,9 +45,9 @@ export const menuCache = {
     }
   },
 
-  async setItems(data: any[]): Promise<void> {
+  async setItems(data: any[], variant = 'default'): Promise<void> {
     try {
-      await db.menuItems.put({ key: 'items', data, timestamp: Date.now() })
+      await db.menuItems.put({ key: `items:${variant}`, data, timestamp: Date.now() })
     } catch (e) { warnCache(e, 'setItems') }
   },
 

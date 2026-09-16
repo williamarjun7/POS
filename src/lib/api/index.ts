@@ -58,6 +58,7 @@ export type {
 export {
   getMenuCategories,
   getMenuItems,
+  getAllMenuItems,
   getMenuItem,
   createMenuItem,
   updateMenuItem,

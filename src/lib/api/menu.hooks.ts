@@ -19,7 +19,7 @@ import {
 } from '@tanstack/react-query'
 import {
   getMenuCategories as fetchMenuCategories,
-  getMenuItems as fetchMenuItems,
+  getAllMenuItems as fetchAllMenuItems,
   getMenuItem,
   createMenuItem,
   updateMenuItem,
@@ -38,6 +38,24 @@ import type {
   MenuItemQueryParams,
   PaginatedResponse,
 } from './types'
+
+// ─── Cache keying ───────────────────────────────────────────
+
+/**
+ * IndexedDB cache key for a menu item list.
+ *
+ * The cache holds one *complete* list per filter combination, so the key has
+ * to include the filters: the unfiltered Menu Management list and the
+ * available-only POS list must never share an entry, or one screen's items
+ * (and counts) leak into the other.
+ */
+function itemsCacheVariant(params?: MenuItemQueryParams): string {
+  return JSON.stringify([
+    params?.category ?? null,
+    params?.search ?? null,
+    params?.available ?? null,
+  ])
+}
 
 // ─── Queries ────────────────────────────────────────────────
 
@@ -66,22 +84,23 @@ export function useMenuItems(params?: MenuItemQueryParams) {
   // Only use cache for the default "all available" query
   const isDefaultQuery =
     !params || (params.available === true && !params.category && !params.search)
+  const cacheVariant = itemsCacheVariant(params)
 
   return useQuery<PaginatedResponse<MenuItem>>({
     queryKey: menuKeys.list(params),
     queryFn: async () => {
       if (isDefaultQuery) {
-        const cached = await menuCache.getItems()
+        const cached = await menuCache.getItems(cacheVariant)
         if (cached) {
           // Return cached, refresh in background
-          fetchMenuItems(params).then((fresh) => menuCache.setItems(fresh.data))
+          fetchAllMenuItems(params).then((fresh) => menuCache.setItems(fresh.data, cacheVariant))
           // Cache stores raw T[] but query type expects PaginatedResponse<T>
           return { data: cached, total: cached.length, page: 1, pageSize: cached.length, totalPages: 1 }
         }
       }
-      const fresh = await fetchMenuItems(params)
+      const fresh = await fetchAllMenuItems(params)
       if (isDefaultQuery) {
-        menuCache.setItems(fresh.data)
+        menuCache.setItems(fresh.data, cacheVariant)
       }
       return fresh
     },
@@ -122,16 +141,17 @@ export function usePrefetchMenu() {
     queryClient.prefetchQuery({
       queryKey: menuKeys.list({ available: true }),
       queryFn: async () => {
-        const cached = await menuCache.getItems()
+        const prefetchVariant = itemsCacheVariant({ available: true })
+        const cached = await menuCache.getItems(prefetchVariant)
         if (cached) {
-          fetchMenuItems({ available: true }).then((fresh) =>
-            menuCache.setItems(fresh.data),
+          fetchAllMenuItems({ available: true }).then((fresh) =>
+            menuCache.setItems(fresh.data, prefetchVariant),
           )
           // Cache stores raw T[] but query type expects PaginatedResponse<T>
           return { data: cached, total: cached.length, page: 1, pageSize: cached.length, totalPages: 1 }
         }
-        const fresh = await fetchMenuItems({ available: true })
-        menuCache.setItems(fresh.data)
+        const fresh = await fetchAllMenuItems({ available: true })
+        menuCache.setItems(fresh.data, prefetchVariant)
         return fresh
       },
       staleTime: 5 * 60 * 1000,
