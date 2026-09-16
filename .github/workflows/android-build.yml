@@ -47,6 +47,12 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Do not fall back to the action's default "tools platform-tools":
+          # the legacy `tools` package no longer exists in the SDK repository,
+          # so `sdkmanager tools` fails the step. Licenses are still accepted
+          # by the action, so Gradle can fetch the platform/build-tools it needs.
+          packages: 'platform-tools'
 
       - name: Sync Capacitor
         run: npx cap sync android
